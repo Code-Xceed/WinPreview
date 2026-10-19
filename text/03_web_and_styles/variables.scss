@@ -1,0 +1,20 @@
+$color-bg-deep: #101012;
+$color-surface: #18181B;
+$color-accent: #0A84FF;
+$color-border: rgba(255, 255, 255, 0.08);
+
+@mixin frosted-pill {
+  background: rgba($color-surface, 0.96);
+  border: 1px solid $color-border;
+  border-radius: 9999px;
+  backdrop-filter: blur(16px);
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4);
+}
+
+.toolbar-pill {
+  @include frosted-pill;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+}

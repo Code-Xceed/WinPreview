@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  preview-engine:
+    image: winpreview/runtime:2.0.0
+    container_name: winpreview_runner
+    environment:
+      - RENDER_BACKEND=DIRECT2D
+      - LOG_LEVEL=WARNING
+      - ZERO_DISK_CLUTTER=1
+    ports:
+      - "8080:8080"
+    restart: unless-stopped

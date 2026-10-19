@@ -1,0 +1,5 @@
+WinPreview Quick Notes:
+- To preview any file, select it in File Explorer and press Spacebar (or double click to preview).
+- For source code, you can start typing immediately to make edits.
+- Press Ctrl+S to save changes directly to the file without opening a dialog.
+- The bottom status bar shows line/column coordinates and allows instant indentation toggling.

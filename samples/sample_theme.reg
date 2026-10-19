@@ -1,0 +1,14 @@
+Windows Registry Editor Version 5.00
+
+[HKEY_CURRENT_USER\Software\WinPreview\Settings]
+"Theme"="Dark"
+"HighPerformanceMode"=dword:00000001
+"HotkeyName"="Space"
+"HotkeyVK"=dword:00000020
+"HotkeyModifiers"=dword:00000000
+"WindowWidth"=dword:000003c0
+"WindowHeight"=dword:000002a8
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\WinPreview.exe]
+@="C:\\Program Files\\WinPreview\\WinPreview.exe"
+"Path"="C:\\Program Files\\WinPreview"

@@ -1,0 +1,6 @@
+From 4a123f8b8e Mon Sep 17 00:00:00 2001
+Subject: [PATCH] feat: Mini VS Code Editor Integration
+
+---
+ src/text_engine.cpp | 420 +++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 415 insertions(+), 5 deletions(-)

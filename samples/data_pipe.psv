@@ -1,0 +1,4 @@
+﻿ID|Component|Status|Latency
+1|Direct2D|Active|0.4ms
+2|TextEngine|Active|1.2ms
+3|WIC|Active|2.1ms
