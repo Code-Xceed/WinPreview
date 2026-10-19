@@ -15,7 +15,7 @@ obj/
 # Logs & Temporary Files
 *.log
 *.tmp
-winpreview-startup.log
+*.bak
 test_snap*.png
 
 # Reference, scratch, and cache directories
@@ -31,13 +31,8 @@ Thumbs.db
 Desktop.ini
 $RECYCLE.BIN/
 
-# Root test & verification scratch scripts
-capture_*.ps1
-check_fg.ps1
-diagnose_explorer.ps1
-inspect_*.ps1
-list_exp_windows.py
-test_*.ps1
-verify_*.ps1
-benchmark_review.ps1
-deep-research-report.md
+# Test temp outputs
+tests/editor_test.py
+tests/context_test.txt
+tests/*.tmp
+tests/*.png

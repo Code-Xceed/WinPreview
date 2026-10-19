@@ -4,9 +4,9 @@
 ; =====================================================================
 
 #define MyAppName "WinPreview"
-#define MyAppVersion "2.0.0"
-#define MyAppPublisher "WinPreview Team"
-#define MyAppURL "https://github.com/winpreview/winpreview"
+#define MyAppVersion "1.0.0"
+#define MyAppPublisher "Code-Xceed"
+#define MyAppURL "https://github.com/Code-Xceed/WinPreview"
 #define MyAppExeName "WinPreview.exe"
 #define SourceDir "..\dist\WinPreview"
 
@@ -38,10 +38,10 @@ ArchitecturesInstallIn64BitMode=x64compatible
 CloseApplications=force
 RestartApplications=no
 DisableProgramGroupPage=yes
-VersionInfoVersion=2.0.0.0
+VersionInfoVersion=1.0.0.0
 VersionInfoCompany={#MyAppPublisher}
 VersionInfoDescription=WinPreview - Apple Preview for Windows
-VersionInfoCopyright=Copyright (C) 2026 WinPreview
+VersionInfoCopyright=Copyright (C) 2026 Code-Xceed
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"

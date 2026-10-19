@@ -1,0 +1,39 @@
+name: CI Build & Verify
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    name: Build & Test (Windows x64)
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Clang / LLVM
+        uses: KyleMayes/install-llvm-action@v2
+        with:
+          version: "18.1.8"
+
+      - name: Compile Native C++20 WinPreview
+        run: |
+          cd src
+          cmd.exe /c build.bat
+
+      - name: Run Automated Test Suite
+        shell: powershell
+        run: |
+          powershell -ExecutionPolicy Bypass -File tests\run_tests.ps1
+
+      - name: Verify Distribution Staging
+        shell: powershell
+        run: |
+          if (-not (Test-Path "src\WinPreview.exe")) {
+            throw "Built executable not found!"
+          }
+          Write-Host "Build and test verification succeeded!" -ForegroundColor Green
