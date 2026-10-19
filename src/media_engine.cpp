@@ -82,10 +82,16 @@ bool MediaEngine::Initialize(HWND parentHwnd) {
     // Search paths for VLC (local portable bundle first, then system install)
     std::vector<std::wstring> vlcDirs = {
         exeDir + L"\\libvlc",
-        exeDir,
-        L"C:\\Program Files\\VideoLAN\\VLC",
-        L"C:\\Program Files (x86)\\VideoLAN\\VLC"
+        exeDir
     };
+
+    WCHAR envBuf[MAX_PATH];
+    if (GetEnvironmentVariableW(L"ProgramFiles", envBuf, MAX_PATH) > 0) {
+        vlcDirs.push_back(std::wstring(envBuf) + L"\\VideoLAN\\VLC");
+    }
+    if (GetEnvironmentVariableW(L"ProgramFiles(x86)", envBuf, MAX_PATH) > 0) {
+        vlcDirs.push_back(std::wstring(envBuf) + L"\\VideoLAN\\VLC");
+    }
 
     std::wstring foundDir;
     for (const auto& dir : vlcDirs) {

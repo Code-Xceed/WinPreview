@@ -10,6 +10,7 @@
 #include "markdown_engine.h"
 #include "system_engine.h"
 #include "explorer_hook.h"
+#include "update_engine.h"
 #include <string>
 #include <vector>
 
@@ -93,7 +94,8 @@ enum ContextMenuCommand {
     IDM_CTX_ROTATE_RIGHT,
     IDM_CTX_FULLSCREEN,
     IDM_CTX_INFO,
-    IDM_CTX_SETTINGS
+    IDM_CTX_SETTINGS,
+    IDM_CTX_CHECK_UPDATES
 };
 
 class AppWindow {
@@ -177,6 +179,16 @@ private:
     void RenderToast(const D2D1_RECT_F& rect);
     void UpdateWindowTitle();
     void SaveCurrentTextFile();
+
+    // In-App Auto-Update System
+    UpdateEngine m_updater;
+    D2D1_RECT_F m_updateBannerRect = {};
+    D2D1_RECT_F m_updateActionBtnRect = {};
+    D2D1_RECT_F m_updateDismissBtnRect = {};
+    bool m_updateActionBtnHover = false;
+    bool m_updateDismissBtnHover = false;
+    void RenderUpdateBanner(const D2D1_RECT_F& rect);
+    void CheckForUpdates(bool isUserInitiated);
 
     // PDF document
     int m_currentPage = 0;

@@ -1,0 +1,76 @@
+name: Production CI/CD & Automated Release
+
+on:
+  push:
+    branches: [ main ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      create_release:
+        description: 'Publish as GitHub Release'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-package:
+    name: Build Native Engine & Installer (Windows x64)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Clang / LLVM Toolchain
+        uses: KyleMayes/install-llvm-action@v2
+        with:
+          version: "18.1.8"
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress
+
+      - name: Compile Native C++20 WinPreview Engine
+        run: |
+          cd src
+          cmd.exe /c build.bat
+
+      - name: Package Distribution & Build Inno Setup Installer
+        shell: powershell
+        run: |
+          powershell -ExecutionPolicy Bypass -File publish.ps1
+
+      - name: Create Portable Zip Package
+        shell: powershell
+        run: |
+          $distDir = "dist\WinPreview"
+          $zipPath = "dist\Installer\WinPreview-Portable-x64.zip"
+          Compress-Archive -Path "$distDir\*" -DestinationPath $zipPath -Force
+          Write-Host "Created portable archive: $zipPath" -ForegroundColor Green
+
+      - name: Upload Build Artifacts (CI Run)
+        uses: actions/upload-artifact@v4
+        with:
+          name: WinPreview-Windows-x64
+          path: |
+            dist/Installer/WinPreview-Setup-x64.exe
+            dist/Installer/WinPreview-Portable-x64.zip
+            version.json
+          if-no-files-found: error
+
+      - name: Publish GitHub Release (on tag v* or manual release)
+        if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.create_release == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/Installer/WinPreview-Setup-x64.exe
+            dist/Installer/WinPreview-Portable-x64.zip
+            version.json
+          draft: false
+          prerelease: false
+          generate_release_notes: true

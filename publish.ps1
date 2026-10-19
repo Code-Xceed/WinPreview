@@ -79,6 +79,8 @@ Write-Host "  Staged WinPreview.exe ($exeSizeMb MB standalone native binary)" -F
 Write-Host "`n[3/3] Building standalone Windows Setup Installer (WinPreview-Setup-x64.exe)..." -ForegroundColor Yellow
 $isccPaths = @(
     (Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 6\ISCC.exe"),
+    (Join-Path $env:ProgramFiles "Inno Setup 6\ISCC.exe"),
+    (Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"),
     "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
     "C:\Program Files\Inno Setup 6\ISCC.exe"
 )

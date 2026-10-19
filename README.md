@@ -30,6 +30,7 @@
 - **Hardware-Accelerated Media & Images**: Instant WIC image decoding (PNG, JPG, WEBP, GIF, HEIC, RAW) and LibVLC media streaming with floating acrylic playback HUD.
 - **DirectWrite Code & Text Studio**: Syntax-highlighted preview and in-place editing for 50+ languages with line numbers, find bar (`Ctrl+F`), and save (`Ctrl+S`).
 - **Tabular Data Grid**: Auto-aligned column grids for CSV, TSV, TAB, and PSV pipe-delimited data.
+- **In-App Auto-Updater**: Built-in native Windows background update checking and one-click in-app downloader & installer (`Ctrl+U`).
 - **Deep Windows 11 Polish**: Per-Monitor V2 DPI awareness, Windows 11 dark mode, rounded acrylic aesthetics, and Emil Kowalski `:active` tactile micro-interactions.
 
 ---
@@ -111,6 +112,7 @@ flowchart TD
 | `Ctrl + S` | Save File Edits (in Text/Code) |
 | `Ctrl + O` | Open File Dialog |
 | `Ctrl + Shift + S` | Toggle PDF Thumbnail Sidebar |
+| `Ctrl + U` | Check for Updates & Install |
 | `Escape` | Close Preview Window / Exit Fullscreen |
 
 ---

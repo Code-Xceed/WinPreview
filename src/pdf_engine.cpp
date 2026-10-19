@@ -41,9 +41,8 @@ bool PdfEngine::Initialize() {
     std::vector<std::wstring> candidates = {
         exeDir + L"\\pdfium.dll",
         L"pdfium.dll",
-        exeDir + L"\\..\\dist\\WinPreview-win-x64\\pdfium.dll",
-        L"c:\\Users\\CodeX\\Desktop\\Preview app for Windows\\dist\\WinPreview-win-x64\\pdfium.dll",
-        L"C:\\Users\\CodeX\\.nuget\\packages\\bblanchon.pdfium.win32\\157.0.8086\\runtimes\\win-x64\\native\\pdfium.dll"
+        exeDir + L"\\src\\pdfium.dll",
+        exeDir + L"\\..\\src\\pdfium.dll"
     };
 
     for (const auto& path : candidates) {

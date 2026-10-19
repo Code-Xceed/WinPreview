@@ -284,6 +284,16 @@ bool AppWindow::Create(HINSTANCE hInstance, int nCmdShow, bool showTrayNotificat
     InitTrayIcon(showTrayNotification);
     LogTime("InitTrayIcon done");
 
+    // Production In-App Auto-Update Check (Non-blocking background thread)
+    std::thread([this]() {
+        Sleep(2500); // 2.5s delay ensures zero impact on cold start latency
+        m_updater.CheckForUpdatesAsync([this](const UpdateInfo& info) {
+            if (info.isAvailable && m_hwnd && IsWindow(m_hwnd)) {
+                InvalidateRect(m_hwnd, NULL, FALSE);
+            }
+        });
+    }).detach();
+
     return true;
 }
 
@@ -1708,6 +1718,9 @@ void AppWindow::Render(HDC outHdc) {
     if (m_toastOpacity > 0.01f) {
         RenderToast(canvasRect);
     }
+
+    // 8. Render In-App Auto-Update Banner
+    RenderUpdateBanner(canvasRect);
 
     if (outHdc) {
         ID2D1GdiInteropRenderTarget* gdiInterop = nullptr;
@@ -3498,6 +3511,212 @@ void AppWindow::RenderToast(const D2D1_RECT_F& rect) {
     m_d2d.BrushText->SetOpacity(1.0f);
 }
 
+void AppWindow::CheckForUpdates(bool isUserInitiated) {
+    if (isUserInitiated) {
+        ShowToast(L"Checking for updates...");
+    }
+    m_updater.CheckForUpdatesAsync([this, isUserInitiated](const UpdateInfo& info) {
+        if (m_hwnd && IsWindow(m_hwnd)) {
+            InvalidateRect(m_hwnd, NULL, FALSE);
+            if (info.isAvailable) {
+                ShowToast(L"Update Available: v" + info.remoteVersion);
+            } else if (isUserInitiated) {
+                if (info.errorMessage.empty()) {
+                    ShowToast(L"WinPreview is up to date (v" + info.currentVersion + L")");
+                } else {
+                    ShowToast(L"Update check failed (Offline)");
+                }
+            }
+        }
+    });
+}
+
+void AppWindow::RenderUpdateBanner(const D2D1_RECT_F& rect) {
+    UpdateState state = m_updater.GetState();
+    if (state != UpdateState::UpdateAvailable && state != UpdateState::Downloading && state != UpdateState::Downloaded) {
+        return;
+    }
+
+    ID2D1HwndRenderTarget* rt = m_d2d.GetRenderTarget();
+    if (!rt) return;
+
+    float dpiScale = (m_dpiScale > 0.05f) ? m_dpiScale : 1.0f;
+    const UpdateInfo& info = m_updater.GetUpdateInfo();
+
+    float bannerW = 320.0f * dpiScale;
+    float bannerH = 44.0f * dpiScale;
+    float cornerR = 8.0f * dpiScale;
+
+    float rightMargin = 20.0f * dpiScale;
+    float topMargin = 52.0f * dpiScale;
+    m_updateBannerRect = D2D1::RectF(
+        rect.right - rightMargin - bannerW,
+        rect.top + topMargin,
+        rect.right - rightMargin,
+        rect.top + topMargin + bannerH
+    );
+
+    // 1. Layered Drop Shadow
+    D2D1_ROUNDED_RECT rShadow = D2D1::RoundedRect(
+        D2D1::RectF(m_updateBannerRect.left - 2.0f * dpiScale, m_updateBannerRect.top + 3.0f * dpiScale,
+                    m_updateBannerRect.right + 2.0f * dpiScale, m_updateBannerRect.bottom + 8.0f * dpiScale),
+        cornerR, cornerR
+    );
+    if (m_d2d.BrushShadowDark) {
+        m_d2d.BrushShadowDark->SetOpacity(0.40f);
+        rt->FillRoundedRectangle(rShadow, m_d2d.BrushShadowDark);
+    }
+
+    // 2. Acrylic Surface Fill
+    D2D1_ROUNDED_RECT rBanner = D2D1::RoundedRect(m_updateBannerRect, cornerR, cornerR);
+    ID2D1SolidColorBrush* bgBrush = nullptr;
+    rt->CreateSolidColorBrush(D2D1::ColorF(0.09f, 0.09f, 0.11f, 0.96f), &bgBrush);
+    if (bgBrush) {
+        rt->FillRoundedRectangle(rBanner, bgBrush);
+        bgBrush->Release();
+    }
+
+    // 3. Border
+    ID2D1SolidColorBrush* borderBrush = nullptr;
+    rt->CreateSolidColorBrush(D2D1::ColorF(0.22f, 0.22f, 0.26f, 1.0f), &borderBrush);
+    if (borderBrush) {
+        rt->DrawRoundedRectangle(rBanner, borderBrush, 1.0f * dpiScale);
+        borderBrush->Release();
+    }
+
+    // 4. Content
+    if (state == UpdateState::UpdateAvailable) {
+        std::wstring title = L"Update v" + info.remoteVersion + L" Available";
+        D2D1_RECT_F textRect = D2D1::RectF(
+            m_updateBannerRect.left + 14.0f * dpiScale,
+            m_updateBannerRect.top + 12.0f * dpiScale,
+            m_updateBannerRect.left + 200.0f * dpiScale,
+            m_updateBannerRect.bottom - 12.0f * dpiScale
+        );
+        if (m_d2d.BrushText && m_d2d.FontButton) {
+            rt->DrawText(title.c_str(), (UINT32)title.length(), m_d2d.FontButton, textRect, m_d2d.BrushText);
+        }
+
+        // Action Button: [ Update ]
+        m_updateActionBtnRect = D2D1::RectF(
+            m_updateBannerRect.right - 105.0f * dpiScale,
+            m_updateBannerRect.top + 8.0f * dpiScale,
+            m_updateBannerRect.right - 35.0f * dpiScale,
+            m_updateBannerRect.bottom - 8.0f * dpiScale
+        );
+        D2D1_ROUNDED_RECT rBtn = D2D1::RoundedRect(m_updateActionBtnRect, 5.0f * dpiScale, 5.0f * dpiScale);
+        ID2D1SolidColorBrush* btnBrush = nullptr;
+        D2D1_COLOR_F btnColor = m_updateActionBtnHover ? D2D1::ColorF(0.20f, 0.50f, 0.95f, 1.0f) : D2D1::ColorF(0.14f, 0.38f, 0.92f, 1.0f);
+        rt->CreateSolidColorBrush(btnColor, &btnBrush);
+        if (btnBrush) {
+            rt->FillRoundedRectangle(rBtn, btnBrush);
+            btnBrush->Release();
+        }
+
+        std::wstring btnLabel = L"Update";
+        D2D1_RECT_F btnTextR = D2D1::RectF(
+            m_updateActionBtnRect.left + 10.0f * dpiScale,
+            m_updateActionBtnRect.top + 5.0f * dpiScale,
+            m_updateActionBtnRect.right - 10.0f * dpiScale,
+            m_updateActionBtnRect.bottom - 5.0f * dpiScale
+        );
+        if (m_d2d.BrushText && m_d2d.FontButton) {
+            rt->DrawText(btnLabel.c_str(), (UINT32)btnLabel.length(), m_d2d.FontButton, btnTextR, m_d2d.BrushText);
+        }
+
+        // Dismiss Button: [ ✕ ]
+        m_updateDismissBtnRect = D2D1::RectF(
+            m_updateBannerRect.right - 28.0f * dpiScale,
+            m_updateBannerRect.top + 8.0f * dpiScale,
+            m_updateBannerRect.right - 8.0f * dpiScale,
+            m_updateBannerRect.bottom - 8.0f * dpiScale
+        );
+        std::wstring closeLabel = L"✕";
+        ID2D1SolidColorBrush* closeBrush = nullptr;
+        rt->CreateSolidColorBrush(m_updateDismissBtnHover ? D2D1::ColorF(0.9f, 0.9f, 0.9f) : D2D1::ColorF(0.55f, 0.55f, 0.58f), &closeBrush);
+        if (closeBrush && m_d2d.FontButton) {
+            rt->DrawText(closeLabel.c_str(), (UINT32)closeLabel.length(), m_d2d.FontButton, m_updateDismissBtnRect, closeBrush);
+            closeBrush->Release();
+        }
+    } else if (state == UpdateState::Downloading) {
+        int pct = m_updater.GetDownloadProgress();
+        std::wstring dlText = L"Downloading Update... " + std::to_wstring(pct) + L"%";
+        D2D1_RECT_F textRect = D2D1::RectF(
+            m_updateBannerRect.left + 14.0f * dpiScale,
+            m_updateBannerRect.top + 7.0f * dpiScale,
+            m_updateBannerRect.right - 14.0f * dpiScale,
+            m_updateBannerRect.top + 23.0f * dpiScale
+        );
+        if (m_d2d.BrushText && m_d2d.FontButton) {
+            rt->DrawText(dlText.c_str(), (UINT32)dlText.length(), m_d2d.FontButton, textRect, m_d2d.BrushText);
+        }
+
+        // Progress bar background track
+        D2D1_RECT_F trackRect = D2D1::RectF(
+            m_updateBannerRect.left + 14.0f * dpiScale,
+            m_updateBannerRect.bottom - 12.0f * dpiScale,
+            m_updateBannerRect.right - 14.0f * dpiScale,
+            m_updateBannerRect.bottom - 7.0f * dpiScale
+        );
+        D2D1_ROUNDED_RECT rTrack = D2D1::RoundedRect(trackRect, 2.5f * dpiScale, 2.5f * dpiScale);
+        ID2D1SolidColorBrush* trackBrush = nullptr;
+        rt->CreateSolidColorBrush(D2D1::ColorF(0.2f, 0.2f, 0.24f, 1.0f), &trackBrush);
+        if (trackBrush) {
+            rt->FillRoundedRectangle(rTrack, trackBrush);
+            trackBrush->Release();
+        }
+
+        // Progress bar filled bar
+        float fillW = (trackRect.right - trackRect.left) * (std::max(1, pct) / 100.0f);
+        D2D1_RECT_F fillRect = D2D1::RectF(trackRect.left, trackRect.top, trackRect.left + fillW, trackRect.bottom);
+        D2D1_ROUNDED_RECT rFill = D2D1::RoundedRect(fillRect, 2.5f * dpiScale, 2.5f * dpiScale);
+        ID2D1SolidColorBrush* fillBrush = nullptr;
+        rt->CreateSolidColorBrush(D2D1::ColorF(0.20f, 0.55f, 0.95f, 1.0f), &fillBrush);
+        if (fillBrush) {
+            rt->FillRoundedRectangle(rFill, fillBrush);
+            fillBrush->Release();
+        }
+    } else if (state == UpdateState::Downloaded) {
+        std::wstring title = L"Update Ready!";
+        D2D1_RECT_F textRect = D2D1::RectF(
+            m_updateBannerRect.left + 14.0f * dpiScale,
+            m_updateBannerRect.top + 12.0f * dpiScale,
+            m_updateBannerRect.left + 140.0f * dpiScale,
+            m_updateBannerRect.bottom - 12.0f * dpiScale
+        );
+        if (m_d2d.BrushText && m_d2d.FontButton) {
+            rt->DrawText(title.c_str(), (UINT32)title.length(), m_d2d.FontButton, textRect, m_d2d.BrushText);
+        }
+
+        // Action Button: [ Restart & Install ]
+        m_updateActionBtnRect = D2D1::RectF(
+            m_updateBannerRect.left + 150.0f * dpiScale,
+            m_updateBannerRect.top + 8.0f * dpiScale,
+            m_updateBannerRect.right - 14.0f * dpiScale,
+            m_updateBannerRect.bottom - 8.0f * dpiScale
+        );
+        D2D1_ROUNDED_RECT rBtn = D2D1::RoundedRect(m_updateActionBtnRect, 5.0f * dpiScale, 5.0f * dpiScale);
+        ID2D1SolidColorBrush* btnBrush = nullptr;
+        D2D1_COLOR_F btnColor = m_updateActionBtnHover ? D2D1::ColorF(0.12f, 0.68f, 0.38f, 1.0f) : D2D1::ColorF(0.08f, 0.58f, 0.32f, 1.0f);
+        rt->CreateSolidColorBrush(btnColor, &btnBrush);
+        if (btnBrush) {
+            rt->FillRoundedRectangle(rBtn, btnBrush);
+            btnBrush->Release();
+        }
+
+        std::wstring btnLabel = L"Restart & Install";
+        D2D1_RECT_F btnTextR = D2D1::RectF(
+            m_updateActionBtnRect.left + 12.0f * dpiScale,
+            m_updateActionBtnRect.top + 5.0f * dpiScale,
+            m_updateActionBtnRect.right - 12.0f * dpiScale,
+            m_updateActionBtnRect.bottom - 5.0f * dpiScale
+        );
+        if (m_d2d.BrushText && m_d2d.FontButton) {
+            rt->DrawText(btnLabel.c_str(), (UINT32)btnLabel.length(), m_d2d.FontButton, btnTextR, m_d2d.BrushText);
+        }
+    }
+}
+
 void AppWindow::UpdateWindowTitle() {
     if (!m_hwnd) return;
     std::wstring title;
@@ -3588,6 +3807,7 @@ void AppWindow::ShowContextMenu(int screenX, int screenY) {
 
     AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
     AppendMenuW(hMenu, MF_STRING, IDM_CTX_SETTINGS, L"Keybind Settings...\tCtrl+,");
+    AppendMenuW(hMenu, MF_STRING, IDM_CTX_CHECK_UPDATES, L"Check for Updates...\tCtrl+U");
 
     SetForegroundWindow(m_hwnd);
     int cmd = TrackPopupMenu(hMenu, TPM_RIGHTBUTTON | TPM_LEFTALIGN | TPM_RETURNCMD, screenX, screenY, 0, m_hwnd, NULL);
@@ -3658,6 +3878,9 @@ void AppWindow::ShowContextMenu(int screenX, int screenY) {
             break;
         case IDM_CTX_SETTINGS:
             ToggleSettings();
+            break;
+        case IDM_CTX_CHECK_UPDATES:
+            CheckForUpdates(true);
             break;
     }
 }
@@ -6477,6 +6700,35 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 return pt.x >= r.left && pt.x <= r.right && pt.y >= r.top && pt.y <= r.bottom;
             };
 
+            // -0.5 In-App Update Banner clicks
+            UpdateState updateState = m_updater.GetState();
+            if (updateState == UpdateState::UpdateAvailable || updateState == UpdateState::Downloaded) {
+                if (hit(m_updateActionBtnRect)) {
+                    if (updateState == UpdateState::UpdateAvailable) {
+                        m_updater.DownloadUpdateAsync(
+                            [this](int pct) {
+                                InvalidateRect(m_hwnd, NULL, FALSE);
+                            },
+                            [this](bool success, const std::wstring& path) {
+                                InvalidateRect(m_hwnd, NULL, FALSE);
+                                if (!success) {
+                                    ShowToast(L"Failed to download update.");
+                                }
+                            }
+                        );
+                    } else if (updateState == UpdateState::Downloaded) {
+                        m_updater.LaunchInstallerAndExit(m_hwnd);
+                    }
+                    InvalidateRect(m_hwnd, NULL, FALSE);
+                    return 0;
+                }
+                if (hit(m_updateDismissBtnRect)) {
+                    m_updater.Dismiss();
+                    InvalidateRect(m_hwnd, NULL, FALSE);
+                    return 0;
+                }
+            }
+
             // -1. Preferences & Keybind settings modal clicks
             if (m_showSettings) {
                 if (hit(m_settingsCloseBtn) || hit(m_settingsDoneBtn)) {
@@ -6958,6 +7210,20 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 return pt.x >= r.left && pt.x <= r.right && pt.y >= r.top && pt.y <= r.bottom;
             };
 
+            UpdateState updateState = m_updater.GetState();
+            if (updateState == UpdateState::UpdateAvailable || updateState == UpdateState::Downloaded) {
+                bool actHover = hit(m_updateActionBtnRect);
+                bool disHover = hit(m_updateDismissBtnRect);
+                if (actHover != m_updateActionBtnHover || disHover != m_updateDismissBtnHover) {
+                    m_updateActionBtnHover = actHover;
+                    m_updateDismissBtnHover = disHover;
+                    InvalidateRect(m_hwnd, NULL, FALSE);
+                }
+                if (actHover || disHover) {
+                    SetCursor(LoadCursor(NULL, IDC_HAND));
+                }
+            }
+
             if (m_dockOpacity > 0.1f) {
                 if (hit(m_btnSidebarRect)) m_hoveredButtonId = BTN_SIDEBAR;
                 else if (hit(m_btnPrevPageRect)) m_hoveredButtonId = BTN_PREV_PAGE;
@@ -7298,6 +7564,12 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                     ShowToast(L"Reloaded preview");
                     return 0;
                 }
+            }
+
+            // Global shortcut: Ctrl+U -> Check for updates
+            if (isCtrl && !isShift && !isAlt && (wParam == 'U' || wParam == 'u')) {
+                CheckForUpdates(true);
+                return 0;
             }
 
             // =========================================================================
