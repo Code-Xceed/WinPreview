@@ -1,7 +1,0 @@
-CustomerID	FirstName	LastName	Email	AccountTier	LifetimeValue	ActiveStatus
-1001	Elena	Rostova	elena.rostova@example.com	Enterprise	48250.00	Active
-1002	Marcus	Vance	marcus.vance@example.com	Professional	14300.00	Active
-1003	Sophia	Chen	sophia.chen@example.com	Enterprise	89100.00	Active
-1004	Liam	O'Connor	liam.oc@example.com	Starter	3200.00	Inactive
-1005	Amara	Diallo	amara.d@example.com	Professional	21500.00	Active
-1006	David	Miller	david.m@example.com	Enterprise	63400.00	Active

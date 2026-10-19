@@ -12,27 +12,33 @@ obj/
 *.pdb
 *.ilk
 
+# Non-software & development directories
+docs/
+tests/
+samples/
+research/
+scratch/
+.github/
+.freebuff/
+.vs/
+.vscode/
+.idea/
+
+# Internal governance & formatting files
+.clang-format
+.editorconfig
+CHANGELOG.md
+CODE_OF_CONDUCT.md
+CONTRIBUTING.md
+SECURITY.md
+
 # Logs & Temporary Files
 *.log
 *.tmp
 *.bak
 test_snap*.png
 
-# Reference, scratch, and cache directories
-research/
-scratch/
-.freebuff/
-.vs/
-.vscode/
-.idea/
-
 # OS Artifacts
 Thumbs.db
 Desktop.ini
 $RECYCLE.BIN/
-
-# Test temp outputs
-tests/editor_test.py
-tests/context_test.txt
-tests/*.tmp
-tests/*.png

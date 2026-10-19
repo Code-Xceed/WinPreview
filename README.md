@@ -16,7 +16,6 @@
   <img src="https://img.shields.io/badge/Cold%20Launch-%3C%2035ms-brightgreen?style=flat-square" alt="Cold Launch < 35ms" />
   <img src="https://img.shields.io/badge/Memory-%3C%2020MB%20RAM-success?style=flat-square" alt="Memory < 20MB RAM" />
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square" alt="MIT License" /></a>
-  <a href="CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=flat-square" alt="PRs Welcome" /></a>
 </p>
 
 ---
@@ -146,16 +145,9 @@ build.bat
 powershell -ExecutionPolicy Bypass -File publish.ps1
 ```
 
-### Running Automated Smoke & Memory Tests
-```powershell
-powershell -ExecutionPolicy Bypass -File tests\run_tests.ps1
-```
+The compiled binaries will be placed in `dist\WinPreview\` and the self-contained installer will be generated at `dist\Installer\WinPreview-Setup-x64.exe`.
 
 ---
-
-## 🤝 Contributing
-
-Contributions, bug reports, and suggestions are warmly welcomed! Please read our [Contributing Guidelines](CONTRIBUTING.md) and [Code of Conduct](CODE_OF_CONDUCT.md) before submitting pull requests.
 
 ## 📄 License
 
