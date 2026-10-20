@@ -188,8 +188,10 @@ private:
     D2D1_RECT_F m_updateDismissBtnRect = {};
     bool m_updateActionBtnHover = false;
     bool m_updateDismissBtnHover = false;
+    ULONGLONG m_lastUpdateCheckTick = 0;
     void RenderUpdateBanner(const D2D1_RECT_F& rect);
     void CheckForUpdates(bool isUserInitiated);
+    void CheckUpdateOnPreviewOpen();
 
     // PDF document
     int m_currentPage = 0;

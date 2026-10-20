@@ -53,6 +53,11 @@ public:
     const std::wstring& GetDownloadedInstallerPath() const { return m_downloadedInstallerPath; }
 
     void Dismiss() { m_state.store(UpdateState::Idle); }
+    void ResetToAvailable() {
+        if (m_info.isAvailable && m_state.load() == UpdateState::Idle) {
+            m_state.store(UpdateState::UpdateAvailable);
+        }
+    }
 
 private:
     std::atomic<UpdateState> m_state{ UpdateState::Idle };

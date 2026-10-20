@@ -1,6 +1,6 @@
 {
-  "version": "1.0.0",
-  "release_date": "2026-10-19",
+  "version": "1.0.1",
+  "release_date": "2026-10-20",
   "download_url": "https://github.com/Code-Xceed/WinPreview/releases/latest/download/WinPreview-Setup-x64.exe",
-  "changelog": "WinPreview v1.0.0 - Pure native C++20 Direct2D/D3D11 preview engine with sub-35ms cold starts, folder navigation, and in-app auto-updater."
+  "changelog": "WinPreview v1.0.1 - Minimal auto-prompt side banner, CI/CD pipeline enhancements, and performance optimizations."
 }

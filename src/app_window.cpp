@@ -920,6 +920,7 @@ bool AppWindow::OpenFile(const std::wstring& filePath) {
         m_lastActiveMousePos = clPt;
         WakeAllUiAndCursor();
         ExplorerHook::SetSuppressSpaceClose(m_docType == DocumentType::Text);
+        CheckUpdateOnPreviewOpen();
         InvalidateRect(m_hwnd, NULL, FALSE);
     }
 
@@ -3511,10 +3512,30 @@ void AppWindow::RenderToast(const D2D1_RECT_F& rect) {
     m_d2d.BrushText->SetOpacity(1.0f);
 }
 
+void AppWindow::CheckUpdateOnPreviewOpen() {
+    // 1. If an update was already detected, re-arm the minimal side prompt on each preview open
+    if (m_updater.GetUpdateInfo().isAvailable) {
+        m_updater.ResetToAvailable();
+        return;
+    }
+
+    // 2. Periodic background check: query GitHub raw CDN if > 15 mins since last check
+    ULONGLONG now = GetTickCount64();
+    if (now - m_lastUpdateCheckTick > 15 * 60 * 1000) {
+        m_lastUpdateCheckTick = now;
+        m_updater.CheckForUpdatesAsync([this](const UpdateInfo& info) {
+            if (info.isAvailable && m_hwnd && IsWindow(m_hwnd)) {
+                InvalidateRect(m_hwnd, NULL, FALSE);
+            }
+        });
+    }
+}
+
 void AppWindow::CheckForUpdates(bool isUserInitiated) {
     if (isUserInitiated) {
         ShowToast(L"Checking for updates...");
     }
+    m_lastUpdateCheckTick = GetTickCount64();
     m_updater.CheckForUpdatesAsync([this, isUserInitiated](const UpdateInfo& info) {
         if (m_hwnd && IsWindow(m_hwnd)) {
             InvalidateRect(m_hwnd, NULL, FALSE);
@@ -3543,12 +3564,13 @@ void AppWindow::RenderUpdateBanner(const D2D1_RECT_F& rect) {
     float dpiScale = (m_dpiScale > 0.05f) ? m_dpiScale : 1.0f;
     const UpdateInfo& info = m_updater.GetUpdateInfo();
 
-    float bannerW = 320.0f * dpiScale;
-    float bannerH = 44.0f * dpiScale;
-    float cornerR = 8.0f * dpiScale;
+    // Sleek minimal side pill dimensions (matches toast styling)
+    float bannerW = 276.0f * dpiScale;
+    float bannerH = 38.0f * dpiScale;
+    float cornerR = bannerH / 2.0f; // Pill radius
 
-    float rightMargin = 20.0f * dpiScale;
-    float topMargin = 52.0f * dpiScale;
+    float rightMargin = 18.0f * dpiScale;
+    float topMargin = 50.0f * dpiScale;
     m_updateBannerRect = D2D1::RectF(
         rect.right - rightMargin - bannerW,
         rect.top + topMargin,
@@ -3556,57 +3578,72 @@ void AppWindow::RenderUpdateBanner(const D2D1_RECT_F& rect) {
         rect.top + topMargin + bannerH
     );
 
-    // 1. Layered Drop Shadow
+    // 1. Layered Ambient Drop Shadow
     D2D1_ROUNDED_RECT rShadow = D2D1::RoundedRect(
-        D2D1::RectF(m_updateBannerRect.left - 2.0f * dpiScale, m_updateBannerRect.top + 3.0f * dpiScale,
+        D2D1::RectF(m_updateBannerRect.left - 2.0f * dpiScale, m_updateBannerRect.top + 2.0f * dpiScale,
                     m_updateBannerRect.right + 2.0f * dpiScale, m_updateBannerRect.bottom + 8.0f * dpiScale),
         cornerR, cornerR
     );
     if (m_d2d.BrushShadowDark) {
-        m_d2d.BrushShadowDark->SetOpacity(0.40f);
+        m_d2d.BrushShadowDark->SetOpacity(0.38f);
         rt->FillRoundedRectangle(rShadow, m_d2d.BrushShadowDark);
     }
 
-    // 2. Acrylic Surface Fill
+    // 2. Frosted Dark Pill Surface Fill
     D2D1_ROUNDED_RECT rBanner = D2D1::RoundedRect(m_updateBannerRect, cornerR, cornerR);
     ID2D1SolidColorBrush* bgBrush = nullptr;
-    rt->CreateSolidColorBrush(D2D1::ColorF(0.09f, 0.09f, 0.11f, 0.96f), &bgBrush);
+    rt->CreateSolidColorBrush(D2D1::ColorF(0.09f, 0.09f, 0.12f, 0.96f), &bgBrush);
     if (bgBrush) {
         rt->FillRoundedRectangle(rBanner, bgBrush);
         bgBrush->Release();
     }
 
-    // 3. Border
+    // 3. Subtle Hairline Border
     ID2D1SolidColorBrush* borderBrush = nullptr;
-    rt->CreateSolidColorBrush(D2D1::ColorF(0.22f, 0.22f, 0.26f, 1.0f), &borderBrush);
+    D2D1_COLOR_F borderColor = (state == UpdateState::Downloaded) 
+        ? D2D1::ColorF(0.12f, 0.70f, 0.38f, 0.55f)
+        : D2D1::ColorF(0.24f, 0.42f, 0.85f, 0.55f);
+    rt->CreateSolidColorBrush(borderColor, &borderBrush);
     if (borderBrush) {
-        rt->DrawRoundedRectangle(rBanner, borderBrush, 1.0f * dpiScale);
+        rt->DrawRoundedRectangle(rBanner, borderBrush, 1.0f);
         borderBrush->Release();
     }
 
-    // 4. Content
+    // 4. Glowing Status Indicator Dot
+    D2D1_POINT_2F dotCenter = D2D1::Point2F(m_updateBannerRect.left + 16.0f * dpiScale, m_updateBannerRect.top + bannerH / 2.0f);
+    ID2D1SolidColorBrush* dotBrush = nullptr;
+    D2D1_COLOR_F dotColor = (state == UpdateState::Downloaded)
+        ? D2D1::ColorF(0.12f, 0.85f, 0.45f, 1.0f)
+        : ((state == UpdateState::Downloading) ? D2D1::ColorF(0.95f, 0.65f, 0.15f, 1.0f) : D2D1::ColorF(0.25f, 0.65f, 1.0f, 1.0f));
+    rt->CreateSolidColorBrush(dotColor, &dotBrush);
+    if (dotBrush) {
+        rt->FillEllipse(D2D1::Ellipse(dotCenter, 4.0f * dpiScale, 4.0f * dpiScale), dotBrush);
+        dotBrush->Release();
+    }
+
+    // 5. Content Rendering
     if (state == UpdateState::UpdateAvailable) {
-        std::wstring title = L"Update v" + info.remoteVersion + L" Available";
+        std::wstring title = L"Update v" + info.remoteVersion;
         D2D1_RECT_F textRect = D2D1::RectF(
-            m_updateBannerRect.left + 14.0f * dpiScale,
-            m_updateBannerRect.top + 12.0f * dpiScale,
-            m_updateBannerRect.left + 200.0f * dpiScale,
-            m_updateBannerRect.bottom - 12.0f * dpiScale
+            m_updateBannerRect.left + 28.0f * dpiScale,
+            m_updateBannerRect.top + 9.0f * dpiScale,
+            m_updateBannerRect.right - 96.0f * dpiScale,
+            m_updateBannerRect.bottom - 9.0f * dpiScale
         );
         if (m_d2d.BrushText && m_d2d.FontButton) {
             rt->DrawText(title.c_str(), (UINT32)title.length(), m_d2d.FontButton, textRect, m_d2d.BrushText);
         }
 
-        // Action Button: [ Update ]
+        // Action Pill Button: [ Update ]
         m_updateActionBtnRect = D2D1::RectF(
-            m_updateBannerRect.right - 105.0f * dpiScale,
-            m_updateBannerRect.top + 8.0f * dpiScale,
-            m_updateBannerRect.right - 35.0f * dpiScale,
-            m_updateBannerRect.bottom - 8.0f * dpiScale
+            m_updateBannerRect.right - 92.0f * dpiScale,
+            m_updateBannerRect.top + 6.0f * dpiScale,
+            m_updateBannerRect.right - 30.0f * dpiScale,
+            m_updateBannerRect.bottom - 6.0f * dpiScale
         );
-        D2D1_ROUNDED_RECT rBtn = D2D1::RoundedRect(m_updateActionBtnRect, 5.0f * dpiScale, 5.0f * dpiScale);
+        D2D1_ROUNDED_RECT rBtn = D2D1::RoundedRect(m_updateActionBtnRect, 13.0f * dpiScale, 13.0f * dpiScale);
         ID2D1SolidColorBrush* btnBrush = nullptr;
-        D2D1_COLOR_F btnColor = m_updateActionBtnHover ? D2D1::ColorF(0.20f, 0.50f, 0.95f, 1.0f) : D2D1::ColorF(0.14f, 0.38f, 0.92f, 1.0f);
+        D2D1_COLOR_F btnColor = m_updateActionBtnHover ? D2D1::ColorF(0.24f, 0.52f, 0.98f, 1.0f) : D2D1::ColorF(0.14f, 0.40f, 0.90f, 1.0f);
         rt->CreateSolidColorBrush(btnColor, &btnBrush);
         if (btnBrush) {
             rt->FillRoundedRectangle(rBtn, btnBrush);
@@ -3614,105 +3651,92 @@ void AppWindow::RenderUpdateBanner(const D2D1_RECT_F& rect) {
         }
 
         std::wstring btnLabel = L"Update";
-        D2D1_RECT_F btnTextR = D2D1::RectF(
-            m_updateActionBtnRect.left + 10.0f * dpiScale,
-            m_updateActionBtnRect.top + 5.0f * dpiScale,
-            m_updateActionBtnRect.right - 10.0f * dpiScale,
-            m_updateActionBtnRect.bottom - 5.0f * dpiScale
-        );
         if (m_d2d.BrushText && m_d2d.FontButton) {
-            rt->DrawText(btnLabel.c_str(), (UINT32)btnLabel.length(), m_d2d.FontButton, btnTextR, m_d2d.BrushText);
+            rt->DrawText(btnLabel.c_str(), (UINT32)btnLabel.length(), m_d2d.FontButton, m_updateActionBtnRect, m_d2d.BrushText);
         }
 
         // Dismiss Button: [ ✕ ]
         m_updateDismissBtnRect = D2D1::RectF(
-            m_updateBannerRect.right - 28.0f * dpiScale,
-            m_updateBannerRect.top + 8.0f * dpiScale,
+            m_updateBannerRect.right - 25.0f * dpiScale,
+            m_updateBannerRect.top + 7.0f * dpiScale,
             m_updateBannerRect.right - 8.0f * dpiScale,
-            m_updateBannerRect.bottom - 8.0f * dpiScale
+            m_updateBannerRect.bottom - 7.0f * dpiScale
         );
         std::wstring closeLabel = L"✕";
         ID2D1SolidColorBrush* closeBrush = nullptr;
-        rt->CreateSolidColorBrush(m_updateDismissBtnHover ? D2D1::ColorF(0.9f, 0.9f, 0.9f) : D2D1::ColorF(0.55f, 0.55f, 0.58f), &closeBrush);
+        rt->CreateSolidColorBrush(m_updateDismissBtnHover ? D2D1::ColorF(0.95f, 0.95f, 0.95f) : D2D1::ColorF(0.55f, 0.55f, 0.58f), &closeBrush);
         if (closeBrush && m_d2d.FontButton) {
             rt->DrawText(closeLabel.c_str(), (UINT32)closeLabel.length(), m_d2d.FontButton, m_updateDismissBtnRect, closeBrush);
             closeBrush->Release();
         }
     } else if (state == UpdateState::Downloading) {
         int pct = m_updater.GetDownloadProgress();
-        std::wstring dlText = L"Downloading Update... " + std::to_wstring(pct) + L"%";
+        std::wstring dlText = L"Downloading... " + std::to_wstring(pct) + L"%";
         D2D1_RECT_F textRect = D2D1::RectF(
-            m_updateBannerRect.left + 14.0f * dpiScale,
-            m_updateBannerRect.top + 7.0f * dpiScale,
-            m_updateBannerRect.right - 14.0f * dpiScale,
-            m_updateBannerRect.top + 23.0f * dpiScale
+            m_updateBannerRect.left + 28.0f * dpiScale,
+            m_updateBannerRect.top + 6.0f * dpiScale,
+            m_updateBannerRect.right - 18.0f * dpiScale,
+            m_updateBannerRect.top + 22.0f * dpiScale
         );
         if (m_d2d.BrushText && m_d2d.FontButton) {
             rt->DrawText(dlText.c_str(), (UINT32)dlText.length(), m_d2d.FontButton, textRect, m_d2d.BrushText);
         }
 
-        // Progress bar background track
+        // Inset Progress Bar Track
         D2D1_RECT_F trackRect = D2D1::RectF(
-            m_updateBannerRect.left + 14.0f * dpiScale,
-            m_updateBannerRect.bottom - 12.0f * dpiScale,
-            m_updateBannerRect.right - 14.0f * dpiScale,
-            m_updateBannerRect.bottom - 7.0f * dpiScale
+            m_updateBannerRect.left + 18.0f * dpiScale,
+            m_updateBannerRect.bottom - 9.0f * dpiScale,
+            m_updateBannerRect.right - 18.0f * dpiScale,
+            m_updateBannerRect.bottom - 6.0f * dpiScale
         );
-        D2D1_ROUNDED_RECT rTrack = D2D1::RoundedRect(trackRect, 2.5f * dpiScale, 2.5f * dpiScale);
+        D2D1_ROUNDED_RECT rTrack = D2D1::RoundedRect(trackRect, 1.5f * dpiScale, 1.5f * dpiScale);
         ID2D1SolidColorBrush* trackBrush = nullptr;
-        rt->CreateSolidColorBrush(D2D1::ColorF(0.2f, 0.2f, 0.24f, 1.0f), &trackBrush);
+        rt->CreateSolidColorBrush(D2D1::ColorF(0.20f, 0.20f, 0.25f, 1.0f), &trackBrush);
         if (trackBrush) {
             rt->FillRoundedRectangle(rTrack, trackBrush);
             trackBrush->Release();
         }
 
-        // Progress bar filled bar
         float fillW = (trackRect.right - trackRect.left) * (std::max(1, pct) / 100.0f);
         D2D1_RECT_F fillRect = D2D1::RectF(trackRect.left, trackRect.top, trackRect.left + fillW, trackRect.bottom);
-        D2D1_ROUNDED_RECT rFill = D2D1::RoundedRect(fillRect, 2.5f * dpiScale, 2.5f * dpiScale);
+        D2D1_ROUNDED_RECT rFill = D2D1::RoundedRect(fillRect, 1.5f * dpiScale, 1.5f * dpiScale);
         ID2D1SolidColorBrush* fillBrush = nullptr;
-        rt->CreateSolidColorBrush(D2D1::ColorF(0.20f, 0.55f, 0.95f, 1.0f), &fillBrush);
+        rt->CreateSolidColorBrush(D2D1::ColorF(0.24f, 0.55f, 0.98f, 1.0f), &fillBrush);
         if (fillBrush) {
             rt->FillRoundedRectangle(rFill, fillBrush);
             fillBrush->Release();
         }
     } else if (state == UpdateState::Downloaded) {
-        std::wstring title = L"Update Ready!";
+        std::wstring title = L"Update Ready";
         D2D1_RECT_F textRect = D2D1::RectF(
-            m_updateBannerRect.left + 14.0f * dpiScale,
-            m_updateBannerRect.top + 12.0f * dpiScale,
+            m_updateBannerRect.left + 28.0f * dpiScale,
+            m_updateBannerRect.top + 9.0f * dpiScale,
             m_updateBannerRect.left + 140.0f * dpiScale,
-            m_updateBannerRect.bottom - 12.0f * dpiScale
+            m_updateBannerRect.bottom - 9.0f * dpiScale
         );
         if (m_d2d.BrushText && m_d2d.FontButton) {
             rt->DrawText(title.c_str(), (UINT32)title.length(), m_d2d.FontButton, textRect, m_d2d.BrushText);
         }
 
-        // Action Button: [ Restart & Install ]
+        // Action Pill Button: [ Restart ]
         m_updateActionBtnRect = D2D1::RectF(
-            m_updateBannerRect.left + 150.0f * dpiScale,
-            m_updateBannerRect.top + 8.0f * dpiScale,
+            m_updateBannerRect.right - 100.0f * dpiScale,
+            m_updateBannerRect.top + 6.0f * dpiScale,
             m_updateBannerRect.right - 14.0f * dpiScale,
-            m_updateBannerRect.bottom - 8.0f * dpiScale
+            m_updateBannerRect.bottom - 6.0f * dpiScale
         );
-        D2D1_ROUNDED_RECT rBtn = D2D1::RoundedRect(m_updateActionBtnRect, 5.0f * dpiScale, 5.0f * dpiScale);
+        D2D1_ROUNDED_RECT rBtn = D2D1::RoundedRect(m_updateActionBtnRect, 13.0f * dpiScale, 13.0f * dpiScale);
         ID2D1SolidColorBrush* btnBrush = nullptr;
-        D2D1_COLOR_F btnColor = m_updateActionBtnHover ? D2D1::ColorF(0.12f, 0.68f, 0.38f, 1.0f) : D2D1::ColorF(0.08f, 0.58f, 0.32f, 1.0f);
+        D2D1_COLOR_F btnColor = m_updateActionBtnHover ? D2D1::ColorF(0.12f, 0.75f, 0.42f, 1.0f) : D2D1::ColorF(0.08f, 0.62f, 0.35f, 1.0f);
         rt->CreateSolidColorBrush(btnColor, &btnBrush);
         if (btnBrush) {
             rt->FillRoundedRectangle(rBtn, btnBrush);
             btnBrush->Release();
         }
 
-        std::wstring btnLabel = L"Restart & Install";
-        D2D1_RECT_F btnTextR = D2D1::RectF(
-            m_updateActionBtnRect.left + 12.0f * dpiScale,
-            m_updateActionBtnRect.top + 5.0f * dpiScale,
-            m_updateActionBtnRect.right - 12.0f * dpiScale,
-            m_updateActionBtnRect.bottom - 5.0f * dpiScale
-        );
+        std::wstring btnLabel = L"Restart";
         if (m_d2d.BrushText && m_d2d.FontButton) {
-            rt->DrawText(btnLabel.c_str(), (UINT32)btnLabel.length(), m_d2d.FontButton, btnTextR, m_d2d.BrushText);
+            rt->DrawText(btnLabel.c_str(), (UINT32)btnLabel.length(), m_d2d.FontButton, m_updateActionBtnRect, m_d2d.BrushText);
         }
     }
 }
