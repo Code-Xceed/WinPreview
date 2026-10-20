@@ -291,16 +291,12 @@ bool UpdateEngine::LaunchInstallerAndExit(HWND parentHwnd) {
 
     if (m_downloadedInstallerPath.empty()) return false;
 
-    // Launch the installer
-    HINSTANCE hInst = ShellExecuteW(parentHwnd, L"open", m_downloadedInstallerPath.c_str(),
+    // Launch the installer independently without parent window dependency
+    HINSTANCE hInst = ShellExecuteW(NULL, L"open", m_downloadedInstallerPath.c_str(),
                                     L"", NULL, SW_SHOWNORMAL);
     if ((INT_PTR)hInst > 32) {
-        // Signal caller to terminate current process cleanly
-        if (parentHwnd && IsWindow(parentHwnd)) {
-            PostMessageW(parentHwnd, WM_CLOSE, 0, 0);
-        } else {
-            ExitProcess(0);
-        }
+        // Terminate current process immediately to release all file locks on WinPreview.exe and pdfium.dll
+        ExitProcess(0);
         return true;
     }
     return false;

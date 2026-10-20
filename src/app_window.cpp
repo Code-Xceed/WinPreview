@@ -8024,6 +8024,20 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             return 0; // Keep resident in background for instant spacebar preview!
         }
 
+        case WM_QUERYENDSESSION: {
+            return TRUE;
+        }
+
+        case WM_ENDSESSION: {
+            if (wParam) {
+                RemoveTrayIcon();
+                ExplorerHook::UninstallHook();
+                DestroyHudWindow();
+                ExitProcess(0);
+            }
+            return 0;
+        }
+
         case WM_DESTROY: {
             RemoveTrayIcon();
             ExplorerHook::UninstallHook();
