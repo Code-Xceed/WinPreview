@@ -35,27 +35,63 @@ static std::wstring ExtractJsonString(const std::string& json, const std::string
 }
 
 static bool IsVersionGreater(const std::wstring& remote, const std::wstring& current) {
-    int rMaj = 0, rMin = 0, rPatch = 0;
-    int cMaj = 0, cMin = 0, cPatch = 0;
+    int rMaj = 0, rMin = 0, rPatch = 0, rBuild = 0;
+    int cMaj = 0, cMin = 0, cPatch = 0, cBuild = 0;
     
     // Parse remote version, handle optional 'v' prefix
     const wchar_t* rPtr = remote.c_str();
-    if (rPtr[0] == L'v' || rPtr[0] == L'V') rPtr++;
-    swscanf_s(rPtr, L"%d.%d.%d", &rMaj, &rMin, &rPatch);
+    while (*rPtr == L'v' || *rPtr == L'V' || *rPtr == L' ') rPtr++;
+    swscanf_s(rPtr, L"%d.%d.%d.%d", &rMaj, &rMin, &rPatch, &rBuild);
 
     // Parse current version
     const wchar_t* cPtr = current.c_str();
-    if (cPtr[0] == L'v' || cPtr[0] == L'V') cPtr++;
-    swscanf_s(cPtr, L"%d.%d.%d", &cMaj, &cMin, &cPatch);
+    while (*cPtr == L'v' || *cPtr == L'V' || *cPtr == L' ') cPtr++;
+    swscanf_s(cPtr, L"%d.%d.%d.%d", &cMaj, &cMin, &cPatch, &cBuild);
 
-    if (rMaj > cMaj) return true;
-    if (rMaj < cMaj) return false;
-    if (rMin > cMin) return true;
-    if (rMin < cMin) return false;
-    return rPatch > cPatch;
+    if (rMaj != cMaj) return rMaj > cMaj;
+    if (rMin != cMin) return rMin > cMin;
+    if (rPatch != cPatch) return rPatch > cPatch;
+    return rBuild > cBuild;
 }
 
-UpdateEngine::UpdateEngine() = default;
+static std::wstring QueryModuleFileVersion() {
+    WCHAR path[MAX_PATH];
+    if (!GetModuleFileNameW(NULL, path, MAX_PATH)) {
+        return WINPREVIEW_VERSION_WSTR;
+    }
+
+    DWORD handle = 0;
+    DWORD size = GetFileVersionInfoSizeW(path, &handle);
+    if (size == 0) {
+        return WINPREVIEW_VERSION_WSTR;
+    }
+
+    std::vector<BYTE> data(size);
+    if (!GetFileVersionInfoW(path, handle, size, data.data())) {
+        return WINPREVIEW_VERSION_WSTR;
+    }
+
+    VS_FIXEDFILEINFO* pFileInfo = nullptr;
+    UINT len = 0;
+    if (VerQueryValueW(data.data(), L"\\", (LPVOID*)&pFileInfo, &len) && len >= sizeof(VS_FIXEDFILEINFO) && pFileInfo) {
+        int maj = HIWORD(pFileInfo->dwProductVersionMS);
+        int min = LOWORD(pFileInfo->dwProductVersionMS);
+        int patch = HIWORD(pFileInfo->dwProductVersionLS);
+        int build = LOWORD(pFileInfo->dwProductVersionLS);
+        WCHAR verStr[64];
+        if (build > 0) {
+            swprintf_s(verStr, L"%d.%d.%d.%d", maj, min, patch, build);
+        } else {
+            swprintf_s(verStr, L"%d.%d.%d", maj, min, patch);
+        }
+        return verStr;
+    }
+    return WINPREVIEW_VERSION_WSTR;
+}
+
+UpdateEngine::UpdateEngine() {
+    m_info.currentVersion = QueryModuleFileVersion();
+}
 
 UpdateEngine::~UpdateEngine() {
     if (m_workerThread.joinable()) {
@@ -84,7 +120,7 @@ void UpdateEngine::CheckForUpdatesAsync(std::function<void(const UpdateInfo&)> o
 }
 
 void UpdateEngine::SimulateUpdateForTesting() {
-    m_info.currentVersion = L"1.0.0";
+    m_info.currentVersion = QueryModuleFileVersion();
     m_info.remoteVersion = L"1.1.0";
     m_info.changelog = L"Simulation test release with performance optimizations and new features.";
     m_info.isAvailable = true;
@@ -94,6 +130,7 @@ void UpdateEngine::SimulateUpdateForTesting() {
 }
 
 void UpdateEngine::FetchUpdateInfoSync() {
+    m_info.currentVersion = QueryModuleFileVersion();
     m_info.isAvailable = false;
     m_info.errorMessage.clear();
 
@@ -104,8 +141,9 @@ void UpdateEngine::FetchUpdateInfoSync() {
         return;
     }
 
+    std::wstring metaUrl = std::wstring(UPDATE_META_URL) + L"?t=" + std::to_wstring(GetTickCount64());
     DWORD flags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_SECURE | INTERNET_FLAG_IGNORE_REDIRECT_TO_HTTPS;
-    HINTERNET hUrl = InternetOpenUrlW(hInternet, UPDATE_META_URL, NULL, 0, flags, 0);
+    HINTERNET hUrl = InternetOpenUrlW(hInternet, metaUrl.c_str(), NULL, 0, flags, 0);
     if (!hUrl) {
         InternetCloseHandle(hInternet);
         m_info.errorMessage = L"Unable to contact update server.";

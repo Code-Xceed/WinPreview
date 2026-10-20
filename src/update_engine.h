@@ -4,6 +4,7 @@
 #include <atomic>
 #include <functional>
 #include <thread>
+#include "version.h"
 
 namespace WinPreview {
 
@@ -18,7 +19,7 @@ enum class UpdateState {
 };
 
 struct UpdateInfo {
-    std::wstring currentVersion = L"1.0.0";
+    std::wstring currentVersion = WINPREVIEW_VERSION_WSTR;
     std::wstring remoteVersion;
     std::wstring downloadUrl;
     std::wstring changelog;
