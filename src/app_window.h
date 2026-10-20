@@ -74,7 +74,8 @@ enum IconType {
     ICON_CUT,
     ICON_PASTE,
     ICON_SETTINGS,
-    ICON_OPEN_WITH
+    ICON_OPEN_WITH,
+    ICON_MORE
 };
 
 enum ContextMenuCommand {
@@ -107,6 +108,7 @@ public:
     bool Create(HINSTANCE hInstance, int nCmdShow, bool showTrayNotification = false);
     bool OpenFile(const std::wstring& filePath);
     bool SaveScreenshot(const std::wstring& outPath);
+    void SetShowOverflowMenu(bool show) { m_showOverflowMenu = show; }
     void RunMessageLoop();
 
     HWND GetHwnd() const { return m_hwnd; }
@@ -316,6 +318,10 @@ private:
     D2D1_RECT_F m_btnInfoRect = {};
     D2D1_RECT_F m_btnOpenWithRect = {};
     D2D1_RECT_F m_btnSettingsRect = {};
+    D2D1_RECT_F m_btnOverflowRect = {};
+    D2D1_RECT_F m_overflowMenuRect = {};
+    bool m_showOverflowMenu = false;
+    int m_overflowHoveredIndex = -1;
     D2D1_RECT_F m_tabThumbsRect = {};
     D2D1_RECT_F m_tabOutlineRect = {};
     std::wstring m_openWithAppName;
@@ -409,6 +415,23 @@ private:
     void RenderInspector(const D2D1_RECT_F& canvasRect);
     void DrawIconButton(const D2D1_RECT_F& rect, IconType icon, int buttonId, bool enabled = true);
     void DrawTextButton(const D2D1_RECT_F& rect, const WCHAR* label, int buttonId, bool enabled = true);
+
+    // Overflow Menu for Responsive Compact Toolbars
+    struct OverflowMenuItem {
+        int id = 0;
+        IconType icon = ICON_MORE;
+        std::wstring label;
+        std::wstring shortcut;
+        bool isDivider = false;
+        bool isChecked = false;
+        bool isEnabled = true;
+    };
+    std::vector<OverflowMenuItem> GetCurrentOverflowItems() const;
+    void RenderOverflowMenu(const D2D1_RECT_F& canvasRect);
+    void DrawMenuIcon(float cx, float cy, float size, IconType icon, ID2D1Brush* brush);
+    int GetOverflowItemIndexAt(const D2D1_POINT_2F& pt) const;
+    void HandleOverflowMenuClick(const D2D1_POINT_2F& pt);
+    void ExecuteOverflowCommand(int buttonId);
 
     // Media HUD & UI wake methods
     bool CreateHudWindow();

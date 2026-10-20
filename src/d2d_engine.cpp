@@ -13,7 +13,7 @@ D2DEngine::D2DEngine()
       BrushShadowDark(nullptr), BrushShadowSoft(nullptr),
       FontHero(nullptr), FontHeroCenter(nullptr), FontTitle(nullptr), FontTitleCenter(nullptr),
       FontBody(nullptr), FontBodyCenter(nullptr), FontCaption(nullptr), FontCaptionCenter(nullptr),
-      FontBadge(nullptr), FontMono(nullptr), FontButton(nullptr), RoundStrokeStyle(nullptr)
+      FontBadge(nullptr), FontMono(nullptr), FontButton(nullptr), FontCaptionRight(nullptr), FontMenu(nullptr), RoundStrokeStyle(nullptr)
 {
 }
 
@@ -30,6 +30,7 @@ D2DEngine::~D2DEngine() {
     SafeRelease(FontBadge);
     SafeRelease(FontMono);
     SafeRelease(FontButton);
+    SafeRelease(FontCaptionRight);
     SafeRelease(RoundStrokeStyle);
     SafeRelease(m_dwriteFactory);
     SafeRelease(m_wicFactory);
@@ -75,6 +76,7 @@ void D2DEngine::CreateFonts() {
     SafeRelease(FontBadge);
     SafeRelease(FontMono);
     SafeRelease(FontButton);
+    SafeRelease(FontCaptionRight);
 
     if (!m_dwriteFactory) return;
 
@@ -224,6 +226,35 @@ void D2DEngine::CreateFonts() {
         FontButton->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
         FontButton->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
         FontButton->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+    }
+
+    // Caption Right (Trailing micro optical size for keyboard shortcut hints)
+    m_dwriteFactory->CreateTextFormat(
+        s_smallFamily, NULL,
+        DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+        11.0f, L"en-us", &FontCaptionRight);
+    if (FontCaptionRight) {
+        FontCaptionRight->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+        FontCaptionRight->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+        FontCaptionRight->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
+    }
+
+    // Menu Item (12.0f, leading text alignment, vertical center, no-wrap with ellipsis trimming)
+    m_dwriteFactory->CreateTextFormat(
+        s_smallFamily, NULL,
+        DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+        12.0f, L"en-us", &FontMenu);
+    if (FontMenu) {
+        FontMenu->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+        FontMenu->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+        FontMenu->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+
+        DWRITE_TRIMMING trimming = { DWRITE_TRIMMING_GRANULARITY_CHARACTER, 0, 0 };
+        IDWriteInlineObject* ellipsis = nullptr;
+        if (SUCCEEDED(m_dwriteFactory->CreateEllipsisTrimmingSign(FontMenu, &ellipsis)) && ellipsis) {
+            FontMenu->SetTrimming(&trimming, ellipsis);
+            ellipsis->Release();
+        }
     }
 }
 
@@ -1274,6 +1305,21 @@ void D2DEngine::DrawIconExternalLink(float cx, float cy, float size, ID2D1Brush*
     // 3. Arrowhead barbs
     target->DrawLine(D2D1::Point2F(arrowTip.x - 4.5f * s, arrowTip.y), arrowTip, brush, strokeW, RoundStrokeStyle);
     target->DrawLine(D2D1::Point2F(arrowTip.x, arrowTip.y + 4.5f * s), arrowTip, brush, strokeW, RoundStrokeStyle);
+}
+
+void D2DEngine::DrawIconHamburger(float cx, float cy, float size, ID2D1Brush* brush, ID2D1RenderTarget* rt) {
+    ID2D1RenderTarget* target = rt ? rt : m_renderTarget;
+    if (!target || !brush) return;
+
+    float s = size / 24.0f;
+    float halfW = 6.0f * s;
+    float strokeW = 1.7f * s;
+    float yOffset = 4.6f * s;
+
+    // Three horizontal lines with rounded caps
+    target->DrawLine(D2D1::Point2F(cx - halfW, cy - yOffset), D2D1::Point2F(cx + halfW, cy - yOffset), brush, strokeW, RoundStrokeStyle);
+    target->DrawLine(D2D1::Point2F(cx - halfW, cy),           D2D1::Point2F(cx + halfW, cy),           brush, strokeW, RoundStrokeStyle);
+    target->DrawLine(D2D1::Point2F(cx - halfW, cy + yOffset), D2D1::Point2F(cx + halfW, cy + yOffset), brush, strokeW, RoundStrokeStyle);
 }
 
 } // namespace WinPreview

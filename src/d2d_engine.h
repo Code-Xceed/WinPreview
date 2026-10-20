@@ -87,6 +87,8 @@ public:
     IDWriteTextFormat* FontBadge = nullptr;
     IDWriteTextFormat* FontMono = nullptr;
     IDWriteTextFormat* FontButton = nullptr;
+    IDWriteTextFormat* FontCaptionRight = nullptr;
+    IDWriteTextFormat* FontMenu = nullptr;
 
     // Stroke styles
     ID2D1StrokeStyle* RoundStrokeStyle = nullptr;
@@ -127,6 +129,7 @@ public:
     void DrawIconEye(float cx, float cy, float size, ID2D1Brush* brush, ID2D1RenderTarget* rt = nullptr);
     void DrawIconFileDocument(float cx, float cy, float size, ID2D1Brush* brush, ID2D1RenderTarget* rt = nullptr);
     void DrawIconExternalLink(float cx, float cy, float size, ID2D1Brush* brush, ID2D1RenderTarget* rt = nullptr);
+    void DrawIconHamburger(float cx, float cy, float size, ID2D1Brush* brush, ID2D1RenderTarget* rt = nullptr);
 
     // Micro-Tooltip Renderer (Smooth Alpha, Direct2D Anti-aliased)
     void DrawMicroTooltip(float centerX, float topY, const WCHAR* text, float alpha, bool above = false);

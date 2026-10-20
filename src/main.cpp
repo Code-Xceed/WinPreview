@@ -60,6 +60,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     bool isBackground = false;
 
     std::wstring screenshotPath;
+    int screenshotWidth = 0;
+    int screenshotHeight = 0;
+    bool screenshotOpenMenu = false;
 
     if (argv) {
         for (int i = 1; i < argc; ++i) {
@@ -67,6 +70,12 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
                 isBackground = true;
             } else if ((_wcsicmp(argv[i], L"--screenshot") == 0 || _wcsicmp(argv[i], L"/screenshot") == 0) && i + 1 < argc) {
                 screenshotPath = argv[++i];
+            } else if ((_wcsicmp(argv[i], L"--width") == 0 || _wcsicmp(argv[i], L"-w") == 0) && i + 1 < argc) {
+                screenshotWidth = _wtoi(argv[++i]);
+            } else if ((_wcsicmp(argv[i], L"--height") == 0 || _wcsicmp(argv[i], L"-h") == 0) && i + 1 < argc) {
+                screenshotHeight = _wtoi(argv[++i]);
+            } else if (_wcsicmp(argv[i], L"--open-menu") == 0) {
+                screenshotOpenMenu = true;
             } else if (fileToOpen.empty() && argv[i][0] != L'-' && argv[i][0] != L'/') {
                 fileToOpen = argv[i];
             }
@@ -158,6 +167,12 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
 
             // Direct deterministic screenshot mode: captures Direct2D frame and exits immediately
             if (!screenshotPath.empty()) {
+                if (screenshotWidth > 0 && screenshotHeight > 0) {
+                    SetWindowPos(app.GetHwnd(), NULL, 0, 0, screenshotWidth, screenshotHeight, SWP_NOMOVE | SWP_NOZORDER);
+                }
+                if (screenshotOpenMenu) {
+                    app.SetShowOverflowMenu(true);
+                }
                 LogTime("Calling SaveScreenshot");
                 app.SaveScreenshot(screenshotPath);
                 LogTime("SaveScreenshot completed");

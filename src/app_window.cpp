@@ -63,7 +63,8 @@ enum ButtonId {
     BTN_UNSUPPORTED_COPY = 51,
     BTN_SYSTEM_PRIMARY = 49,
     BTN_SYSTEM_SECONDARY = 50,
-    BTN_OPEN_WITH = 52
+    BTN_OPEN_WITH = 52,
+    BTN_OVERFLOW_MENU = 53
 };
 
 static void CopyTextToClipboard(HWND hwnd, const std::wstring& text) {
@@ -364,6 +365,7 @@ bool AppWindow::OpenFile(const std::wstring& filePath) {
 
     // Reset feature states
     m_showSearch = false;
+    m_showOverflowMenu = false;
     m_searchQuery.clear();
     m_searchMatches.clear();
     m_currentMatchIndex = -1;
@@ -1362,8 +1364,9 @@ void AppWindow::DrawIconButton(const D2D1_RECT_F& rect, IconType icon, int butto
     bool isWrapActive = (buttonId == BTN_WRAP_TEXT) && m_text.IsWordWrap();
     bool isTableActive = (buttonId == BTN_TABLE_VIEW) && m_text.IsTableView();
     bool isSaveActive = (buttonId == BTN_SAVE_FILE) && m_text.IsModified();
+    bool isOverflowActive = (buttonId == BTN_OVERFLOW_MENU) && m_showOverflowMenu;
 
-    bool isStateActive = isLoopActive || isCropActive || isSearchActive || isInfoActive || isSettingsActive || isWrapActive || isTableActive || isSaveActive;
+    bool isStateActive = isLoopActive || isCropActive || isSearchActive || isInfoActive || isSettingsActive || isWrapActive || isTableActive || isSaveActive || isOverflowActive;
 
     // Active (press) state: tactile scale down + active fill
     if (m_pressedButtonId == buttonId && enabled) {
@@ -1412,6 +1415,7 @@ void AppWindow::DrawIconButton(const D2D1_RECT_F& rect, IconType icon, int butto
         case ICON_CUT:            m_d2d.DrawIconCut(cx, cy, iconSize, brush); break;
         case ICON_PASTE:          m_d2d.DrawIconPaste(cx, cy, iconSize, brush); break;
         case ICON_OPEN_WITH:      m_d2d.DrawIconExternalLink(cx, cy, iconSize, brush); break;
+        case ICON_MORE:           m_d2d.DrawIconHamburger(cx, cy, iconSize, brush); break;
     }
 }
 
@@ -1475,6 +1479,7 @@ const WCHAR* AppWindow::GetButtonTooltip(int buttonId) const {
             m_openWithTooltip = L"Open with " + (m_openWithAppName.empty() ? L"Default App" : m_openWithAppName) + L" (Enter)";
             return m_openWithTooltip.c_str();
         case BTN_SETTINGS: return L"Keybind Settings (Ctrl+,)";
+        case BTN_OVERFLOW_MENU: return L"More Actions (⋯)";
         default: return nullptr;
     }
 }
@@ -1512,15 +1517,16 @@ D2D1_RECT_F AppWindow::GetButtonRect(int buttonId) const {
         case BTN_PASTE: return m_btnPasteTextRect;
         case BTN_WRAP_TEXT: return m_btnWrapTextRect;
         case BTN_TABLE_VIEW: return m_btnTableViewRect;
+        case BTN_OVERFLOW_MENU: return m_btnOverflowRect;
         default: return D2D1::RectF(0, 0, 0, 0);
     }
 }
 
 bool AppWindow::SaveScreenshot(const std::wstring& outPath) {
-    UpdateLayout();
     if (!m_d2d.GetRenderTarget()) {
         m_d2d.CreateDeviceResources(m_hwnd);
     }
+    UpdateLayout();
     ID2D1HwndRenderTarget* rt = m_d2d.GetRenderTarget();
     if (!rt) return false;
 
@@ -1698,9 +1704,11 @@ void AppWindow::Render(HDC outHdc) {
         m_btnTableViewRect = {};
         m_btnSettingsRect = {};
         m_btnOpenWithRect = {};
+        m_btnOverflowRect = {};
+        m_showOverflowMenu = false;
     }
 
-    // 5. Render Floating Overlays (Search Bar, Inspector, and Settings Modal)
+    // 5. Render Floating Overlays (Search Bar, Inspector, Settings Modal, and Overflow Menu)
     if (m_showSearch && m_docType == DocumentType::Pdf) {
         RenderSearchBar(canvasRect);
     }
@@ -1709,6 +1717,9 @@ void AppWindow::Render(HDC outHdc) {
     }
     if (m_showSettings) {
         RenderSettingsModal(canvasRect);
+    }
+    if (m_showOverflowMenu) {
+        RenderOverflowMenu(canvasRect);
     }
 
     // 6. Render Micro-tooltip if active
@@ -1765,6 +1776,7 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
 
     // Clear hitboxes
     m_topDockRect = {};
+    m_btnOverflowRect = {};
     m_btnSidebarRect = {};
     m_btnPrevPageRect = {};
     m_btnNextPageRect = {};
@@ -1800,75 +1812,52 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
     if (m_dockOpacity <= 0.005f) return;
 
     float totalW = rect.right - rect.left;
+    float availLeft = (m_showSidebar && m_docType == DocumentType::Pdf) ? m_sidebarWidth : 0.0f;
+    float availW = totalW - availLeft;
     float dockH = 38.0f;
     float dockRadius = dockH / 2.0f; // 19.0f smooth circular pill caps
     float dockY = 12.0f;
     float btnH = 30.0f;
     float btnY = dockY + (dockH - btnH) / 2.0f;
 
-    // Dynamic width calculation based on active mode
+    // Dynamic width calculation based on active mode and responsive tier
     float dockW = 0.0f;
     bool showPdfNav = (m_docType == DocumentType::Pdf && m_totalPages > 1);
-    bool showRotate = true;
 
     if (m_docType == DocumentType::Image) {
-        // Image Dock: [ ◀ | ▶ ] | [ - | 54% | + ] | [ <-> ] | [ ↺  ↻ ] | [ ⯐ ] [ ⓘ ] [ ↗ ] [ ⚙ ] [ ⛶ ]
-        dockW = 498.0f;
-        if (totalW < 520.0f) {
-            dockW = 419.0f;
-            showRotate = false;
-        }
+        if (availW >= 540.0f) dockW = 498.0f;
+        else if (availW >= 390.0f) dockW = 282.0f;
+        else dockW = 196.0f;
     } else if (m_docType == DocumentType::Pdf) {
         if (showPdfNav) {
-            // Multi-page PDF: [ Sidebar ] | [ ◀  1 / N  ▶ ] | [ - | 100% | + ] | [ <-> ] | [ ↺  ↻ ] | [ 🔍 ] [ ⓘ ] [ ↗ ] [ ⚙ ] [ ⛶ ]
-            dockW = 598.0f;
-            if (totalW < 600.0f) {
-                dockW -= 79.0f;
-                showRotate = false;
-            }
+            if (availW >= 620.0f) dockW = 598.0f;
+            else if (availW >= 420.0f) dockW = 382.0f;
+            else dockW = 239.0f;
         } else {
-            // Single-page PDF: [ ◀ | ▶ ] | [ - | 100% | + ] | [ <-> ] | [ ↺  ↻ ] | [ 🔍 ] [ ⓘ ] [ ↗ ] [ ⚙ ] [ ⛶ ]
-            dockW = 498.0f;
-            if (totalW < 520.0f) {
-                dockW = 419.0f;
-                showRotate = false;
-            }
+            if (availW >= 540.0f) dockW = 498.0f;
+            else if (availW >= 390.0f) dockW = 282.0f;
+            else dockW = 196.0f;
         }
     } else if (m_docType == DocumentType::Text) {
-        // Text Mini VS Code: [ 💾 Save ] [ ↶ Undo ] [ ↷ Redo ] | [ ✂ Cut ] [ 📋 Copy ] [ 📋 Paste ] | [ - | 100% | + ] | [ ↵ Wrap ] [ ⓘ ] [ ↗ ] [ ⚙ ] [ ⛶ ]
-        dockW = 514.0f;
-        if (totalW < 530.0f) {
-            dockW = 450.0f;
-        }
+        if (availW >= 560.0f) dockW = 514.0f;
+        else if (availW >= 420.0f) dockW = 364.0f;
+        else dockW = 232.0f;
     } else if (m_docType == DocumentType::Spreadsheet) {
-        // Spreadsheet: [ 💾 Save ] [ ↶ Undo ] [ ↷ Redo ] | [ 📋 Copy ] [ 📋 Paste ] | [ - | 100% | + ] | [ ⊞ Table ] [ ⓘ ] [ ↗ ] [ ⚙ ] [ ⛶ ]
-        dockW = 514.0f;
-        if (totalW < 530.0f) {
-            dockW = 450.0f;
-        }
-    } else if (m_docType == DocumentType::Office) {
-        // Office: [ ◀ | ▶ ] | [ - | 100% | + ] | [ <-> ] | [ ↺  ↻ ] | [ ⓘ ] [ ↗ ] [ ⚙ ] [ ⛶ ]
-        dockW = 464.0f;
-        if (totalW < 480.0f) {
-            dockW = 385.0f;
-            showRotate = false;
-        }
+        if (availW >= 560.0f) dockW = 514.0f;
+        else if (availW >= 420.0f) dockW = 364.0f;
+        else dockW = 232.0f;
+    } else if (m_docType == DocumentType::Office || m_docType == DocumentType::Svg) {
+        if (availW >= 500.0f) dockW = 464.0f;
+        else if (availW >= 390.0f) dockW = 282.0f;
+        else dockW = 196.0f;
     } else if (m_docType == DocumentType::Markdown || m_docType == DocumentType::Notebook) {
-        // Markdown: [ ◀ | ▶ ] | [ 📋 Copy ] | [ ⓘ ] [ ↗ ] [ ⚙ ] [ ⛶ ]
-        dockW = 272.0f;
-    } else if (m_docType == DocumentType::Svg) {
-        // Svg: [ ◀ | ▶ ] | [ - | 100% | + ] | [ <-> ] | [ ↺  ↻ ] | [ ⓘ ] [ ↗ ] [ ⚙ ] [ ⛶ ]
-        dockW = 464.0f;
-        if (totalW < 480.0f) {
-            dockW = 385.0f;
-            showRotate = false;
-        }
+        if (availW >= 360.0f) dockW = 272.0f;
+        else dockW = 159.0f;
     } else if (m_docType == DocumentType::Font) {
-        // Font: [ ◀ | ▶ ] | [ ⓘ ] [ ↗ ] [ ⚙ ] [ ⛶ ]
-        dockW = 225.0f;
+        if (availW >= 320.0f) dockW = 225.0f;
+        else dockW = 112.0f;
     }
-    float availLeft = (m_showSidebar && m_docType == DocumentType::Pdf) ? m_sidebarWidth : 0.0f;
-    float availW = totalW - availLeft;
+
     if (dockW > availW - 16.0f) dockW = availW - 16.0f;
     float dockX = availLeft + (availW - dockW) / 2.0f;
     if (dockX < availLeft + 8.0f) dockX = availLeft + 8.0f;
@@ -1908,217 +1897,11 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
     // DOCK RENDERING: IMAGE MODE
     // =========================================================================
     if (m_docType == DocumentType::Image) {
-        // --- Segment 0: Folder Navigation Capsule [ ◀ | ▶ ] ---
-        float navH = 28.0f;
-        float navY = dockY + (dockH - navH) / 2.0f;
-        float navBtnW = 27.0f;
-        float totalNavW = navBtnW + 1.0f + navBtnW; // 55px
+        bool isFull = (availW >= 540.0f);
+        bool isCompact = (availW < 390.0f);
 
-        D2D1_RECT_F navRect = D2D1::RectF(curX, navY, curX + totalNavW, navY + navH);
-        D2D1_ROUNDED_RECT navR = D2D1::RoundedRect(navRect, 6.0f, 6.0f);
-        rt->FillRoundedRectangle(navR, m_d2d.BrushCard);
-        rt->DrawRoundedRectangle(navR, m_d2d.BrushBorderSubtle, 1.0f);
-
-        // Prev [◀]
-        m_btnPrevPageRect = D2D1::RectF(curX, navY, curX + navBtnW, navY + navH);
-        if (m_pressedButtonId == BTN_PREV_PAGE) {
-            rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnPrevPageRect, 5.0f, 5.0f), m_d2d.BrushActive);
-        } else if (m_hoveredButtonId == BTN_PREV_PAGE) {
-            rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnPrevPageRect, 5.0f, 5.0f), m_d2d.BrushHover);
-        }
-        float prevCx = m_btnPrevPageRect.left + navBtnW / 2.0f;
-        float prevCy = navY + navH / 2.0f + (m_pressedButtonId == BTN_PREV_PAGE ? 0.5f : 0.0f);
-        m_d2d.DrawIconChevronLeft(prevCx, prevCy, 13.0f, m_d2d.BrushText);
-
-        float divNavX = curX + navBtnW;
-        rt->DrawLine(D2D1::Point2F(divNavX, navY + 4.0f), D2D1::Point2F(divNavX, navY + navH - 4.0f), m_d2d.BrushBorder, 1.0f);
-
-        // Next [▶]
-        m_btnNextPageRect = D2D1::RectF(divNavX + 1.0f, navY, curX + totalNavW, navY + navH);
-        if (m_pressedButtonId == BTN_NEXT_PAGE) {
-            rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnNextPageRect, 5.0f, 5.0f), m_d2d.BrushActive);
-        } else if (m_hoveredButtonId == BTN_NEXT_PAGE) {
-            rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnNextPageRect, 5.0f, 5.0f), m_d2d.BrushHover);
-        }
-        float nextCx = m_btnNextPageRect.left + navBtnW / 2.0f;
-        float nextCy = navY + navH / 2.0f + (m_pressedButtonId == BTN_NEXT_PAGE ? 0.5f : 0.0f);
-        m_d2d.DrawIconChevronRight(nextCx, nextCy, 13.0f, m_d2d.BrushText);
-
-        curX += totalNavW;
-        drawDivider(curX + 8.0f);
-        curX += 17.0f;
-
-        // --- Segment 1: Inset Zoom Capsule [ - | 54% | + ] ---
-        float capH = 28.0f;
-        float capY = dockY + (dockH - capH) / 2.0f;
-        float zoomBtnW = 27.0f;
-        float zoomTextW = 50.0f;
-        float totalCapW = zoomBtnW + 1.0f + zoomTextW + 1.0f + zoomBtnW; // 106px
-
-        D2D1_RECT_F capRect = D2D1::RectF(curX, capY, curX + totalCapW, capY + capH);
-        D2D1_ROUNDED_RECT capR = D2D1::RoundedRect(capRect, 6.0f, 6.0f);
-        rt->FillRoundedRectangle(capR, m_d2d.BrushCard);
-        rt->DrawRoundedRectangle(capR, m_d2d.BrushBorderSubtle, 1.0f);
-
-        // Zoom Out [-]
-        m_btnZoomOutRect = D2D1::RectF(curX, capY, curX + zoomBtnW, capY + capH);
-        if (m_pressedButtonId == BTN_ZOOM_OUT) {
-            rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnZoomOutRect, 5.0f, 5.0f), m_d2d.BrushActive);
-        } else if (m_hoveredButtonId == BTN_ZOOM_OUT) {
-            rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnZoomOutRect, 5.0f, 5.0f), m_d2d.BrushHover);
-        }
-        float minusCx = m_btnZoomOutRect.left + zoomBtnW / 2.0f;
-        float minusCy = capY + capH / 2.0f + (m_pressedButtonId == BTN_ZOOM_OUT ? 0.5f : 0.0f);
-        m_d2d.DrawIconZoomOut(minusCx, minusCy, 13.0f, m_d2d.BrushText);
-
-        // Inner Divider 1
-        float div1X = curX + zoomBtnW;
-        rt->DrawLine(D2D1::Point2F(div1X, capY + 4.0f), D2D1::Point2F(div1X, capY + capH - 4.0f), m_d2d.BrushBorder, 1.0f);
-
-        // Zoom Percent Readout [54%]
-        m_btnZoomResetRect = D2D1::RectF(div1X + 1.0f, capY, div1X + 1.0f + zoomTextW, capY + capH);
-        if (m_pressedButtonId == BTN_ZOOM_RESET) {
-            rt->FillRectangle(m_btnZoomResetRect, m_d2d.BrushActive);
-        } else if (m_hoveredButtonId == BTN_ZOOM_RESET) {
-            rt->FillRectangle(m_btnZoomResetRect, m_d2d.BrushHover);
-        }
-        WCHAR zoomBuf[16];
-        swprintf_s(zoomBuf, L"%d%%", (int)(m_zoom * 100.0f + 0.5f));
-        IDWriteTextFormat* fontZoom = m_d2d.FontButton ? m_d2d.FontButton : m_d2d.FontCaption;
-        rt->DrawText(zoomBuf, (UINT32)wcslen(zoomBuf), fontZoom, m_btnZoomResetRect, m_d2d.BrushText);
-
-        // Inner Divider 2
-        float div2X = div1X + 1.0f + zoomTextW;
-        rt->DrawLine(D2D1::Point2F(div2X, capY + 4.0f), D2D1::Point2F(div2X, capY + capH - 4.0f), m_d2d.BrushBorder, 1.0f);
-
-        // Zoom In [+]
-        m_btnZoomInRect = D2D1::RectF(div2X + 1.0f, capY, curX + totalCapW, capY + capH);
-        if (m_pressedButtonId == BTN_ZOOM_IN) {
-            rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnZoomInRect, 5.0f, 5.0f), m_d2d.BrushActive);
-        } else if (m_hoveredButtonId == BTN_ZOOM_IN) {
-            rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnZoomInRect, 5.0f, 5.0f), m_d2d.BrushHover);
-        }
-        float plusCx = m_btnZoomInRect.left + zoomBtnW / 2.0f;
-        float plusCy = capY + capH / 2.0f + (m_pressedButtonId == BTN_ZOOM_IN ? 0.5f : 0.0f);
-        m_d2d.DrawIconZoomIn(plusCx, plusCy, 13.0f, m_d2d.BrushText);
-
-        curX += totalCapW;
-
-        // --- Divider ---
-        drawDivider(curX + 8.0f);
-        curX += 17.0f;
-
-        // --- Segment 2: Fit to Window [ <-> ] ---
-        m_btnZoomFitRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-        DrawIconButton(m_btnZoomFitRect, ICON_ZOOM_FIT, BTN_ZOOM_FIT, true);
-        curX += 30.0f;
-
-        // --- Segment 3: Rotation [ ↺  ↻ ] ---
-        if (showRotate) {
-            drawDivider(curX + 8.0f);
-            curX += 17.0f;
-
-            m_btnRotateLeftRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-            DrawIconButton(m_btnRotateLeftRect, ICON_ROTATE_LEFT, BTN_ROTATE_L, true);
-            curX += 32.0f;
-
-            m_btnRotateRightRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-            DrawIconButton(m_btnRotateRightRect, ICON_ROTATE_RIGHT, BTN_ROTATE_R, true);
-            curX += 30.0f;
-        }
-
-        // --- Divider ---
-        drawDivider(curX + 8.0f);
-        curX += 17.0f;
-
-        // --- Segment 4: Actions [ ⯐ ] [ ⓘ ] [ ↗ ] [ ⚙ ] [ ⛶ ] ---
-        m_btnCropRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-        DrawIconButton(m_btnCropRect, ICON_CROP, BTN_CROP, true);
-        curX += 34.0f;
-
-        m_btnInfoRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-        DrawIconButton(m_btnInfoRect, ICON_INFO, BTN_INFO, true);
-        curX += 34.0f;
-
-        m_btnOpenWithRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-        DrawIconButton(m_btnOpenWithRect, ICON_OPEN_WITH, BTN_OPEN_WITH, true);
-        curX += 34.0f;
-
-        m_btnSettingsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-        DrawIconButton(m_btnSettingsRect, ICON_SETTINGS, BTN_SETTINGS, true);
-        curX += 34.0f;
-
-        m_btnToolbarFsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-        DrawIconButton(m_btnToolbarFsRect, ICON_FULLSCREEN, BTN_TOOLBAR_FS, true);
-    }
-    // =========================================================================
-    // DOCK RENDERING: PDF MODE
-    // =========================================================================
-    else if (m_docType == DocumentType::Pdf) {
-        if (showPdfNav) {
-            // Sidebar Toggle
-            m_btnSidebarRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-            DrawIconButton(m_btnSidebarRect, ICON_SIDEBAR, BTN_SIDEBAR, true);
-            curX += 30.0f;
-
-            drawDivider(curX + 8.0f);
-            curX += 17.0f;
-
-            // Page Nav Capsule: [ ◀  1 / N  ▶ ]
-            float navH = 28.0f;
-            float navY = dockY + (dockH - navH) / 2.0f;
-            float navBtnW = 26.0f;
-            float navTextW = 54.0f;
-            float totalNavW = navBtnW + 1.0f + navTextW + 1.0f + navBtnW; // 108px
-
-            D2D1_RECT_F navRect = D2D1::RectF(curX, navY, curX + totalNavW, navY + navH);
-            D2D1_ROUNDED_RECT navR = D2D1::RoundedRect(navRect, 6.0f, 6.0f);
-            rt->FillRoundedRectangle(navR, m_d2d.BrushCard);
-            rt->DrawRoundedRectangle(navR, m_d2d.BrushBorderSubtle, 1.0f);
-
-            // Prev Page [◀]
-            m_btnPrevPageRect = D2D1::RectF(curX, navY, curX + navBtnW, navY + navH);
-            if (m_pressedButtonId == BTN_PREV_PAGE && m_currentPage > 0) {
-                rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnPrevPageRect, 5.0f, 5.0f), m_d2d.BrushActive);
-            } else if (m_hoveredButtonId == BTN_PREV_PAGE && m_currentPage > 0) {
-                rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnPrevPageRect, 5.0f, 5.0f), m_d2d.BrushHover);
-            }
-            float prevCx = m_btnPrevPageRect.left + navBtnW / 2.0f;
-            float prevCy = navY + navH / 2.0f + (m_pressedButtonId == BTN_PREV_PAGE ? 0.5f : 0.0f);
-            m_d2d.DrawIconChevronLeft(prevCx, prevCy, 13.0f, (m_currentPage > 0) ? (ID2D1Brush*)m_d2d.BrushText : (ID2D1Brush*)m_d2d.BrushTextMuted);
-
-            // Divider 1
-            float div1X = curX + navBtnW;
-            rt->DrawLine(D2D1::Point2F(div1X, navY + 4.0f), D2D1::Point2F(div1X, navY + navH - 4.0f), m_d2d.BrushBorder, 1.0f);
-
-            // Page text readout
-            D2D1_RECT_F pageTextRect = D2D1::RectF(div1X + 1.0f, navY, div1X + 1.0f + navTextW, navY + navH);
-            WCHAR pageBuf[32];
-            swprintf_s(pageBuf, L"%d / %d", m_currentPage + 1, m_totalPages);
-            IDWriteTextFormat* fontNav = m_d2d.FontButton ? m_d2d.FontButton : m_d2d.FontCaption;
-            rt->DrawText(pageBuf, (UINT32)wcslen(pageBuf), fontNav, pageTextRect, m_d2d.BrushText);
-
-            // Divider 2
-            float div2X = div1X + 1.0f + navTextW;
-            rt->DrawLine(D2D1::Point2F(div2X, navY + 4.0f), D2D1::Point2F(div2X, navY + navH - 4.0f), m_d2d.BrushBorder, 1.0f);
-
-            // Next Page [▶]
-            m_btnNextPageRect = D2D1::RectF(div2X + 1.0f, navY, curX + totalNavW, navY + navH);
-            if (m_pressedButtonId == BTN_NEXT_PAGE && m_currentPage + 1 < m_totalPages) {
-                rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnNextPageRect, 5.0f, 5.0f), m_d2d.BrushActive);
-            } else if (m_hoveredButtonId == BTN_NEXT_PAGE && m_currentPage + 1 < m_totalPages) {
-                rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnNextPageRect, 5.0f, 5.0f), m_d2d.BrushHover);
-            }
-            float nextCx = m_btnNextPageRect.left + navBtnW / 2.0f;
-            float nextCy = navY + navH / 2.0f + (m_pressedButtonId == BTN_NEXT_PAGE ? 0.5f : 0.0f);
-            m_d2d.DrawIconChevronRight(nextCx, nextCy, 13.0f, (m_currentPage + 1 < m_totalPages) ? (ID2D1Brush*)m_d2d.BrushText : (ID2D1Brush*)m_d2d.BrushTextMuted);
-
-            curX += totalNavW;
-
-            drawDivider(curX + 8.0f);
-            curX += 17.0f;
-        } else {
-            // Single-page PDF: Folder Navigation Capsule [ ◀ | ▶ ]
+        if (!isCompact) {
+            // Segment 0: Folder Navigation Capsule [ ◀ | ▶ ]
             float navH = 28.0f;
             float navY = dockY + (dockH - navH) / 2.0f;
             float navBtnW = 27.0f;
@@ -2155,642 +1938,1238 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
             m_d2d.DrawIconChevronRight(nextCx, nextCy, 13.0f, m_d2d.BrushText);
 
             curX += totalNavW;
-
-            drawDivider(curX + 8.0f);
-            curX += 17.0f;
-        }
-
-        // Inset Zoom Capsule [ - | 100% | + ]
-        float capH = 28.0f;
-        float capY = dockY + (dockH - capH) / 2.0f;
-        float zoomBtnW = 27.0f;
-        float zoomTextW = 50.0f;
-        float totalCapW = zoomBtnW + 1.0f + zoomTextW + 1.0f + zoomBtnW; // 106px
-
-        D2D1_RECT_F capRect = D2D1::RectF(curX, capY, curX + totalCapW, capY + capH);
-        D2D1_ROUNDED_RECT capR = D2D1::RoundedRect(capRect, 6.0f, 6.0f);
-        rt->FillRoundedRectangle(capR, m_d2d.BrushCard);
-        rt->DrawRoundedRectangle(capR, m_d2d.BrushBorderSubtle, 1.0f);
-
-        // Zoom Out [-]
-        m_btnZoomOutRect = D2D1::RectF(curX, capY, curX + zoomBtnW, capY + capH);
-        if (m_pressedButtonId == BTN_ZOOM_OUT) {
-            rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnZoomOutRect, 5.0f, 5.0f), m_d2d.BrushActive);
-        } else if (m_hoveredButtonId == BTN_ZOOM_OUT) {
-            rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnZoomOutRect, 5.0f, 5.0f), m_d2d.BrushHover);
-        }
-        float minusCx = m_btnZoomOutRect.left + zoomBtnW / 2.0f;
-        float minusCy = capY + capH / 2.0f + (m_pressedButtonId == BTN_ZOOM_OUT ? 0.5f : 0.0f);
-        m_d2d.DrawIconZoomOut(minusCx, minusCy, 13.0f, m_d2d.BrushText);
-
-        float div1X = curX + zoomBtnW;
-        rt->DrawLine(D2D1::Point2F(div1X, capY + 4.0f), D2D1::Point2F(div1X, capY + capH - 4.0f), m_d2d.BrushBorder, 1.0f);
-
-        // Zoom Readout
-        m_btnZoomResetRect = D2D1::RectF(div1X + 1.0f, capY, div1X + 1.0f + zoomTextW, capY + capH);
-        if (m_pressedButtonId == BTN_ZOOM_RESET) {
-            rt->FillRectangle(m_btnZoomResetRect, m_d2d.BrushActive);
-        } else if (m_hoveredButtonId == BTN_ZOOM_RESET) {
-            rt->FillRectangle(m_btnZoomResetRect, m_d2d.BrushHover);
-        }
-        WCHAR zoomBuf[16];
-        swprintf_s(zoomBuf, L"%d%%", (int)(m_zoom * 100.0f + 0.5f));
-        IDWriteTextFormat* fontZoom = m_d2d.FontButton ? m_d2d.FontButton : m_d2d.FontCaption;
-        rt->DrawText(zoomBuf, (UINT32)wcslen(zoomBuf), fontZoom, m_btnZoomResetRect, m_d2d.BrushText);
-
-        float div2X = div1X + 1.0f + zoomTextW;
-        rt->DrawLine(D2D1::Point2F(div2X, capY + 4.0f), D2D1::Point2F(div2X, capY + capH - 4.0f), m_d2d.BrushBorder, 1.0f);
-
-        // Zoom In [+]
-        m_btnZoomInRect = D2D1::RectF(div2X + 1.0f, capY, curX + totalCapW, capY + capH);
-        if (m_pressedButtonId == BTN_ZOOM_IN) {
-            rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnZoomInRect, 5.0f, 5.0f), m_d2d.BrushActive);
-        } else if (m_hoveredButtonId == BTN_ZOOM_IN) {
-            rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnZoomInRect, 5.0f, 5.0f), m_d2d.BrushHover);
-        }
-        float plusCx = m_btnZoomInRect.left + zoomBtnW / 2.0f;
-        float plusCy = capY + capH / 2.0f + (m_pressedButtonId == BTN_ZOOM_IN ? 0.5f : 0.0f);
-        m_d2d.DrawIconZoomIn(plusCx, plusCy, 13.0f, m_d2d.BrushText);
-
-        curX += totalCapW;
-
-        drawDivider(curX + 8.0f);
-        curX += 17.0f;
-
-        // Fit to Window
-        m_btnZoomFitRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-        DrawIconButton(m_btnZoomFitRect, ICON_ZOOM_FIT, BTN_ZOOM_FIT, true);
-        curX += 30.0f;
-
-        // Rotate Left & Right
-        if (showRotate) {
             drawDivider(curX + 8.0f);
             curX += 17.0f;
 
-            m_btnRotateLeftRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-            DrawIconButton(m_btnRotateLeftRect, ICON_ROTATE_LEFT, BTN_ROTATE_L, true);
-            curX += 32.0f;
+            // Segment 1: Inset Zoom Capsule [ - | 54% | + ]
+            float capH = 28.0f;
+            float capY = dockY + (dockH - capH) / 2.0f;
+            float zoomBtnW = 27.0f;
+            float zoomTextW = 50.0f;
+            float totalCapW = zoomBtnW + 1.0f + zoomTextW + 1.0f + zoomBtnW; // 106px
 
-            m_btnRotateRightRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-            DrawIconButton(m_btnRotateRightRect, ICON_ROTATE_RIGHT, BTN_ROTATE_R, true);
+            D2D1_RECT_F capRect = D2D1::RectF(curX, capY, curX + totalCapW, capY + capH);
+            D2D1_ROUNDED_RECT capR = D2D1::RoundedRect(capRect, 6.0f, 6.0f);
+            rt->FillRoundedRectangle(capR, m_d2d.BrushCard);
+            rt->DrawRoundedRectangle(capR, m_d2d.BrushBorderSubtle, 1.0f);
+
+            // Zoom Out [-]
+            m_btnZoomOutRect = D2D1::RectF(curX, capY, curX + zoomBtnW, capY + capH);
+            if (m_pressedButtonId == BTN_ZOOM_OUT) {
+                rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnZoomOutRect, 5.0f, 5.0f), m_d2d.BrushActive);
+            } else if (m_hoveredButtonId == BTN_ZOOM_OUT) {
+                rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnZoomOutRect, 5.0f, 5.0f), m_d2d.BrushHover);
+            }
+            float minusCx = m_btnZoomOutRect.left + zoomBtnW / 2.0f;
+            float minusCy = capY + capH / 2.0f + (m_pressedButtonId == BTN_ZOOM_OUT ? 0.5f : 0.0f);
+            m_d2d.DrawIconZoomOut(minusCx, minusCy, 13.0f, m_d2d.BrushText);
+
+            float div1X = curX + zoomBtnW;
+            rt->DrawLine(D2D1::Point2F(div1X, capY + 4.0f), D2D1::Point2F(div1X, capY + capH - 4.0f), m_d2d.BrushBorder, 1.0f);
+
+            // Zoom Percent Readout
+            m_btnZoomResetRect = D2D1::RectF(div1X + 1.0f, capY, div1X + 1.0f + zoomTextW, capY + capH);
+            if (m_pressedButtonId == BTN_ZOOM_RESET) {
+                rt->FillRectangle(m_btnZoomResetRect, m_d2d.BrushActive);
+            } else if (m_hoveredButtonId == BTN_ZOOM_RESET) {
+                rt->FillRectangle(m_btnZoomResetRect, m_d2d.BrushHover);
+            }
+            WCHAR zoomBuf[16];
+            swprintf_s(zoomBuf, L"%d%%", (int)(m_zoom * 100.0f + 0.5f));
+            IDWriteTextFormat* fontZoom = m_d2d.FontButton ? m_d2d.FontButton : m_d2d.FontCaption;
+            rt->DrawText(zoomBuf, (UINT32)wcslen(zoomBuf), fontZoom, m_btnZoomResetRect, m_d2d.BrushText);
+
+            float div2X = div1X + 1.0f + zoomTextW;
+            rt->DrawLine(D2D1::Point2F(div2X, capY + 4.0f), D2D1::Point2F(div2X, capY + capH - 4.0f), m_d2d.BrushBorder, 1.0f);
+
+            // Zoom In [+]
+            m_btnZoomInRect = D2D1::RectF(div2X + 1.0f, capY, curX + totalCapW, capY + capH);
+            if (m_pressedButtonId == BTN_ZOOM_IN) {
+                rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnZoomInRect, 5.0f, 5.0f), m_d2d.BrushActive);
+            } else if (m_hoveredButtonId == BTN_ZOOM_IN) {
+                rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnZoomInRect, 5.0f, 5.0f), m_d2d.BrushHover);
+            }
+            float plusCx = m_btnZoomInRect.left + zoomBtnW / 2.0f;
+            float plusCy = capY + capH / 2.0f + (m_pressedButtonId == BTN_ZOOM_IN ? 0.5f : 0.0f);
+            m_d2d.DrawIconZoomIn(plusCx, plusCy, 13.0f, m_d2d.BrushText);
+
+            curX += totalCapW;
+            drawDivider(curX + 8.0f);
+            curX += 17.0f;
+
+            // Segment 2: Fit to Window [ <-> ]
+            m_btnZoomFitRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+            DrawIconButton(m_btnZoomFitRect, ICON_ZOOM_FIT, BTN_ZOOM_FIT, true);
             curX += 30.0f;
+
+            if (isFull) {
+                // Segment 3: Rotation [ ↺  ↻ ]
+                drawDivider(curX + 8.0f);
+                curX += 17.0f;
+
+                m_btnRotateLeftRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                DrawIconButton(m_btnRotateLeftRect, ICON_ROTATE_LEFT, BTN_ROTATE_L, true);
+                curX += 32.0f;
+
+                m_btnRotateRightRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                DrawIconButton(m_btnRotateRightRect, ICON_ROTATE_RIGHT, BTN_ROTATE_R, true);
+                curX += 30.0f;
+
+                drawDivider(curX + 8.0f);
+                curX += 17.0f;
+
+                // Segment 4: Actions [ ⯐ ] [ ⓘ ] [ ↗ ] [ ⚙ ] [ ⛶ ]
+                m_btnCropRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                DrawIconButton(m_btnCropRect, ICON_CROP, BTN_CROP, true);
+                curX += 34.0f;
+
+                m_btnInfoRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                DrawIconButton(m_btnInfoRect, ICON_INFO, BTN_INFO, true);
+                curX += 34.0f;
+
+                m_btnOpenWithRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                DrawIconButton(m_btnOpenWithRect, ICON_OPEN_WITH, BTN_OPEN_WITH, true);
+                curX += 34.0f;
+
+                m_btnSettingsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                DrawIconButton(m_btnSettingsRect, ICON_SETTINGS, BTN_SETTINGS, true);
+                curX += 34.0f;
+
+                m_btnToolbarFsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                DrawIconButton(m_btnToolbarFsRect, ICON_FULLSCREEN, BTN_TOOLBAR_FS, true);
+            } else {
+                // Responsive Overflow Button [ ☰ ]
+                drawDivider(curX + 8.0f);
+                curX += 17.0f;
+                m_btnOverflowRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                DrawIconButton(m_btnOverflowRect, ICON_MORE, BTN_OVERFLOW_MENU, true);
+            }
+        } else {
+            // Ultra-compact tier (< 390px down to 300px)
+            float navH = 26.0f;
+            float navY = dockY + (dockH - navH) / 2.0f;
+            float navBtnW = 23.5f;
+            float totalNavW = 48.0f;
+
+            D2D1_RECT_F navRect = D2D1::RectF(curX, navY, curX + totalNavW, navY + navH);
+            D2D1_ROUNDED_RECT navR = D2D1::RoundedRect(navRect, 6.0f, 6.0f);
+            rt->FillRoundedRectangle(navR, m_d2d.BrushCard);
+            rt->DrawRoundedRectangle(navR, m_d2d.BrushBorderSubtle, 1.0f);
+
+            // Prev [◀]
+            m_btnPrevPageRect = D2D1::RectF(curX, navY, curX + navBtnW, navY + navH);
+            if (m_pressedButtonId == BTN_PREV_PAGE) {
+                rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnPrevPageRect, 5.0f, 5.0f), m_d2d.BrushActive);
+            } else if (m_hoveredButtonId == BTN_PREV_PAGE) {
+                rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnPrevPageRect, 5.0f, 5.0f), m_d2d.BrushHover);
+            }
+            float prevCx = m_btnPrevPageRect.left + navBtnW / 2.0f;
+            float prevCy = navY + navH / 2.0f + (m_pressedButtonId == BTN_PREV_PAGE ? 0.5f : 0.0f);
+            m_d2d.DrawIconChevronLeft(prevCx, prevCy, 12.0f, m_d2d.BrushText);
+
+            float divNavX = curX + navBtnW;
+            rt->DrawLine(D2D1::Point2F(divNavX, navY + 4.0f), D2D1::Point2F(divNavX, navY + navH - 4.0f), m_d2d.BrushBorder, 1.0f);
+
+            // Next [▶]
+            m_btnNextPageRect = D2D1::RectF(divNavX + 1.0f, navY, curX + totalNavW, navY + navH);
+            if (m_pressedButtonId == BTN_NEXT_PAGE) {
+                rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnNextPageRect, 5.0f, 5.0f), m_d2d.BrushActive);
+            } else if (m_hoveredButtonId == BTN_NEXT_PAGE) {
+                rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnNextPageRect, 5.0f, 5.0f), m_d2d.BrushHover);
+            }
+            float nextCx = m_btnNextPageRect.left + navBtnW / 2.0f;
+            float nextCy = navY + navH / 2.0f + (m_pressedButtonId == BTN_NEXT_PAGE ? 0.5f : 0.0f);
+            m_d2d.DrawIconChevronRight(nextCx, nextCy, 12.0f, m_d2d.BrushText);
+
+            curX += totalNavW;
+            drawDivider(curX + 5.5f);
+            curX += 12.0f;
+
+            // Compact Zoom Pill [ 54% ]
+            float capH = 26.0f;
+            float capY = dockY + (dockH - capH) / 2.0f;
+            float totalCapW = 46.0f;
+
+            m_btnZoomResetRect = D2D1::RectF(curX, capY, curX + totalCapW, capY + capH);
+            D2D1_ROUNDED_RECT capR = D2D1::RoundedRect(m_btnZoomResetRect, 6.0f, 6.0f);
+            if (m_pressedButtonId == BTN_ZOOM_RESET) {
+                rt->FillRoundedRectangle(capR, m_d2d.BrushActive);
+            } else if (m_hoveredButtonId == BTN_ZOOM_RESET) {
+                rt->FillRoundedRectangle(capR, m_d2d.BrushHover);
+            } else {
+                rt->FillRoundedRectangle(capR, m_d2d.BrushCard);
+            }
+            rt->DrawRoundedRectangle(capR, m_d2d.BrushBorderSubtle, 1.0f);
+
+            WCHAR zoomBuf[16];
+            swprintf_s(zoomBuf, L"%d%%", (int)(m_zoom * 100.0f + 0.5f));
+            IDWriteTextFormat* fontZoom = m_d2d.FontButton ? m_d2d.FontButton : m_d2d.FontCaption;
+            rt->DrawText(zoomBuf, (UINT32)wcslen(zoomBuf), fontZoom, m_btnZoomResetRect, m_d2d.BrushText);
+
+            curX += totalCapW;
+            drawDivider(curX + 5.5f);
+            curX += 12.0f;
+
+            // Fit [ <-> ]
+            m_btnZoomFitRect = D2D1::RectF(curX, btnY, curX + 28.0f, btnY + btnH);
+            DrawIconButton(m_btnZoomFitRect, ICON_ZOOM_FIT, BTN_ZOOM_FIT, true);
+            curX += 28.0f;
+
+            // Overflow [ ☰ ]
+            drawDivider(curX + 5.5f);
+            curX += 12.0f;
+            m_btnOverflowRect = D2D1::RectF(curX, btnY, curX + 28.0f, btnY + btnH);
+            DrawIconButton(m_btnOverflowRect, ICON_MORE, BTN_OVERFLOW_MENU, true);
         }
+    }
+    // =========================================================================
+    // DOCK RENDERING: PDF MODE
+    // =========================================================================
+    else if (m_docType == DocumentType::Pdf) {
+        bool isFull = showPdfNav ? (availW >= 620.0f) : (availW >= 540.0f);
+        bool isCompact = (availW < 420.0f);
 
-        drawDivider(curX + 8.0f);
-        curX += 17.0f;
+        if (showPdfNav) {
+            if (!isCompact) {
+                // Sidebar Toggle
+                m_btnSidebarRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                DrawIconButton(m_btnSidebarRect, ICON_SIDEBAR, BTN_SIDEBAR, true);
+                curX += 30.0f;
 
-        // Search in document
-        m_btnSearchRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-        DrawIconButton(m_btnSearchRect, ICON_SEARCH, BTN_SEARCH, true);
-        curX += 34.0f;
+                drawDivider(curX + 8.0f);
+                curX += 17.0f;
 
-        // Info / Inspector
-        m_btnInfoRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-        DrawIconButton(m_btnInfoRect, ICON_INFO, BTN_INFO, true);
-        curX += 34.0f;
+                // Page Nav Capsule: [ ◀  1 / N  ▶ ] (108px)
+                float navH = 28.0f;
+                float navY = dockY + (dockH - navH) / 2.0f;
+                float navBtnW = 26.0f;
+                float navTextW = 54.0f;
+                float totalNavW = navBtnW + 1.0f + navTextW + 1.0f + navBtnW; // 108px
 
-        // Open With
-        m_btnOpenWithRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-        DrawIconButton(m_btnOpenWithRect, ICON_OPEN_WITH, BTN_OPEN_WITH, true);
-        curX += 34.0f;
+                D2D1_RECT_F navRect = D2D1::RectF(curX, navY, curX + totalNavW, navY + navH);
+                D2D1_ROUNDED_RECT navR = D2D1::RoundedRect(navRect, 6.0f, 6.0f);
+                rt->FillRoundedRectangle(navR, m_d2d.BrushCard);
+                rt->DrawRoundedRectangle(navR, m_d2d.BrushBorderSubtle, 1.0f);
 
-        // Settings
-        m_btnSettingsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-        DrawIconButton(m_btnSettingsRect, ICON_SETTINGS, BTN_SETTINGS, true);
-        curX += 34.0f;
+                // Prev Page [◀]
+                m_btnPrevPageRect = D2D1::RectF(curX, navY, curX + navBtnW, navY + navH);
+                if (m_pressedButtonId == BTN_PREV_PAGE && m_currentPage > 0) {
+                    rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnPrevPageRect, 5.0f, 5.0f), m_d2d.BrushActive);
+                } else if (m_hoveredButtonId == BTN_PREV_PAGE && m_currentPage > 0) {
+                    rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnPrevPageRect, 5.0f, 5.0f), m_d2d.BrushHover);
+                }
+                float prevCx = m_btnPrevPageRect.left + navBtnW / 2.0f;
+                float prevCy = navY + navH / 2.0f + (m_pressedButtonId == BTN_PREV_PAGE ? 0.5f : 0.0f);
+                m_d2d.DrawIconChevronLeft(prevCx, prevCy, 13.0f, (m_currentPage > 0) ? (ID2D1Brush*)m_d2d.BrushText : (ID2D1Brush*)m_d2d.BrushTextMuted);
 
-        // Fullscreen
-        m_btnToolbarFsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-        DrawIconButton(m_btnToolbarFsRect, ICON_FULLSCREEN, BTN_TOOLBAR_FS, true);
+                // Divider 1
+                float div1X = curX + navBtnW;
+                rt->DrawLine(D2D1::Point2F(div1X, navY + 4.0f), D2D1::Point2F(div1X, navY + navH - 4.0f), m_d2d.BrushBorder, 1.0f);
+
+                // Page text readout
+                D2D1_RECT_F pageTextRect = D2D1::RectF(div1X + 1.0f, navY, div1X + 1.0f + navTextW, navY + navH);
+                WCHAR pageBuf[32];
+                swprintf_s(pageBuf, L"%d / %d", m_currentPage + 1, m_totalPages);
+                IDWriteTextFormat* fontNav = m_d2d.FontButton ? m_d2d.FontButton : m_d2d.FontCaption;
+                rt->DrawText(pageBuf, (UINT32)wcslen(pageBuf), fontNav, pageTextRect, m_d2d.BrushText);
+
+                // Divider 2
+                float div2X = div1X + 1.0f + navTextW;
+                rt->DrawLine(D2D1::Point2F(div2X, navY + 4.0f), D2D1::Point2F(div2X, navY + navH - 4.0f), m_d2d.BrushBorder, 1.0f);
+
+                // Next Page [▶]
+                m_btnNextPageRect = D2D1::RectF(div2X + 1.0f, navY, curX + totalNavW, navY + navH);
+                if (m_pressedButtonId == BTN_NEXT_PAGE && m_currentPage + 1 < m_totalPages) {
+                    rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnNextPageRect, 5.0f, 5.0f), m_d2d.BrushActive);
+                } else if (m_hoveredButtonId == BTN_NEXT_PAGE && m_currentPage + 1 < m_totalPages) {
+                    rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnNextPageRect, 5.0f, 5.0f), m_d2d.BrushHover);
+                }
+                float nextCx = m_btnNextPageRect.left + navBtnW / 2.0f;
+                float nextCy = navY + navH / 2.0f + (m_pressedButtonId == BTN_NEXT_PAGE ? 0.5f : 0.0f);
+                m_d2d.DrawIconChevronRight(nextCx, nextCy, 13.0f, (m_currentPage + 1 < m_totalPages) ? (ID2D1Brush*)m_d2d.BrushText : (ID2D1Brush*)m_d2d.BrushTextMuted);
+
+                curX += totalNavW;
+                drawDivider(curX + 8.0f);
+                curX += 17.0f;
+
+                // Inset Zoom Capsule [ - | 100% | + ]
+                float capH = 28.0f;
+                float capY = dockY + (dockH - capH) / 2.0f;
+                float zoomBtnW = 27.0f;
+                float zoomTextW = 50.0f;
+                float totalCapW = zoomBtnW + 1.0f + zoomTextW + 1.0f + zoomBtnW; // 106px
+
+                D2D1_RECT_F capRect = D2D1::RectF(curX, capY, curX + totalCapW, capY + capH);
+                D2D1_ROUNDED_RECT capR = D2D1::RoundedRect(capRect, 6.0f, 6.0f);
+                rt->FillRoundedRectangle(capR, m_d2d.BrushCard);
+                rt->DrawRoundedRectangle(capR, m_d2d.BrushBorderSubtle, 1.0f);
+
+                // Zoom Out [-]
+                m_btnZoomOutRect = D2D1::RectF(curX, capY, curX + zoomBtnW, capY + capH);
+                if (m_pressedButtonId == BTN_ZOOM_OUT) {
+                    rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnZoomOutRect, 5.0f, 5.0f), m_d2d.BrushActive);
+                } else if (m_hoveredButtonId == BTN_ZOOM_OUT) {
+                    rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnZoomOutRect, 5.0f, 5.0f), m_d2d.BrushHover);
+                }
+                float minusCx = m_btnZoomOutRect.left + zoomBtnW / 2.0f;
+                float minusCy = capY + capH / 2.0f + (m_pressedButtonId == BTN_ZOOM_OUT ? 0.5f : 0.0f);
+                m_d2d.DrawIconZoomOut(minusCx, minusCy, 13.0f, m_d2d.BrushText);
+
+                float div1CapX = curX + zoomBtnW;
+                rt->DrawLine(D2D1::Point2F(div1CapX, capY + 4.0f), D2D1::Point2F(div1CapX, capY + capH - 4.0f), m_d2d.BrushBorder, 1.0f);
+
+                // Zoom Readout
+                m_btnZoomResetRect = D2D1::RectF(div1CapX + 1.0f, capY, div1CapX + 1.0f + zoomTextW, capY + capH);
+                if (m_pressedButtonId == BTN_ZOOM_RESET) {
+                    rt->FillRectangle(m_btnZoomResetRect, m_d2d.BrushActive);
+                } else if (m_hoveredButtonId == BTN_ZOOM_RESET) {
+                    rt->FillRectangle(m_btnZoomResetRect, m_d2d.BrushHover);
+                }
+                WCHAR zoomBuf[16];
+                swprintf_s(zoomBuf, L"%d%%", (int)(m_zoom * 100.0f + 0.5f));
+                IDWriteTextFormat* fontZoom = m_d2d.FontButton ? m_d2d.FontButton : m_d2d.FontCaption;
+                rt->DrawText(zoomBuf, (UINT32)wcslen(zoomBuf), fontZoom, m_btnZoomResetRect, m_d2d.BrushText);
+
+                float div2CapX = div1CapX + 1.0f + zoomTextW;
+                rt->DrawLine(D2D1::Point2F(div2CapX, capY + 4.0f), D2D1::Point2F(div2CapX, capY + capH - 4.0f), m_d2d.BrushBorder, 1.0f);
+
+                // Zoom In [+]
+                m_btnZoomInRect = D2D1::RectF(div2CapX + 1.0f, capY, curX + totalCapW, capY + capH);
+                if (m_pressedButtonId == BTN_ZOOM_IN) {
+                    rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnZoomInRect, 5.0f, 5.0f), m_d2d.BrushActive);
+                } else if (m_hoveredButtonId == BTN_ZOOM_IN) {
+                    rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnZoomInRect, 5.0f, 5.0f), m_d2d.BrushHover);
+                }
+                float plusCx = m_btnZoomInRect.left + zoomBtnW / 2.0f;
+                float plusCy = capY + capH / 2.0f + (m_pressedButtonId == BTN_ZOOM_IN ? 0.5f : 0.0f);
+                m_d2d.DrawIconZoomIn(plusCx, plusCy, 13.0f, m_d2d.BrushText);
+
+                curX += totalCapW;
+                drawDivider(curX + 8.0f);
+                curX += 17.0f;
+
+                // Fit to Window
+                m_btnZoomFitRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                DrawIconButton(m_btnZoomFitRect, ICON_ZOOM_FIT, BTN_ZOOM_FIT, true);
+                curX += 30.0f;
+
+                if (isFull) {
+                    // Rotate Left & Right
+                    drawDivider(curX + 8.0f);
+                    curX += 17.0f;
+
+                    m_btnRotateLeftRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                    DrawIconButton(m_btnRotateLeftRect, ICON_ROTATE_LEFT, BTN_ROTATE_L, true);
+                    curX += 32.0f;
+
+                    m_btnRotateRightRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                    DrawIconButton(m_btnRotateRightRect, ICON_ROTATE_RIGHT, BTN_ROTATE_R, true);
+                    curX += 30.0f;
+
+                    drawDivider(curX + 8.0f);
+                    curX += 17.0f;
+
+                    // Search, Info, Open With, Settings, Fullscreen
+                    m_btnSearchRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                    DrawIconButton(m_btnSearchRect, ICON_SEARCH, BTN_SEARCH, true);
+                    curX += 34.0f;
+
+                    m_btnInfoRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                    DrawIconButton(m_btnInfoRect, ICON_INFO, BTN_INFO, true);
+                    curX += 34.0f;
+
+                    m_btnOpenWithRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                    DrawIconButton(m_btnOpenWithRect, ICON_OPEN_WITH, BTN_OPEN_WITH, true);
+                    curX += 34.0f;
+
+                    m_btnSettingsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                    DrawIconButton(m_btnSettingsRect, ICON_SETTINGS, BTN_SETTINGS, true);
+                    curX += 34.0f;
+
+                    m_btnToolbarFsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                    DrawIconButton(m_btnToolbarFsRect, ICON_FULLSCREEN, BTN_TOOLBAR_FS, true);
+                } else {
+                    // Overflow Button [ ☰ ]
+                    drawDivider(curX + 8.0f);
+                    curX += 17.0f;
+                    m_btnOverflowRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                    DrawIconButton(m_btnOverflowRect, ICON_MORE, BTN_OVERFLOW_MENU, true);
+                }
+            } else {
+                // Ultra-compact tier (< 420px): Sidebar moved to overflow menu!
+                float navH = 26.0f;
+                float navY = dockY + (dockH - navH) / 2.0f;
+                float navBtnW = 23.0f;
+                float navTextW = 48.0f;
+                float totalNavW = 96.0f;
+
+                D2D1_RECT_F navRect = D2D1::RectF(curX, navY, curX + totalNavW, navY + navH);
+                D2D1_ROUNDED_RECT navR = D2D1::RoundedRect(navRect, 6.0f, 6.0f);
+                rt->FillRoundedRectangle(navR, m_d2d.BrushCard);
+                rt->DrawRoundedRectangle(navR, m_d2d.BrushBorderSubtle, 1.0f);
+
+                // Prev Page [◀]
+                m_btnPrevPageRect = D2D1::RectF(curX, navY, curX + navBtnW, navY + navH);
+                if (m_pressedButtonId == BTN_PREV_PAGE && m_currentPage > 0) {
+                    rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnPrevPageRect, 5.0f, 5.0f), m_d2d.BrushActive);
+                } else if (m_hoveredButtonId == BTN_PREV_PAGE && m_currentPage > 0) {
+                    rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnPrevPageRect, 5.0f, 5.0f), m_d2d.BrushHover);
+                }
+                float prevCx = m_btnPrevPageRect.left + navBtnW / 2.0f;
+                float prevCy = navY + navH / 2.0f + (m_pressedButtonId == BTN_PREV_PAGE ? 0.5f : 0.0f);
+                m_d2d.DrawIconChevronLeft(prevCx, prevCy, 12.0f, (m_currentPage > 0) ? (ID2D1Brush*)m_d2d.BrushText : (ID2D1Brush*)m_d2d.BrushTextMuted);
+
+                float div1X = curX + navBtnW;
+                rt->DrawLine(D2D1::Point2F(div1X, navY + 4.0f), D2D1::Point2F(div1X, navY + navH - 4.0f), m_d2d.BrushBorder, 1.0f);
+
+                // Page text readout
+                D2D1_RECT_F pageTextRect = D2D1::RectF(div1X + 1.0f, navY, div1X + 1.0f + navTextW, navY + navH);
+                WCHAR pageBuf[32];
+                swprintf_s(pageBuf, L"%d/%d", m_currentPage + 1, m_totalPages);
+                IDWriteTextFormat* fontNav = m_d2d.FontButton ? m_d2d.FontButton : m_d2d.FontCaption;
+                rt->DrawText(pageBuf, (UINT32)wcslen(pageBuf), fontNav, pageTextRect, m_d2d.BrushText);
+
+                float div2X = div1X + 1.0f + navTextW;
+                rt->DrawLine(D2D1::Point2F(div2X, navY + 4.0f), D2D1::Point2F(div2X, navY + navH - 4.0f), m_d2d.BrushBorder, 1.0f);
+
+                // Next Page [▶]
+                m_btnNextPageRect = D2D1::RectF(div2X + 1.0f, navY, curX + totalNavW, navY + navH);
+                if (m_pressedButtonId == BTN_NEXT_PAGE && m_currentPage + 1 < m_totalPages) {
+                    rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnNextPageRect, 5.0f, 5.0f), m_d2d.BrushActive);
+                } else if (m_hoveredButtonId == BTN_NEXT_PAGE && m_currentPage + 1 < m_totalPages) {
+                    rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnNextPageRect, 5.0f, 5.0f), m_d2d.BrushHover);
+                }
+                float nextCx = m_btnNextPageRect.left + navBtnW / 2.0f;
+                float nextCy = navY + navH / 2.0f + (m_pressedButtonId == BTN_NEXT_PAGE ? 0.5f : 0.0f);
+                m_d2d.DrawIconChevronRight(nextCx, nextCy, 12.0f, (m_currentPage + 1 < m_totalPages) ? (ID2D1Brush*)m_d2d.BrushText : (ID2D1Brush*)m_d2d.BrushTextMuted);
+
+                curX += totalNavW;
+                drawDivider(curX + 5.5f);
+                curX += 12.0f;
+
+                // Compact Zoom Pill [ 100% ]
+                float capH = 26.0f;
+                float capY = dockY + (dockH - capH) / 2.0f;
+                float totalCapW = 46.0f;
+
+                m_btnZoomResetRect = D2D1::RectF(curX, capY, curX + totalCapW, capY + capH);
+                D2D1_ROUNDED_RECT capR = D2D1::RoundedRect(m_btnZoomResetRect, 6.0f, 6.0f);
+                if (m_pressedButtonId == BTN_ZOOM_RESET) {
+                    rt->FillRoundedRectangle(capR, m_d2d.BrushActive);
+                } else if (m_hoveredButtonId == BTN_ZOOM_RESET) {
+                    rt->FillRoundedRectangle(capR, m_d2d.BrushHover);
+                } else {
+                    rt->FillRoundedRectangle(capR, m_d2d.BrushCard);
+                }
+                rt->DrawRoundedRectangle(capR, m_d2d.BrushBorderSubtle, 1.0f);
+
+                WCHAR zoomBuf[16];
+                swprintf_s(zoomBuf, L"%d%%", (int)(m_zoom * 100.0f + 0.5f));
+                IDWriteTextFormat* fontZoom = m_d2d.FontButton ? m_d2d.FontButton : m_d2d.FontCaption;
+                rt->DrawText(zoomBuf, (UINT32)wcslen(zoomBuf), fontZoom, m_btnZoomResetRect, m_d2d.BrushText);
+
+                curX += totalCapW;
+                drawDivider(curX + 5.5f);
+                curX += 12.0f;
+
+                // Fit [ <-> ]
+                m_btnZoomFitRect = D2D1::RectF(curX, btnY, curX + 28.0f, btnY + btnH);
+                DrawIconButton(m_btnZoomFitRect, ICON_ZOOM_FIT, BTN_ZOOM_FIT, true);
+                curX += 28.0f;
+
+                // Overflow [ ☰ ]
+                drawDivider(curX + 5.5f);
+                curX += 12.0f;
+                m_btnOverflowRect = D2D1::RectF(curX, btnY, curX + 28.0f, btnY + btnH);
+                DrawIconButton(m_btnOverflowRect, ICON_MORE, BTN_OVERFLOW_MENU, true);
+            }
+        } else {
+            // Single-page PDF
+            if (!isCompact) {
+                float navH = 28.0f;
+                float navY = dockY + (dockH - navH) / 2.0f;
+                float navBtnW = 27.0f;
+                float totalNavW = navBtnW + 1.0f + navBtnW; // 55px
+
+                D2D1_RECT_F navRect = D2D1::RectF(curX, navY, curX + totalNavW, navY + navH);
+                D2D1_ROUNDED_RECT navR = D2D1::RoundedRect(navRect, 6.0f, 6.0f);
+                rt->FillRoundedRectangle(navR, m_d2d.BrushCard);
+                rt->DrawRoundedRectangle(navR, m_d2d.BrushBorderSubtle, 1.0f);
+
+                m_btnPrevPageRect = D2D1::RectF(curX, navY, curX + navBtnW, navY + navH);
+                if (m_pressedButtonId == BTN_PREV_PAGE) {
+                    rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnPrevPageRect, 5.0f, 5.0f), m_d2d.BrushActive);
+                } else if (m_hoveredButtonId == BTN_PREV_PAGE) {
+                    rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnPrevPageRect, 5.0f, 5.0f), m_d2d.BrushHover);
+                }
+                float prevCx = m_btnPrevPageRect.left + navBtnW / 2.0f;
+                float prevCy = navY + navH / 2.0f + (m_pressedButtonId == BTN_PREV_PAGE ? 0.5f : 0.0f);
+                m_d2d.DrawIconChevronLeft(prevCx, prevCy, 13.0f, m_d2d.BrushText);
+
+                float divNavX = curX + navBtnW;
+                rt->DrawLine(D2D1::Point2F(divNavX, navY + 4.0f), D2D1::Point2F(divNavX, navY + navH - 4.0f), m_d2d.BrushBorder, 1.0f);
+
+                m_btnNextPageRect = D2D1::RectF(divNavX + 1.0f, navY, curX + totalNavW, navY + navH);
+                if (m_pressedButtonId == BTN_NEXT_PAGE) {
+                    rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnNextPageRect, 5.0f, 5.0f), m_d2d.BrushActive);
+                } else if (m_hoveredButtonId == BTN_NEXT_PAGE) {
+                    rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnNextPageRect, 5.0f, 5.0f), m_d2d.BrushHover);
+                }
+                float nextCx = m_btnNextPageRect.left + navBtnW / 2.0f;
+                float nextCy = navY + navH / 2.0f + (m_pressedButtonId == BTN_NEXT_PAGE ? 0.5f : 0.0f);
+                m_d2d.DrawIconChevronRight(nextCx, nextCy, 13.0f, m_d2d.BrushText);
+
+                curX += totalNavW;
+                drawDivider(curX + 8.0f);
+                curX += 17.0f;
+
+                float capH = 28.0f;
+                float capY = dockY + (dockH - capH) / 2.0f;
+                float zoomBtnW = 27.0f;
+                float zoomTextW = 50.0f;
+                float totalCapW = zoomBtnW + 1.0f + zoomTextW + 1.0f + zoomBtnW;
+
+                D2D1_RECT_F capRect = D2D1::RectF(curX, capY, curX + totalCapW, capY + capH);
+                D2D1_ROUNDED_RECT capR = D2D1::RoundedRect(capRect, 6.0f, 6.0f);
+                rt->FillRoundedRectangle(capR, m_d2d.BrushCard);
+                rt->DrawRoundedRectangle(capR, m_d2d.BrushBorderSubtle, 1.0f);
+
+                m_btnZoomOutRect = D2D1::RectF(curX, capY, curX + zoomBtnW, capY + capH);
+                if (m_pressedButtonId == BTN_ZOOM_OUT) {
+                    rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnZoomOutRect, 5.0f, 5.0f), m_d2d.BrushActive);
+                } else if (m_hoveredButtonId == BTN_ZOOM_OUT) {
+                    rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnZoomOutRect, 5.0f, 5.0f), m_d2d.BrushHover);
+                }
+                float minusCx = m_btnZoomOutRect.left + zoomBtnW / 2.0f;
+                float minusCy = capY + capH / 2.0f + (m_pressedButtonId == BTN_ZOOM_OUT ? 0.5f : 0.0f);
+                m_d2d.DrawIconZoomOut(minusCx, minusCy, 13.0f, m_d2d.BrushText);
+
+                float div1X = curX + zoomBtnW;
+                rt->DrawLine(D2D1::Point2F(div1X, capY + 4.0f), D2D1::Point2F(div1X, capY + capH - 4.0f), m_d2d.BrushBorder, 1.0f);
+
+                m_btnZoomResetRect = D2D1::RectF(div1X + 1.0f, capY, div1X + 1.0f + zoomTextW, capY + capH);
+                if (m_pressedButtonId == BTN_ZOOM_RESET) {
+                    rt->FillRectangle(m_btnZoomResetRect, m_d2d.BrushActive);
+                } else if (m_hoveredButtonId == BTN_ZOOM_RESET) {
+                    rt->FillRectangle(m_btnZoomResetRect, m_d2d.BrushHover);
+                }
+                WCHAR zoomBuf[16];
+                swprintf_s(zoomBuf, L"%d%%", (int)(m_zoom * 100.0f + 0.5f));
+                IDWriteTextFormat* fontZoom = m_d2d.FontButton ? m_d2d.FontButton : m_d2d.FontCaption;
+                rt->DrawText(zoomBuf, (UINT32)wcslen(zoomBuf), fontZoom, m_btnZoomResetRect, m_d2d.BrushText);
+
+                float div2X = div1X + 1.0f + zoomTextW;
+                rt->DrawLine(D2D1::Point2F(div2X, capY + 4.0f), D2D1::Point2F(div2X, capY + capH - 4.0f), m_d2d.BrushBorder, 1.0f);
+
+                m_btnZoomInRect = D2D1::RectF(div2X + 1.0f, capY, curX + totalCapW, capY + capH);
+                if (m_pressedButtonId == BTN_ZOOM_IN) {
+                    rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnZoomInRect, 5.0f, 5.0f), m_d2d.BrushActive);
+                } else if (m_hoveredButtonId == BTN_ZOOM_IN) {
+                    rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnZoomInRect, 5.0f, 5.0f), m_d2d.BrushHover);
+                }
+                float plusCx = m_btnZoomInRect.left + zoomBtnW / 2.0f;
+                float plusCy = capY + capH / 2.0f + (m_pressedButtonId == BTN_ZOOM_IN ? 0.5f : 0.0f);
+                m_d2d.DrawIconZoomIn(plusCx, plusCy, 13.0f, m_d2d.BrushText);
+
+                curX += totalCapW;
+                drawDivider(curX + 8.0f);
+                curX += 17.0f;
+
+                m_btnZoomFitRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                DrawIconButton(m_btnZoomFitRect, ICON_ZOOM_FIT, BTN_ZOOM_FIT, true);
+                curX += 30.0f;
+
+                if (isFull) {
+                    drawDivider(curX + 8.0f);
+                    curX += 17.0f;
+
+                    m_btnRotateLeftRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                    DrawIconButton(m_btnRotateLeftRect, ICON_ROTATE_LEFT, BTN_ROTATE_L, true);
+                    curX += 32.0f;
+
+                    m_btnRotateRightRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                    DrawIconButton(m_btnRotateRightRect, ICON_ROTATE_RIGHT, BTN_ROTATE_R, true);
+                    curX += 30.0f;
+
+                    drawDivider(curX + 8.0f);
+                    curX += 17.0f;
+
+                    m_btnSearchRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                    DrawIconButton(m_btnSearchRect, ICON_SEARCH, BTN_SEARCH, true);
+                    curX += 34.0f;
+
+                    m_btnInfoRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                    DrawIconButton(m_btnInfoRect, ICON_INFO, BTN_INFO, true);
+                    curX += 34.0f;
+
+                    m_btnOpenWithRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                    DrawIconButton(m_btnOpenWithRect, ICON_OPEN_WITH, BTN_OPEN_WITH, true);
+                    curX += 34.0f;
+
+                    m_btnSettingsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                    DrawIconButton(m_btnSettingsRect, ICON_SETTINGS, BTN_SETTINGS, true);
+                    curX += 34.0f;
+
+                    m_btnToolbarFsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                    DrawIconButton(m_btnToolbarFsRect, ICON_FULLSCREEN, BTN_TOOLBAR_FS, true);
+                } else {
+                    drawDivider(curX + 8.0f);
+                    curX += 17.0f;
+                    m_btnOverflowRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                    DrawIconButton(m_btnOverflowRect, ICON_MORE, BTN_OVERFLOW_MENU, true);
+                }
+            } else {
+                // Compact Single-page PDF
+                float navH = 26.0f;
+                float navY = dockY + (dockH - navH) / 2.0f;
+                float navBtnW = 23.5f;
+                float totalNavW = 48.0f;
+
+                D2D1_RECT_F navRect = D2D1::RectF(curX, navY, curX + totalNavW, navY + navH);
+                D2D1_ROUNDED_RECT navR = D2D1::RoundedRect(navRect, 6.0f, 6.0f);
+                rt->FillRoundedRectangle(navR, m_d2d.BrushCard);
+                rt->DrawRoundedRectangle(navR, m_d2d.BrushBorderSubtle, 1.0f);
+
+                m_btnPrevPageRect = D2D1::RectF(curX, navY, curX + navBtnW, navY + navH);
+                if (m_pressedButtonId == BTN_PREV_PAGE) {
+                    rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnPrevPageRect, 5.0f, 5.0f), m_d2d.BrushActive);
+                } else if (m_hoveredButtonId == BTN_PREV_PAGE) {
+                    rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnPrevPageRect, 5.0f, 5.0f), m_d2d.BrushHover);
+                }
+                float prevCx = m_btnPrevPageRect.left + navBtnW / 2.0f;
+                float prevCy = navY + navH / 2.0f + (m_pressedButtonId == BTN_PREV_PAGE ? 0.5f : 0.0f);
+                m_d2d.DrawIconChevronLeft(prevCx, prevCy, 12.0f, m_d2d.BrushText);
+
+                float divNavX = curX + navBtnW;
+                rt->DrawLine(D2D1::Point2F(divNavX, navY + 4.0f), D2D1::Point2F(divNavX, navY + navH - 4.0f), m_d2d.BrushBorder, 1.0f);
+
+                m_btnNextPageRect = D2D1::RectF(divNavX + 1.0f, navY, curX + totalNavW, navY + navH);
+                if (m_pressedButtonId == BTN_NEXT_PAGE) {
+                    rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnNextPageRect, 5.0f, 5.0f), m_d2d.BrushActive);
+                } else if (m_hoveredButtonId == BTN_NEXT_PAGE) {
+                    rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnNextPageRect, 5.0f, 5.0f), m_d2d.BrushHover);
+                }
+                float nextCx = m_btnNextPageRect.left + navBtnW / 2.0f;
+                float nextCy = navY + navH / 2.0f + (m_pressedButtonId == BTN_NEXT_PAGE ? 0.5f : 0.0f);
+                m_d2d.DrawIconChevronRight(nextCx, nextCy, 12.0f, m_d2d.BrushText);
+
+                curX += totalNavW;
+                drawDivider(curX + 5.5f);
+                curX += 12.0f;
+
+                float capH = 26.0f;
+                float capY = dockY + (dockH - capH) / 2.0f;
+                float totalCapW = 46.0f;
+
+                m_btnZoomResetRect = D2D1::RectF(curX, capY, curX + totalCapW, capY + capH);
+                D2D1_ROUNDED_RECT capR = D2D1::RoundedRect(m_btnZoomResetRect, 6.0f, 6.0f);
+                if (m_pressedButtonId == BTN_ZOOM_RESET) {
+                    rt->FillRoundedRectangle(capR, m_d2d.BrushActive);
+                } else if (m_hoveredButtonId == BTN_ZOOM_RESET) {
+                    rt->FillRoundedRectangle(capR, m_d2d.BrushHover);
+                } else {
+                    rt->FillRoundedRectangle(capR, m_d2d.BrushCard);
+                }
+                rt->DrawRoundedRectangle(capR, m_d2d.BrushBorderSubtle, 1.0f);
+
+                WCHAR zoomBuf[16];
+                swprintf_s(zoomBuf, L"%d%%", (int)(m_zoom * 100.0f + 0.5f));
+                IDWriteTextFormat* fontZoom = m_d2d.FontButton ? m_d2d.FontButton : m_d2d.FontCaption;
+                rt->DrawText(zoomBuf, (UINT32)wcslen(zoomBuf), fontZoom, m_btnZoomResetRect, m_d2d.BrushText);
+
+                curX += totalCapW;
+                drawDivider(curX + 5.5f);
+                curX += 12.0f;
+
+                m_btnZoomFitRect = D2D1::RectF(curX, btnY, curX + 28.0f, btnY + btnH);
+                DrawIconButton(m_btnZoomFitRect, ICON_ZOOM_FIT, BTN_ZOOM_FIT, true);
+                curX += 28.0f;
+
+                drawDivider(curX + 5.5f);
+                curX += 12.0f;
+                m_btnOverflowRect = D2D1::RectF(curX, btnY, curX + 28.0f, btnY + btnH);
+                DrawIconButton(m_btnOverflowRect, ICON_MORE, BTN_OVERFLOW_MENU, true);
+            }
+        }
     }
     // =========================================================================
     // DOCK RENDERING: TEXT & CODE MODE
     // =========================================================================
     else if (m_docType == DocumentType::Text) {
-        bool isCompact = (totalW < 460.0f);
+        bool isFull = (availW >= 560.0f);
+        bool isCompact = (availW < 420.0f);
 
-        // Segment 1: Save & Undo/Redo [ 💾 ] [ ↶ ] [ ↷ ]
-        m_btnSaveTextRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-        DrawIconButton(m_btnSaveTextRect, ICON_SAVE, BTN_SAVE_FILE, true);
-        curX += 30.0f;
-
-        m_btnUndoRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-        DrawIconButton(m_btnUndoRect, ICON_UNDO, BTN_UNDO, m_text.CanUndo());
-        curX += 30.0f;
-
-        m_btnRedoRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-        DrawIconButton(m_btnRedoRect, ICON_REDO, BTN_REDO, m_text.CanRedo());
-        curX += 30.0f;
-
-        drawDivider(curX + 8.0f);
-        curX += 17.0f;
-
-        // Segment 2: Clipboard Actions [ ✂ ] [ 📋 ] [ 📋 ]
         if (!isCompact) {
-            m_btnCutTextRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-            DrawIconButton(m_btnCutTextRect, ICON_CUT, BTN_CUT, true);
+            // Save, Undo, Redo
+            m_btnSaveTextRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+            DrawIconButton(m_btnSaveTextRect, ICON_SAVE, BTN_SAVE_FILE, true);
             curX += 30.0f;
-        }
 
-        m_btnCopyTextRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-        DrawIconButton(m_btnCopyTextRect, ICON_COPY, BTN_COPY_TEXT, true);
-        curX += 30.0f;
-
-        if (!isCompact) {
-            m_btnPasteTextRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-            DrawIconButton(m_btnPasteTextRect, ICON_PASTE, BTN_PASTE, true);
+            m_btnUndoRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+            DrawIconButton(m_btnUndoRect, ICON_UNDO, BTN_UNDO, m_text.CanUndo());
             curX += 30.0f;
+
+            m_btnRedoRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+            DrawIconButton(m_btnRedoRect, ICON_REDO, BTN_REDO, m_text.CanRedo());
+            curX += 30.0f;
+
+            drawDivider(curX + 8.0f);
+            curX += 17.0f;
+
+            if (isFull) {
+                m_btnCutTextRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                DrawIconButton(m_btnCutTextRect, ICON_CUT, BTN_CUT, true);
+                curX += 30.0f;
+
+                m_btnCopyTextRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                DrawIconButton(m_btnCopyTextRect, ICON_COPY, BTN_COPY_TEXT, true);
+                curX += 30.0f;
+
+                m_btnPasteTextRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                DrawIconButton(m_btnPasteTextRect, ICON_PASTE, BTN_PASTE, true);
+                curX += 30.0f;
+            } else {
+                m_btnCopyTextRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                DrawIconButton(m_btnCopyTextRect, ICON_COPY, BTN_COPY_TEXT, true);
+                curX += 30.0f;
+            }
+
+            drawDivider(curX + 8.0f);
+            curX += 17.0f;
+
+            // Inset Font Zoom Capsule [ - | 100% | + ]
+            float capH = 28.0f;
+            float capY = dockY + (dockH - capH) / 2.0f;
+            float zoomBtnW = 27.0f;
+            float zoomTextW = 50.0f;
+            float totalCapW = zoomBtnW + 1.0f + zoomTextW + 1.0f + zoomBtnW; // 106px
+
+            D2D1_RECT_F capRect = D2D1::RectF(curX, capY, curX + totalCapW, capY + capH);
+            D2D1_ROUNDED_RECT capR = D2D1::RoundedRect(capRect, 6.0f, 6.0f);
+            rt->FillRoundedRectangle(capR, m_d2d.BrushCard);
+            rt->DrawRoundedRectangle(capR, m_d2d.BrushBorderSubtle, 1.0f);
+
+            m_btnZoomOutRect = D2D1::RectF(curX, capY, curX + zoomBtnW, capY + capH);
+            if (m_pressedButtonId == BTN_ZOOM_OUT) {
+                rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnZoomOutRect, 5.0f, 5.0f), m_d2d.BrushActive);
+            } else if (m_hoveredButtonId == BTN_ZOOM_OUT) {
+                rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnZoomOutRect, 5.0f, 5.0f), m_d2d.BrushHover);
+            }
+            float minusCx = m_btnZoomOutRect.left + zoomBtnW / 2.0f;
+            float minusCy = capY + capH / 2.0f + (m_pressedButtonId == BTN_ZOOM_OUT ? 0.5f : 0.0f);
+            m_d2d.DrawIconZoomOut(minusCx, minusCy, 13.0f, m_d2d.BrushText);
+
+            float div1X = curX + zoomBtnW;
+            rt->DrawLine(D2D1::Point2F(div1X, capY + 4.0f), D2D1::Point2F(div1X, capY + capH - 4.0f), m_d2d.BrushBorder, 1.0f);
+
+            m_btnZoomResetRect = D2D1::RectF(div1X + 1.0f, capY, div1X + 1.0f + zoomTextW, capY + capH);
+            if (m_pressedButtonId == BTN_ZOOM_RESET) {
+                rt->FillRectangle(m_btnZoomResetRect, m_d2d.BrushActive);
+            } else if (m_hoveredButtonId == BTN_ZOOM_RESET) {
+                rt->FillRectangle(m_btnZoomResetRect, m_d2d.BrushHover);
+            }
+            WCHAR zoomBuf[16];
+            swprintf_s(zoomBuf, L"%d%%", (int)(m_text.GetFontSize() / 13.0f * 100.0f + 0.5f));
+            IDWriteTextFormat* fontZoom = m_d2d.FontButton ? m_d2d.FontButton : m_d2d.FontCaption;
+            rt->DrawText(zoomBuf, (UINT32)wcslen(zoomBuf), fontZoom, m_btnZoomResetRect, m_d2d.BrushText);
+
+            float div2X = div1X + 1.0f + zoomTextW;
+            rt->DrawLine(D2D1::Point2F(div2X, capY + 4.0f), D2D1::Point2F(div2X, capY + capH - 4.0f), m_d2d.BrushBorder, 1.0f);
+
+            m_btnZoomInRect = D2D1::RectF(div2X + 1.0f, capY, curX + totalCapW, capY + capH);
+            if (m_pressedButtonId == BTN_ZOOM_IN) {
+                rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnZoomInRect, 5.0f, 5.0f), m_d2d.BrushActive);
+            } else if (m_hoveredButtonId == BTN_ZOOM_IN) {
+                rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnZoomInRect, 5.0f, 5.0f), m_d2d.BrushHover);
+            }
+            float plusCx = m_btnZoomInRect.left + zoomBtnW / 2.0f;
+            float plusCy = capY + capH / 2.0f + (m_pressedButtonId == BTN_ZOOM_IN ? 0.5f : 0.0f);
+            m_d2d.DrawIconZoomIn(plusCx, plusCy, 13.0f, m_d2d.BrushText);
+
+            curX += totalCapW;
+
+            if (isFull) {
+                drawDivider(curX + 8.0f);
+                curX += 17.0f;
+
+                m_btnWrapTextRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                DrawIconButton(m_btnWrapTextRect, ICON_WRAP, BTN_WRAP_TEXT, true);
+                curX += 34.0f;
+
+                m_btnInfoRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                DrawIconButton(m_btnInfoRect, ICON_INFO, BTN_INFO, true);
+                curX += 34.0f;
+
+                m_btnOpenWithRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                DrawIconButton(m_btnOpenWithRect, ICON_OPEN_WITH, BTN_OPEN_WITH, true);
+                curX += 34.0f;
+
+                m_btnSettingsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                DrawIconButton(m_btnSettingsRect, ICON_SETTINGS, BTN_SETTINGS, true);
+                curX += 34.0f;
+
+                m_btnToolbarFsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                DrawIconButton(m_btnToolbarFsRect, ICON_FULLSCREEN, BTN_TOOLBAR_FS, true);
+            } else {
+                drawDivider(curX + 8.0f);
+                curX += 17.0f;
+
+                m_btnWrapTextRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                DrawIconButton(m_btnWrapTextRect, ICON_WRAP, BTN_WRAP_TEXT, true);
+                curX += 30.0f;
+
+                drawDivider(curX + 8.0f);
+                curX += 17.0f;
+
+                m_btnOverflowRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                DrawIconButton(m_btnOverflowRect, ICON_MORE, BTN_OVERFLOW_MENU, true);
+            }
+        } else {
+            // Compact tier (< 420px)
+            m_btnSaveTextRect = D2D1::RectF(curX, btnY, curX + 28.0f, btnY + btnH);
+            DrawIconButton(m_btnSaveTextRect, ICON_SAVE, BTN_SAVE_FILE, true);
+            curX += 28.0f;
+
+            m_btnUndoRect = D2D1::RectF(curX, btnY, curX + 28.0f, btnY + btnH);
+            DrawIconButton(m_btnUndoRect, ICON_UNDO, BTN_UNDO, m_text.CanUndo());
+            curX += 28.0f;
+
+            m_btnRedoRect = D2D1::RectF(curX, btnY, curX + 28.0f, btnY + btnH);
+            DrawIconButton(m_btnRedoRect, ICON_REDO, BTN_REDO, m_text.CanRedo());
+            curX += 28.0f;
+
+            drawDivider(curX + 5.5f);
+            curX += 12.0f;
+
+            m_btnCopyTextRect = D2D1::RectF(curX, btnY, curX + 28.0f, btnY + btnH);
+            DrawIconButton(m_btnCopyTextRect, ICON_COPY, BTN_COPY_TEXT, true);
+            curX += 28.0f;
+
+            drawDivider(curX + 5.5f);
+            curX += 12.0f;
+
+            // Compact Font Zoom Readout [ 100% ]
+            float capH = 26.0f;
+            float capY = dockY + (dockH - capH) / 2.0f;
+            float totalCapW = 46.0f;
+
+            m_btnZoomResetRect = D2D1::RectF(curX, capY, curX + totalCapW, capY + capH);
+            D2D1_ROUNDED_RECT capR = D2D1::RoundedRect(m_btnZoomResetRect, 6.0f, 6.0f);
+            if (m_pressedButtonId == BTN_ZOOM_RESET) {
+                rt->FillRoundedRectangle(capR, m_d2d.BrushActive);
+            } else if (m_hoveredButtonId == BTN_ZOOM_RESET) {
+                rt->FillRoundedRectangle(capR, m_d2d.BrushHover);
+            } else {
+                rt->FillRoundedRectangle(capR, m_d2d.BrushCard);
+            }
+            rt->DrawRoundedRectangle(capR, m_d2d.BrushBorderSubtle, 1.0f);
+
+            WCHAR zoomBuf[16];
+            swprintf_s(zoomBuf, L"%d%%", (int)(m_text.GetFontSize() / 13.0f * 100.0f + 0.5f));
+            IDWriteTextFormat* fontZoom = m_d2d.FontButton ? m_d2d.FontButton : m_d2d.FontCaption;
+            rt->DrawText(zoomBuf, (UINT32)wcslen(zoomBuf), fontZoom, m_btnZoomResetRect, m_d2d.BrushText);
+
+            curX += totalCapW;
+            drawDivider(curX + 5.5f);
+            curX += 12.0f;
+
+            m_btnOverflowRect = D2D1::RectF(curX, btnY, curX + 28.0f, btnY + btnH);
+            DrawIconButton(m_btnOverflowRect, ICON_MORE, BTN_OVERFLOW_MENU, true);
         }
-
-        drawDivider(curX + 8.0f);
-        curX += 17.0f;
-
-        // Segment 3: Inset Font Zoom Capsule [ - | 100% | + ]
-        float capH = 28.0f;
-        float capY = dockY + (dockH - capH) / 2.0f;
-        float zoomBtnW = 27.0f;
-        float zoomTextW = 50.0f;
-        float totalCapW = zoomBtnW + 1.0f + zoomTextW + 1.0f + zoomBtnW; // 106px
-
-        D2D1_RECT_F capRect = D2D1::RectF(curX, capY, curX + totalCapW, capY + capH);
-        D2D1_ROUNDED_RECT capR = D2D1::RoundedRect(capRect, 6.0f, 6.0f);
-        rt->FillRoundedRectangle(capR, m_d2d.BrushCard);
-        rt->DrawRoundedRectangle(capR, m_d2d.BrushBorderSubtle, 1.0f);
-
-        // Zoom Out [-]
-        m_btnZoomOutRect = D2D1::RectF(curX, capY, curX + zoomBtnW, capY + capH);
-        if (m_pressedButtonId == BTN_ZOOM_OUT) {
-            rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnZoomOutRect, 5.0f, 5.0f), m_d2d.BrushActive);
-        } else if (m_hoveredButtonId == BTN_ZOOM_OUT) {
-            rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnZoomOutRect, 5.0f, 5.0f), m_d2d.BrushHover);
-        }
-        float minusCx = m_btnZoomOutRect.left + zoomBtnW / 2.0f;
-        float minusCy = capY + capH / 2.0f + (m_pressedButtonId == BTN_ZOOM_OUT ? 0.5f : 0.0f);
-        m_d2d.DrawIconZoomOut(minusCx, minusCy, 13.0f, m_d2d.BrushText);
-
-        float div1X = curX + zoomBtnW;
-        rt->DrawLine(D2D1::Point2F(div1X, capY + 4.0f), D2D1::Point2F(div1X, capY + capH - 4.0f), m_d2d.BrushBorder, 1.0f);
-
-        // Font Percent Readout [100%]
-        m_btnZoomResetRect = D2D1::RectF(div1X + 1.0f, capY, div1X + 1.0f + zoomTextW, capY + capH);
-        if (m_pressedButtonId == BTN_ZOOM_RESET) {
-            rt->FillRectangle(m_btnZoomResetRect, m_d2d.BrushActive);
-        } else if (m_hoveredButtonId == BTN_ZOOM_RESET) {
-            rt->FillRectangle(m_btnZoomResetRect, m_d2d.BrushHover);
-        }
-        WCHAR zoomBuf[16];
-        swprintf_s(zoomBuf, L"%d%%", (int)(m_text.GetFontSize() / 13.0f * 100.0f + 0.5f));
-        IDWriteTextFormat* fontZoom = m_d2d.FontButton ? m_d2d.FontButton : m_d2d.FontCaption;
-        rt->DrawText(zoomBuf, (UINT32)wcslen(zoomBuf), fontZoom, m_btnZoomResetRect, m_d2d.BrushText);
-
-        float div2X = div1X + 1.0f + zoomTextW;
-        rt->DrawLine(D2D1::Point2F(div2X, capY + 4.0f), D2D1::Point2F(div2X, capY + capH - 4.0f), m_d2d.BrushBorder, 1.0f);
-
-        // Zoom In [+]
-        m_btnZoomInRect = D2D1::RectF(div2X + 1.0f, capY, curX + totalCapW, capY + capH);
-        if (m_pressedButtonId == BTN_ZOOM_IN) {
-            rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnZoomInRect, 5.0f, 5.0f), m_d2d.BrushActive);
-        } else if (m_hoveredButtonId == BTN_ZOOM_IN) {
-            rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnZoomInRect, 5.0f, 5.0f), m_d2d.BrushHover);
-        }
-        float plusCx = m_btnZoomInRect.left + zoomBtnW / 2.0f;
-        float plusCy = capY + capH / 2.0f + (m_pressedButtonId == BTN_ZOOM_IN ? 0.5f : 0.0f);
-        m_d2d.DrawIconZoomIn(plusCx, plusCy, 13.0f, m_d2d.BrushText);
-
-        curX += totalCapW;
-
-        drawDivider(curX + 8.0f);
-        curX += 17.0f;
-
-        // Segment 4: Wrap Toggle Button
-        m_btnWrapTextRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-        DrawIconButton(m_btnWrapTextRect, ICON_WRAP, BTN_WRAP_TEXT, true);
-        curX += 34.0f;
-
-        // Info / Inspector
-        if (!isCompact) {
-            m_btnInfoRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-            DrawIconButton(m_btnInfoRect, ICON_INFO, BTN_INFO, true);
-            curX += 34.0f;
-        }
-
-        // Open With
-        m_btnOpenWithRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-        DrawIconButton(m_btnOpenWithRect, ICON_OPEN_WITH, BTN_OPEN_WITH, true);
-        curX += 34.0f;
-
-        // Settings
-        m_btnSettingsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-        DrawIconButton(m_btnSettingsRect, ICON_SETTINGS, BTN_SETTINGS, true);
-        curX += 34.0f;
-
-        // Fullscreen
-        m_btnToolbarFsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-        DrawIconButton(m_btnToolbarFsRect, ICON_FULLSCREEN, BTN_TOOLBAR_FS, true);
     }
     // =========================================================================
     // DOCK RENDERING: SPREADSHEET MODE
     // =========================================================================
     else if (m_docType == DocumentType::Spreadsheet) {
-        bool isCompact = (totalW < 460.0f);
-
-        // Segment 1: Save & Undo/Redo [ 💾 ] [ ↶ ] [ ↷ ]
-        m_btnSaveTextRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-        DrawIconButton(m_btnSaveTextRect, ICON_SAVE, BTN_SAVE_FILE, true);
-        curX += 30.0f;
-
-        m_btnUndoRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-        DrawIconButton(m_btnUndoRect, ICON_UNDO, BTN_UNDO, m_text.CanUndo());
-        curX += 30.0f;
-
-        m_btnRedoRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-        DrawIconButton(m_btnRedoRect, ICON_REDO, BTN_REDO, m_text.CanRedo());
-        curX += 30.0f;
-
-        drawDivider(curX + 8.0f);
-        curX += 17.0f;
-
-        // Segment 2: Copy & Paste
-        m_btnCopyTextRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-        DrawIconButton(m_btnCopyTextRect, ICON_COPY, BTN_COPY_TEXT, true);
-        curX += 30.0f;
+        bool isFull = (availW >= 560.0f);
+        bool isCompact = (availW < 420.0f);
 
         if (!isCompact) {
-            m_btnPasteTextRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-            DrawIconButton(m_btnPasteTextRect, ICON_PASTE, BTN_PASTE, true);
+            // Save, Undo, Redo
+            m_btnSaveTextRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+            DrawIconButton(m_btnSaveTextRect, ICON_SAVE, BTN_SAVE_FILE, true);
             curX += 30.0f;
+
+            m_btnUndoRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+            DrawIconButton(m_btnUndoRect, ICON_UNDO, BTN_UNDO, m_text.CanUndo());
+            curX += 30.0f;
+
+            m_btnRedoRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+            DrawIconButton(m_btnRedoRect, ICON_REDO, BTN_REDO, m_text.CanRedo());
+            curX += 30.0f;
+
+            drawDivider(curX + 8.0f);
+            curX += 17.0f;
+
+            m_btnCopyTextRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+            DrawIconButton(m_btnCopyTextRect, ICON_COPY, BTN_COPY_TEXT, true);
+            curX += 30.0f;
+
+            if (isFull) {
+                m_btnPasteTextRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                DrawIconButton(m_btnPasteTextRect, ICON_PASTE, BTN_PASTE, true);
+                curX += 30.0f;
+            }
+
+            drawDivider(curX + 8.0f);
+            curX += 17.0f;
+
+            // Inset Font Zoom Capsule
+            float capH = 28.0f;
+            float capY = dockY + (dockH - capH) / 2.0f;
+            float zoomBtnW = 27.0f;
+            float zoomTextW = 50.0f;
+            float totalCapW = zoomBtnW + 1.0f + zoomTextW + 1.0f + zoomBtnW;
+
+            D2D1_RECT_F capRect = D2D1::RectF(curX, capY, curX + totalCapW, capY + capH);
+            D2D1_ROUNDED_RECT capR = D2D1::RoundedRect(capRect, 6.0f, 6.0f);
+            rt->FillRoundedRectangle(capR, m_d2d.BrushCard);
+            rt->DrawRoundedRectangle(capR, m_d2d.BrushBorderSubtle, 1.0f);
+
+            m_btnZoomOutRect = D2D1::RectF(curX, capY, curX + zoomBtnW, capY + capH);
+            if (m_pressedButtonId == BTN_ZOOM_OUT) {
+                rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnZoomOutRect, 5.0f, 5.0f), m_d2d.BrushActive);
+            } else if (m_hoveredButtonId == BTN_ZOOM_OUT) {
+                rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnZoomOutRect, 5.0f, 5.0f), m_d2d.BrushHover);
+            }
+            float minusCx = m_btnZoomOutRect.left + zoomBtnW / 2.0f;
+            float minusCy = capY + capH / 2.0f + (m_pressedButtonId == BTN_ZOOM_OUT ? 0.5f : 0.0f);
+            m_d2d.DrawIconZoomOut(minusCx, minusCy, 13.0f, m_d2d.BrushText);
+
+            float div1X = curX + zoomBtnW;
+            rt->DrawLine(D2D1::Point2F(div1X, capY + 4.0f), D2D1::Point2F(div1X, capY + capH - 4.0f), m_d2d.BrushBorder, 1.0f);
+
+            m_btnZoomResetRect = D2D1::RectF(div1X + 1.0f, capY, div1X + 1.0f + zoomTextW, capY + capH);
+            if (m_pressedButtonId == BTN_ZOOM_RESET) {
+                rt->FillRectangle(m_btnZoomResetRect, m_d2d.BrushActive);
+            } else if (m_hoveredButtonId == BTN_ZOOM_RESET) {
+                rt->FillRectangle(m_btnZoomResetRect, m_d2d.BrushHover);
+            }
+            WCHAR zoomBuf[16];
+            swprintf_s(zoomBuf, L"%d%%", (int)(m_text.GetFontSize() / 13.0f * 100.0f + 0.5f));
+            IDWriteTextFormat* fontZoom = m_d2d.FontButton ? m_d2d.FontButton : m_d2d.FontCaption;
+            rt->DrawText(zoomBuf, (UINT32)wcslen(zoomBuf), fontZoom, m_btnZoomResetRect, m_d2d.BrushText);
+
+            float div2X = div1X + 1.0f + zoomTextW;
+            rt->DrawLine(D2D1::Point2F(div2X, capY + 4.0f), D2D1::Point2F(div2X, capY + capH - 4.0f), m_d2d.BrushBorder, 1.0f);
+
+            m_btnZoomInRect = D2D1::RectF(div2X + 1.0f, capY, curX + totalCapW, capY + capH);
+            if (m_pressedButtonId == BTN_ZOOM_IN) {
+                rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnZoomInRect, 5.0f, 5.0f), m_d2d.BrushActive);
+            } else if (m_hoveredButtonId == BTN_ZOOM_IN) {
+                rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnZoomInRect, 5.0f, 5.0f), m_d2d.BrushHover);
+            }
+            float plusCx = m_btnZoomInRect.left + zoomBtnW / 2.0f;
+            float plusCy = capY + capH / 2.0f + (m_pressedButtonId == BTN_ZOOM_IN ? 0.5f : 0.0f);
+            m_d2d.DrawIconZoomIn(plusCx, plusCy, 13.0f, m_d2d.BrushText);
+
+            curX += totalCapW;
+
+            if (isFull) {
+                drawDivider(curX + 8.0f);
+                curX += 17.0f;
+
+                m_btnTableViewRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                DrawIconButton(m_btnTableViewRect, ICON_TABLE, BTN_TABLE_VIEW, true);
+                curX += 34.0f;
+
+                m_btnInfoRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                DrawIconButton(m_btnInfoRect, ICON_INFO, BTN_INFO, true);
+                curX += 34.0f;
+
+                m_btnOpenWithRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                DrawIconButton(m_btnOpenWithRect, ICON_OPEN_WITH, BTN_OPEN_WITH, true);
+                curX += 34.0f;
+
+                m_btnSettingsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                DrawIconButton(m_btnSettingsRect, ICON_SETTINGS, BTN_SETTINGS, true);
+                curX += 34.0f;
+
+                m_btnToolbarFsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                DrawIconButton(m_btnToolbarFsRect, ICON_FULLSCREEN, BTN_TOOLBAR_FS, true);
+            } else {
+                drawDivider(curX + 8.0f);
+                curX += 17.0f;
+
+                m_btnTableViewRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                DrawIconButton(m_btnTableViewRect, ICON_TABLE, BTN_TABLE_VIEW, true);
+                curX += 30.0f;
+
+                drawDivider(curX + 8.0f);
+                curX += 17.0f;
+
+                m_btnOverflowRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                DrawIconButton(m_btnOverflowRect, ICON_MORE, BTN_OVERFLOW_MENU, true);
+            }
+        } else {
+            // Compact tier
+            m_btnSaveTextRect = D2D1::RectF(curX, btnY, curX + 28.0f, btnY + btnH);
+            DrawIconButton(m_btnSaveTextRect, ICON_SAVE, BTN_SAVE_FILE, true);
+            curX += 28.0f;
+
+            m_btnUndoRect = D2D1::RectF(curX, btnY, curX + 28.0f, btnY + btnH);
+            DrawIconButton(m_btnUndoRect, ICON_UNDO, BTN_UNDO, m_text.CanUndo());
+            curX += 28.0f;
+
+            m_btnRedoRect = D2D1::RectF(curX, btnY, curX + 28.0f, btnY + btnH);
+            DrawIconButton(m_btnRedoRect, ICON_REDO, BTN_REDO, m_text.CanRedo());
+            curX += 28.0f;
+
+            drawDivider(curX + 5.5f);
+            curX += 12.0f;
+
+            m_btnCopyTextRect = D2D1::RectF(curX, btnY, curX + 28.0f, btnY + btnH);
+            DrawIconButton(m_btnCopyTextRect, ICON_COPY, BTN_COPY_TEXT, true);
+            curX += 28.0f;
+
+            drawDivider(curX + 5.5f);
+            curX += 12.0f;
+
+            // Compact Font Zoom Readout
+            float capH = 26.0f;
+            float capY = dockY + (dockH - capH) / 2.0f;
+            float totalCapW = 46.0f;
+
+            m_btnZoomResetRect = D2D1::RectF(curX, capY, curX + totalCapW, capY + capH);
+            D2D1_ROUNDED_RECT capR = D2D1::RoundedRect(m_btnZoomResetRect, 6.0f, 6.0f);
+            if (m_pressedButtonId == BTN_ZOOM_RESET) {
+                rt->FillRoundedRectangle(capR, m_d2d.BrushActive);
+            } else if (m_hoveredButtonId == BTN_ZOOM_RESET) {
+                rt->FillRoundedRectangle(capR, m_d2d.BrushHover);
+            } else {
+                rt->FillRoundedRectangle(capR, m_d2d.BrushCard);
+            }
+            rt->DrawRoundedRectangle(capR, m_d2d.BrushBorderSubtle, 1.0f);
+
+            WCHAR zoomBuf[16];
+            swprintf_s(zoomBuf, L"%d%%", (int)(m_text.GetFontSize() / 13.0f * 100.0f + 0.5f));
+            IDWriteTextFormat* fontZoom = m_d2d.FontButton ? m_d2d.FontButton : m_d2d.FontCaption;
+            rt->DrawText(zoomBuf, (UINT32)wcslen(zoomBuf), fontZoom, m_btnZoomResetRect, m_d2d.BrushText);
+
+            curX += totalCapW;
+            drawDivider(curX + 5.5f);
+            curX += 12.0f;
+
+            m_btnOverflowRect = D2D1::RectF(curX, btnY, curX + 28.0f, btnY + btnH);
+            DrawIconButton(m_btnOverflowRect, ICON_MORE, BTN_OVERFLOW_MENU, true);
         }
-
-        drawDivider(curX + 8.0f);
-        curX += 17.0f;
-
-        // Segment 3: Inset Font Zoom Capsule [ - | 100% | + ]
-        float capH = 28.0f;
-        float capY = dockY + (dockH - capH) / 2.0f;
-        float zoomBtnW = 27.0f;
-        float zoomTextW = 50.0f;
-        float totalCapW = zoomBtnW + 1.0f + zoomTextW + 1.0f + zoomBtnW;
-
-        D2D1_RECT_F capRect = D2D1::RectF(curX, capY, curX + totalCapW, capY + capH);
-        D2D1_ROUNDED_RECT capR = D2D1::RoundedRect(capRect, 6.0f, 6.0f);
-        rt->FillRoundedRectangle(capR, m_d2d.BrushCard);
-        rt->DrawRoundedRectangle(capR, m_d2d.BrushBorderSubtle, 1.0f);
-
-        // Zoom Out [-]
-        m_btnZoomOutRect = D2D1::RectF(curX, capY, curX + zoomBtnW, capY + capH);
-        if (m_pressedButtonId == BTN_ZOOM_OUT) {
-            rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnZoomOutRect, 5.0f, 5.0f), m_d2d.BrushActive);
-        } else if (m_hoveredButtonId == BTN_ZOOM_OUT) {
-            rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnZoomOutRect, 5.0f, 5.0f), m_d2d.BrushHover);
-        }
-        float minusCx = m_btnZoomOutRect.left + zoomBtnW / 2.0f;
-        float minusCy = capY + capH / 2.0f + (m_pressedButtonId == BTN_ZOOM_OUT ? 0.5f : 0.0f);
-        m_d2d.DrawIconZoomOut(minusCx, minusCy, 13.0f, m_d2d.BrushText);
-
-        float div1X = curX + zoomBtnW;
-        rt->DrawLine(D2D1::Point2F(div1X, capY + 4.0f), D2D1::Point2F(div1X, capY + capH - 4.0f), m_d2d.BrushBorder, 1.0f);
-
-        // Font Percent Readout [100%]
-        m_btnZoomResetRect = D2D1::RectF(div1X + 1.0f, capY, div1X + 1.0f + zoomTextW, capY + capH);
-        if (m_pressedButtonId == BTN_ZOOM_RESET) {
-            rt->FillRectangle(m_btnZoomResetRect, m_d2d.BrushActive);
-        } else if (m_hoveredButtonId == BTN_ZOOM_RESET) {
-            rt->FillRectangle(m_btnZoomResetRect, m_d2d.BrushHover);
-        }
-        WCHAR zoomBuf[16];
-        swprintf_s(zoomBuf, L"%d%%", (int)(m_text.GetFontSize() / 13.0f * 100.0f + 0.5f));
-        IDWriteTextFormat* fontZoom = m_d2d.FontButton ? m_d2d.FontButton : m_d2d.FontCaption;
-        rt->DrawText(zoomBuf, (UINT32)wcslen(zoomBuf), fontZoom, m_btnZoomResetRect, m_d2d.BrushText);
-
-        float div2X = div1X + 1.0f + zoomTextW;
-        rt->DrawLine(D2D1::Point2F(div2X, capY + 4.0f), D2D1::Point2F(div2X, capY + capH - 4.0f), m_d2d.BrushBorder, 1.0f);
-
-        // Zoom In [+]
-        m_btnZoomInRect = D2D1::RectF(div2X + 1.0f, capY, curX + totalCapW, capY + capH);
-        if (m_pressedButtonId == BTN_ZOOM_IN) {
-            rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnZoomInRect, 5.0f, 5.0f), m_d2d.BrushActive);
-        } else if (m_hoveredButtonId == BTN_ZOOM_IN) {
-            rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnZoomInRect, 5.0f, 5.0f), m_d2d.BrushHover);
-        }
-        float plusCx = m_btnZoomInRect.left + zoomBtnW / 2.0f;
-        float plusCy = capY + capH / 2.0f + (m_pressedButtonId == BTN_ZOOM_IN ? 0.5f : 0.0f);
-        m_d2d.DrawIconZoomIn(plusCx, plusCy, 13.0f, m_d2d.BrushText);
-
-        curX += totalCapW;
-
-        drawDivider(curX + 8.0f);
-        curX += 17.0f;
-
-        // Segment 3: Table / Raw Grid Toggle Button
-        m_btnTableViewRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-        DrawIconButton(m_btnTableViewRect, ICON_TABLE, BTN_TABLE_VIEW, true);
-        curX += 34.0f;
-
-        // Info / Inspector
-        if (!isCompact) {
-            m_btnInfoRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-            DrawIconButton(m_btnInfoRect, ICON_INFO, BTN_INFO, true);
-            curX += 34.0f;
-        }
-
-        // Open With
-        m_btnOpenWithRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-        DrawIconButton(m_btnOpenWithRect, ICON_OPEN_WITH, BTN_OPEN_WITH, true);
-        curX += 34.0f;
-
-        // Settings
-        m_btnSettingsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-        DrawIconButton(m_btnSettingsRect, ICON_SETTINGS, BTN_SETTINGS, true);
-        curX += 34.0f;
-
-        // Fullscreen
-        m_btnToolbarFsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-        DrawIconButton(m_btnToolbarFsRect, ICON_FULLSCREEN, BTN_TOOLBAR_FS, true);
     }
     // =========================================================================
     // DOCK RENDERING: OFFICE / PRESENTATION SLIDE MODE
     // =========================================================================
-    else if (m_docType == DocumentType::Office) {
-        // Folder Navigation Capsule [ ◀ | ▶ ]
-        float navH = 28.0f;
-        float navY = dockY + (dockH - navH) / 2.0f;
-        float navBtnW = 27.0f;
-        float totalNavW = navBtnW + 1.0f + navBtnW; // 55px
+    else if (m_docType == DocumentType::Office || m_docType == DocumentType::Svg) {
+        bool isFull = (availW >= 500.0f);
+        bool isCompact = (availW < 390.0f);
 
-        D2D1_RECT_F navRect = D2D1::RectF(curX, navY, curX + totalNavW, navY + navH);
-        D2D1_ROUNDED_RECT navR = D2D1::RoundedRect(navRect, 6.0f, 6.0f);
-        rt->FillRoundedRectangle(navR, m_d2d.BrushCard);
-        rt->DrawRoundedRectangle(navR, m_d2d.BrushBorderSubtle, 1.0f);
+        if (!isCompact) {
+            float navH = 28.0f;
+            float navY = dockY + (dockH - navH) / 2.0f;
+            float navBtnW = 27.0f;
+            float totalNavW = navBtnW + 1.0f + navBtnW; // 55px
 
-        // Prev [◀]
-        m_btnPrevPageRect = D2D1::RectF(curX, navY, curX + navBtnW, navY + navH);
-        if (m_pressedButtonId == BTN_PREV_PAGE) {
-            rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnPrevPageRect, 5.0f, 5.0f), m_d2d.BrushActive);
-        } else if (m_hoveredButtonId == BTN_PREV_PAGE) {
-            rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnPrevPageRect, 5.0f, 5.0f), m_d2d.BrushHover);
-        }
-        float prevCx = m_btnPrevPageRect.left + navBtnW / 2.0f;
-        float prevCy = navY + navH / 2.0f + (m_pressedButtonId == BTN_PREV_PAGE ? 0.5f : 0.0f);
-        m_d2d.DrawIconChevronLeft(prevCx, prevCy, 13.0f, m_d2d.BrushText);
+            D2D1_RECT_F navRect = D2D1::RectF(curX, navY, curX + totalNavW, navY + navH);
+            D2D1_ROUNDED_RECT navR = D2D1::RoundedRect(navRect, 6.0f, 6.0f);
+            rt->FillRoundedRectangle(navR, m_d2d.BrushCard);
+            rt->DrawRoundedRectangle(navR, m_d2d.BrushBorderSubtle, 1.0f);
 
-        float divNavX = curX + navBtnW;
-        rt->DrawLine(D2D1::Point2F(divNavX, navY + 4.0f), D2D1::Point2F(divNavX, navY + navH - 4.0f), m_d2d.BrushBorder, 1.0f);
+            m_btnPrevPageRect = D2D1::RectF(curX, navY, curX + navBtnW, navY + navH);
+            if (m_pressedButtonId == BTN_PREV_PAGE) {
+                rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnPrevPageRect, 5.0f, 5.0f), m_d2d.BrushActive);
+            } else if (m_hoveredButtonId == BTN_PREV_PAGE) {
+                rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnPrevPageRect, 5.0f, 5.0f), m_d2d.BrushHover);
+            }
+            float prevCx = m_btnPrevPageRect.left + navBtnW / 2.0f;
+            float prevCy = navY + navH / 2.0f + (m_pressedButtonId == BTN_PREV_PAGE ? 0.5f : 0.0f);
+            m_d2d.DrawIconChevronLeft(prevCx, prevCy, 13.0f, m_d2d.BrushText);
 
-        // Next [▶]
-        m_btnNextPageRect = D2D1::RectF(divNavX + 1.0f, navY, curX + totalNavW, navY + navH);
-        if (m_pressedButtonId == BTN_NEXT_PAGE) {
-            rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnNextPageRect, 5.0f, 5.0f), m_d2d.BrushActive);
-        } else if (m_hoveredButtonId == BTN_NEXT_PAGE) {
-            rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnNextPageRect, 5.0f, 5.0f), m_d2d.BrushHover);
-        }
-        float nextCx = m_btnNextPageRect.left + navBtnW / 2.0f;
-        float nextCy = navY + navH / 2.0f + (m_pressedButtonId == BTN_NEXT_PAGE ? 0.5f : 0.0f);
-        m_d2d.DrawIconChevronRight(nextCx, nextCy, 13.0f, m_d2d.BrushText);
+            float divNavX = curX + navBtnW;
+            rt->DrawLine(D2D1::Point2F(divNavX, navY + 4.0f), D2D1::Point2F(divNavX, navY + navH - 4.0f), m_d2d.BrushBorder, 1.0f);
 
-        curX += totalNavW;
-        drawDivider(curX + 8.0f);
-        curX += 17.0f;
+            m_btnNextPageRect = D2D1::RectF(divNavX + 1.0f, navY, curX + totalNavW, navY + navH);
+            if (m_pressedButtonId == BTN_NEXT_PAGE) {
+                rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnNextPageRect, 5.0f, 5.0f), m_d2d.BrushActive);
+            } else if (m_hoveredButtonId == BTN_NEXT_PAGE) {
+                rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnNextPageRect, 5.0f, 5.0f), m_d2d.BrushHover);
+            }
+            float nextCx = m_btnNextPageRect.left + navBtnW / 2.0f;
+            float nextCy = navY + navH / 2.0f + (m_pressedButtonId == BTN_NEXT_PAGE ? 0.5f : 0.0f);
+            m_d2d.DrawIconChevronRight(nextCx, nextCy, 13.0f, m_d2d.BrushText);
 
-        // Segment 1: Inset Zoom Capsule [ - | 100% | + ]
-        float capH = 28.0f;
-        float capY = dockY + (dockH - capH) / 2.0f;
-        float zoomBtnW = 27.0f;
-        float zoomTextW = 50.0f;
-        float totalCapW = zoomBtnW + 1.0f + zoomTextW + 1.0f + zoomBtnW;
-
-        D2D1_RECT_F capRect = D2D1::RectF(curX, capY, curX + totalCapW, capY + capH);
-        D2D1_ROUNDED_RECT capR = D2D1::RoundedRect(capRect, 6.0f, 6.0f);
-        rt->FillRoundedRectangle(capR, m_d2d.BrushCard);
-        rt->DrawRoundedRectangle(capR, m_d2d.BrushBorderSubtle, 1.0f);
-
-        // Zoom Out [-]
-        m_btnZoomOutRect = D2D1::RectF(curX, capY, curX + zoomBtnW, capY + capH);
-        if (m_pressedButtonId == BTN_ZOOM_OUT) {
-            rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnZoomOutRect, 5.0f, 5.0f), m_d2d.BrushActive);
-        } else if (m_hoveredButtonId == BTN_ZOOM_OUT) {
-            rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnZoomOutRect, 5.0f, 5.0f), m_d2d.BrushHover);
-        }
-        float minusCx = m_btnZoomOutRect.left + zoomBtnW / 2.0f;
-        float minusCy = capY + capH / 2.0f + (m_pressedButtonId == BTN_ZOOM_OUT ? 0.5f : 0.0f);
-        m_d2d.DrawIconZoomOut(minusCx, minusCy, 13.0f, m_d2d.BrushText);
-
-        float div1X = curX + zoomBtnW;
-        rt->DrawLine(D2D1::Point2F(div1X, capY + 4.0f), D2D1::Point2F(div1X, capY + capH - 4.0f), m_d2d.BrushBorder, 1.0f);
-
-        // Zoom Percent Readout [100%]
-        m_btnZoomResetRect = D2D1::RectF(div1X + 1.0f, capY, div1X + 1.0f + zoomTextW, capY + capH);
-        if (m_pressedButtonId == BTN_ZOOM_RESET) {
-            rt->FillRectangle(m_btnZoomResetRect, m_d2d.BrushActive);
-        } else if (m_hoveredButtonId == BTN_ZOOM_RESET) {
-            rt->FillRectangle(m_btnZoomResetRect, m_d2d.BrushHover);
-        }
-        WCHAR zoomBuf[16];
-        swprintf_s(zoomBuf, L"%d%%", (int)(m_zoom * 100.0f + 0.5f));
-        IDWriteTextFormat* fontZoom = m_d2d.FontButton ? m_d2d.FontButton : m_d2d.FontCaption;
-        rt->DrawText(zoomBuf, (UINT32)wcslen(zoomBuf), fontZoom, m_btnZoomResetRect, m_d2d.BrushText);
-
-        float div2X = div1X + 1.0f + zoomTextW;
-        rt->DrawLine(D2D1::Point2F(div2X, capY + 4.0f), D2D1::Point2F(div2X, capY + capH - 4.0f), m_d2d.BrushBorder, 1.0f);
-
-        // Zoom In [+]
-        m_btnZoomInRect = D2D1::RectF(div2X + 1.0f, capY, curX + totalCapW, capY + capH);
-        if (m_pressedButtonId == BTN_ZOOM_IN) {
-            rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnZoomInRect, 5.0f, 5.0f), m_d2d.BrushActive);
-        } else if (m_hoveredButtonId == BTN_ZOOM_IN) {
-            rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnZoomInRect, 5.0f, 5.0f), m_d2d.BrushHover);
-        }
-        float plusCx = m_btnZoomInRect.left + zoomBtnW / 2.0f;
-        float plusCy = capY + capH / 2.0f + (m_pressedButtonId == BTN_ZOOM_IN ? 0.5f : 0.0f);
-        m_d2d.DrawIconZoomIn(plusCx, plusCy, 13.0f, m_d2d.BrushText);
-
-        curX += totalCapW;
-
-        drawDivider(curX + 8.0f);
-        curX += 17.0f;
-
-        // Fit to Window [ <-> ]
-        m_btnZoomFitRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-        DrawIconButton(m_btnZoomFitRect, ICON_ZOOM_FIT, BTN_ZOOM_FIT, true);
-        curX += 30.0f;
-
-        // Rotate Left & Right
-        if (showRotate) {
+            curX += totalNavW;
             drawDivider(curX + 8.0f);
             curX += 17.0f;
 
-            m_btnRotateLeftRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-            DrawIconButton(m_btnRotateLeftRect, ICON_ROTATE_LEFT, BTN_ROTATE_L, true);
-            curX += 32.0f;
+            float capH = 28.0f;
+            float capY = dockY + (dockH - capH) / 2.0f;
+            float zoomBtnW = 27.0f;
+            float zoomTextW = 50.0f;
+            float totalCapW = zoomBtnW + 1.0f + zoomTextW + 1.0f + zoomBtnW;
 
-            m_btnRotateRightRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-            DrawIconButton(m_btnRotateRightRect, ICON_ROTATE_RIGHT, BTN_ROTATE_R, true);
-            curX += 30.0f;
-        }
+            D2D1_RECT_F capRect = D2D1::RectF(curX, capY, curX + totalCapW, capY + capH);
+            D2D1_ROUNDED_RECT capR = D2D1::RoundedRect(capRect, 6.0f, 6.0f);
+            rt->FillRoundedRectangle(capR, m_d2d.BrushCard);
+            rt->DrawRoundedRectangle(capR, m_d2d.BrushBorderSubtle, 1.0f);
 
-        drawDivider(curX + 8.0f);
-        curX += 17.0f;
+            m_btnZoomOutRect = D2D1::RectF(curX, capY, curX + zoomBtnW, capY + capH);
+            if (m_pressedButtonId == BTN_ZOOM_OUT) {
+                rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnZoomOutRect, 5.0f, 5.0f), m_d2d.BrushActive);
+            } else if (m_hoveredButtonId == BTN_ZOOM_OUT) {
+                rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnZoomOutRect, 5.0f, 5.0f), m_d2d.BrushHover);
+            }
+            float minusCx = m_btnZoomOutRect.left + zoomBtnW / 2.0f;
+            float minusCy = capY + capH / 2.0f + (m_pressedButtonId == BTN_ZOOM_OUT ? 0.5f : 0.0f);
+            m_d2d.DrawIconZoomOut(minusCx, minusCy, 13.0f, m_d2d.BrushText);
 
-        // Info / Inspector
-        m_btnInfoRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-        DrawIconButton(m_btnInfoRect, ICON_INFO, BTN_INFO, true);
-        curX += 34.0f;
+            float div1X = curX + zoomBtnW;
+            rt->DrawLine(D2D1::Point2F(div1X, capY + 4.0f), D2D1::Point2F(div1X, capY + capH - 4.0f), m_d2d.BrushBorder, 1.0f);
 
-        // Open With
-        m_btnOpenWithRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-        DrawIconButton(m_btnOpenWithRect, ICON_OPEN_WITH, BTN_OPEN_WITH, true);
-        curX += 34.0f;
+            m_btnZoomResetRect = D2D1::RectF(div1X + 1.0f, capY, div1X + 1.0f + zoomTextW, capY + capH);
+            if (m_pressedButtonId == BTN_ZOOM_RESET) {
+                rt->FillRectangle(m_btnZoomResetRect, m_d2d.BrushActive);
+            } else if (m_hoveredButtonId == BTN_ZOOM_RESET) {
+                rt->FillRectangle(m_btnZoomResetRect, m_d2d.BrushHover);
+            }
+            WCHAR zoomBuf[16];
+            swprintf_s(zoomBuf, L"%d%%", (int)(m_zoom * 100.0f + 0.5f));
+            IDWriteTextFormat* fontZoom = m_d2d.FontButton ? m_d2d.FontButton : m_d2d.FontCaption;
+            rt->DrawText(zoomBuf, (UINT32)wcslen(zoomBuf), fontZoom, m_btnZoomResetRect, m_d2d.BrushText);
 
-        // Settings
-        m_btnSettingsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-        DrawIconButton(m_btnSettingsRect, ICON_SETTINGS, BTN_SETTINGS, true);
-        curX += 34.0f;
+            float div2X = div1X + 1.0f + zoomTextW;
+            rt->DrawLine(D2D1::Point2F(div2X, capY + 4.0f), D2D1::Point2F(div2X, capY + capH - 4.0f), m_d2d.BrushBorder, 1.0f);
 
-        // Fullscreen
-        m_btnToolbarFsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-        DrawIconButton(m_btnToolbarFsRect, ICON_FULLSCREEN, BTN_TOOLBAR_FS, true);
-    }
-    // =========================================================================
-    // DOCK RENDERING: SVG MODE
-    // =========================================================================
-    else if (m_docType == DocumentType::Svg) {
-        // Folder Navigation Capsule [ ◀ | ▶ ]
-        float navH = 28.0f;
-        float navY = dockY + (dockH - navH) / 2.0f;
-        float navBtnW = 27.0f;
-        float totalNavW = navBtnW + 1.0f + navBtnW;
+            m_btnZoomInRect = D2D1::RectF(div2X + 1.0f, capY, curX + totalCapW, capY + capH);
+            if (m_pressedButtonId == BTN_ZOOM_IN) {
+                rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnZoomInRect, 5.0f, 5.0f), m_d2d.BrushActive);
+            } else if (m_hoveredButtonId == BTN_ZOOM_IN) {
+                rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnZoomInRect, 5.0f, 5.0f), m_d2d.BrushHover);
+            }
+            float plusCx = m_btnZoomInRect.left + zoomBtnW / 2.0f;
+            float plusCy = capY + capH / 2.0f + (m_pressedButtonId == BTN_ZOOM_IN ? 0.5f : 0.0f);
+            m_d2d.DrawIconZoomIn(plusCx, plusCy, 13.0f, m_d2d.BrushText);
 
-        D2D1_RECT_F navRect = D2D1::RectF(curX, navY, curX + totalNavW, navY + navH);
-        D2D1_ROUNDED_RECT navR = D2D1::RoundedRect(navRect, 6.0f, 6.0f);
-        rt->FillRoundedRectangle(navR, m_d2d.BrushCard);
-        rt->DrawRoundedRectangle(navR, m_d2d.BrushBorderSubtle, 1.0f);
-
-        m_btnPrevPageRect = D2D1::RectF(curX, navY, curX + navBtnW, navY + navH);
-        if (m_pressedButtonId == BTN_PREV_PAGE) {
-            rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnPrevPageRect, 5.0f, 5.0f), m_d2d.BrushActive);
-        } else if (m_hoveredButtonId == BTN_PREV_PAGE) {
-            rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnPrevPageRect, 5.0f, 5.0f), m_d2d.BrushHover);
-        }
-        float prevCx = m_btnPrevPageRect.left + navBtnW / 2.0f;
-        float prevCy = navY + navH / 2.0f + (m_pressedButtonId == BTN_PREV_PAGE ? 0.5f : 0.0f);
-        m_d2d.DrawIconChevronLeft(prevCx, prevCy, 13.0f, m_d2d.BrushText);
-
-        float divNavX = curX + navBtnW;
-        rt->DrawLine(D2D1::Point2F(divNavX, navY + 4.0f), D2D1::Point2F(divNavX, navY + navH - 4.0f), m_d2d.BrushBorder, 1.0f);
-
-        m_btnNextPageRect = D2D1::RectF(divNavX + 1.0f, navY, curX + totalNavW, navY + navH);
-        if (m_pressedButtonId == BTN_NEXT_PAGE) {
-            rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnNextPageRect, 5.0f, 5.0f), m_d2d.BrushActive);
-        } else if (m_hoveredButtonId == BTN_NEXT_PAGE) {
-            rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnNextPageRect, 5.0f, 5.0f), m_d2d.BrushHover);
-        }
-        float nextCx = m_btnNextPageRect.left + navBtnW / 2.0f;
-        float nextCy = navY + navH / 2.0f + (m_pressedButtonId == BTN_NEXT_PAGE ? 0.5f : 0.0f);
-        m_d2d.DrawIconChevronRight(nextCx, nextCy, 13.0f, m_d2d.BrushText);
-
-        curX += totalNavW;
-        drawDivider(curX + 8.0f);
-        curX += 17.0f;
-
-        // Inset Zoom Capsule [ - | 100% | + ]
-        float capH = 28.0f;
-        float capY = dockY + (dockH - capH) / 2.0f;
-        float zoomBtnW = 27.0f;
-        float zoomTextW = 50.0f;
-        float totalCapW = zoomBtnW + 1.0f + zoomTextW + 1.0f + zoomBtnW;
-
-        D2D1_RECT_F capRect = D2D1::RectF(curX, capY, curX + totalCapW, capY + capH);
-        D2D1_ROUNDED_RECT capR = D2D1::RoundedRect(capRect, 6.0f, 6.0f);
-        rt->FillRoundedRectangle(capR, m_d2d.BrushCard);
-        rt->DrawRoundedRectangle(capR, m_d2d.BrushBorderSubtle, 1.0f);
-
-        m_btnZoomOutRect = D2D1::RectF(curX, capY, curX + zoomBtnW, capY + capH);
-        if (m_pressedButtonId == BTN_ZOOM_OUT) {
-            rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnZoomOutRect, 5.0f, 5.0f), m_d2d.BrushActive);
-        } else if (m_hoveredButtonId == BTN_ZOOM_OUT) {
-            rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnZoomOutRect, 5.0f, 5.0f), m_d2d.BrushHover);
-        }
-        float minusCx = m_btnZoomOutRect.left + zoomBtnW / 2.0f;
-        float minusCy = capY + capH / 2.0f + (m_pressedButtonId == BTN_ZOOM_OUT ? 0.5f : 0.0f);
-        m_d2d.DrawIconZoomOut(minusCx, minusCy, 13.0f, m_d2d.BrushText);
-
-        float div1X = curX + zoomBtnW;
-        rt->DrawLine(D2D1::Point2F(div1X, capY + 4.0f), D2D1::Point2F(div1X, capY + capH - 4.0f), m_d2d.BrushBorder, 1.0f);
-
-        m_btnZoomResetRect = D2D1::RectF(div1X + 1.0f, capY, div1X + 1.0f + zoomTextW, capY + capH);
-        if (m_pressedButtonId == BTN_ZOOM_RESET) {
-            rt->FillRectangle(m_btnZoomResetRect, m_d2d.BrushActive);
-        } else if (m_hoveredButtonId == BTN_ZOOM_RESET) {
-            rt->FillRectangle(m_btnZoomResetRect, m_d2d.BrushHover);
-        }
-        WCHAR zoomBuf[16];
-        swprintf_s(zoomBuf, L"%d%%", (int)(m_zoom * 100.0f + 0.5f));
-        IDWriteTextFormat* fontZoom = m_d2d.FontButton ? m_d2d.FontButton : m_d2d.FontCaption;
-        rt->DrawText(zoomBuf, (UINT32)wcslen(zoomBuf), fontZoom, m_btnZoomResetRect, m_d2d.BrushText);
-
-        float div2X = div1X + 1.0f + zoomTextW;
-        rt->DrawLine(D2D1::Point2F(div2X, capY + 4.0f), D2D1::Point2F(div2X, capY + capH - 4.0f), m_d2d.BrushBorder, 1.0f);
-
-        m_btnZoomInRect = D2D1::RectF(div2X + 1.0f, capY, curX + totalCapW, capY + capH);
-        if (m_pressedButtonId == BTN_ZOOM_IN) {
-            rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnZoomInRect, 5.0f, 5.0f), m_d2d.BrushActive);
-        } else if (m_hoveredButtonId == BTN_ZOOM_IN) {
-            rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnZoomInRect, 5.0f, 5.0f), m_d2d.BrushHover);
-        }
-        float plusCx = m_btnZoomInRect.left + zoomBtnW / 2.0f;
-        float plusCy = capY + capH / 2.0f + (m_pressedButtonId == BTN_ZOOM_IN ? 0.5f : 0.0f);
-        m_d2d.DrawIconZoomIn(plusCx, plusCy, 13.0f, m_d2d.BrushText);
-
-        curX += totalCapW;
-
-        drawDivider(curX + 8.0f);
-        curX += 17.0f;
-
-        // Fit to Window
-        m_btnZoomFitRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-        DrawIconButton(m_btnZoomFitRect, ICON_ZOOM_FIT, BTN_ZOOM_FIT, true);
-        curX += 30.0f;
-
-        // Rotate Left & Right
-        if (showRotate) {
+            curX += totalCapW;
             drawDivider(curX + 8.0f);
             curX += 17.0f;
 
-            m_btnRotateLeftRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-            DrawIconButton(m_btnRotateLeftRect, ICON_ROTATE_LEFT, BTN_ROTATE_L, true);
-            curX += 32.0f;
-
-            m_btnRotateRightRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-            DrawIconButton(m_btnRotateRightRect, ICON_ROTATE_RIGHT, BTN_ROTATE_R, true);
+            m_btnZoomFitRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+            DrawIconButton(m_btnZoomFitRect, ICON_ZOOM_FIT, BTN_ZOOM_FIT, true);
             curX += 30.0f;
+
+            if (isFull) {
+                drawDivider(curX + 8.0f);
+                curX += 17.0f;
+
+                m_btnRotateLeftRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                DrawIconButton(m_btnRotateLeftRect, ICON_ROTATE_LEFT, BTN_ROTATE_L, true);
+                curX += 32.0f;
+
+                m_btnRotateRightRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                DrawIconButton(m_btnRotateRightRect, ICON_ROTATE_RIGHT, BTN_ROTATE_R, true);
+                curX += 30.0f;
+
+                drawDivider(curX + 8.0f);
+                curX += 17.0f;
+
+                m_btnInfoRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                DrawIconButton(m_btnInfoRect, ICON_INFO, BTN_INFO, true);
+                curX += 34.0f;
+
+                m_btnOpenWithRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                DrawIconButton(m_btnOpenWithRect, ICON_OPEN_WITH, BTN_OPEN_WITH, true);
+                curX += 34.0f;
+
+                m_btnSettingsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                DrawIconButton(m_btnSettingsRect, ICON_SETTINGS, BTN_SETTINGS, true);
+                curX += 34.0f;
+
+                m_btnToolbarFsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                DrawIconButton(m_btnToolbarFsRect, ICON_FULLSCREEN, BTN_TOOLBAR_FS, true);
+            } else {
+                drawDivider(curX + 8.0f);
+                curX += 17.0f;
+
+                m_btnOverflowRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                DrawIconButton(m_btnOverflowRect, ICON_MORE, BTN_OVERFLOW_MENU, true);
+            }
+        } else {
+            // Compact tier
+            float navH = 26.0f;
+            float navY = dockY + (dockH - navH) / 2.0f;
+            float navBtnW = 23.5f;
+            float totalNavW = 48.0f;
+
+            D2D1_RECT_F navRect = D2D1::RectF(curX, navY, curX + totalNavW, navY + navH);
+            D2D1_ROUNDED_RECT navR = D2D1::RoundedRect(navRect, 6.0f, 6.0f);
+            rt->FillRoundedRectangle(navR, m_d2d.BrushCard);
+            rt->DrawRoundedRectangle(navR, m_d2d.BrushBorderSubtle, 1.0f);
+
+            m_btnPrevPageRect = D2D1::RectF(curX, navY, curX + navBtnW, navY + navH);
+            if (m_pressedButtonId == BTN_PREV_PAGE) {
+                rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnPrevPageRect, 5.0f, 5.0f), m_d2d.BrushActive);
+            } else if (m_hoveredButtonId == BTN_PREV_PAGE) {
+                rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnPrevPageRect, 5.0f, 5.0f), m_d2d.BrushHover);
+            }
+            float prevCx = m_btnPrevPageRect.left + navBtnW / 2.0f;
+            float prevCy = navY + navH / 2.0f + (m_pressedButtonId == BTN_PREV_PAGE ? 0.5f : 0.0f);
+            m_d2d.DrawIconChevronLeft(prevCx, prevCy, 12.0f, m_d2d.BrushText);
+
+            float divNavX = curX + navBtnW;
+            rt->DrawLine(D2D1::Point2F(divNavX, navY + 4.0f), D2D1::Point2F(divNavX, navY + navH - 4.0f), m_d2d.BrushBorder, 1.0f);
+
+            m_btnNextPageRect = D2D1::RectF(divNavX + 1.0f, navY, curX + totalNavW, navY + navH);
+            if (m_pressedButtonId == BTN_NEXT_PAGE) {
+                rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnNextPageRect, 5.0f, 5.0f), m_d2d.BrushActive);
+            } else if (m_hoveredButtonId == BTN_NEXT_PAGE) {
+                rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnNextPageRect, 5.0f, 5.0f), m_d2d.BrushHover);
+            }
+            float nextCx = m_btnNextPageRect.left + navBtnW / 2.0f;
+            float nextCy = navY + navH / 2.0f + (m_pressedButtonId == BTN_NEXT_PAGE ? 0.5f : 0.0f);
+            m_d2d.DrawIconChevronRight(nextCx, nextCy, 12.0f, m_d2d.BrushText);
+
+            curX += totalNavW;
+            drawDivider(curX + 5.5f);
+            curX += 12.0f;
+
+            float capH = 26.0f;
+            float capY = dockY + (dockH - capH) / 2.0f;
+            float totalCapW = 46.0f;
+
+            m_btnZoomResetRect = D2D1::RectF(curX, capY, curX + totalCapW, capY + capH);
+            D2D1_ROUNDED_RECT capR = D2D1::RoundedRect(m_btnZoomResetRect, 6.0f, 6.0f);
+            if (m_pressedButtonId == BTN_ZOOM_RESET) {
+                rt->FillRoundedRectangle(capR, m_d2d.BrushActive);
+            } else if (m_hoveredButtonId == BTN_ZOOM_RESET) {
+                rt->FillRoundedRectangle(capR, m_d2d.BrushHover);
+            } else {
+                rt->FillRoundedRectangle(capR, m_d2d.BrushCard);
+            }
+            rt->DrawRoundedRectangle(capR, m_d2d.BrushBorderSubtle, 1.0f);
+
+            WCHAR zoomBuf[16];
+            swprintf_s(zoomBuf, L"%d%%", (int)(m_zoom * 100.0f + 0.5f));
+            IDWriteTextFormat* fontZoom = m_d2d.FontButton ? m_d2d.FontButton : m_d2d.FontCaption;
+            rt->DrawText(zoomBuf, (UINT32)wcslen(zoomBuf), fontZoom, m_btnZoomResetRect, m_d2d.BrushText);
+
+            curX += totalCapW;
+            drawDivider(curX + 5.5f);
+            curX += 12.0f;
+
+            m_btnZoomFitRect = D2D1::RectF(curX, btnY, curX + 28.0f, btnY + btnH);
+            DrawIconButton(m_btnZoomFitRect, ICON_ZOOM_FIT, BTN_ZOOM_FIT, true);
+            curX += 28.0f;
+
+            drawDivider(curX + 5.5f);
+            curX += 12.0f;
+            m_btnOverflowRect = D2D1::RectF(curX, btnY, curX + 28.0f, btnY + btnH);
+            DrawIconButton(m_btnOverflowRect, ICON_MORE, BTN_OVERFLOW_MENU, true);
         }
-
-        drawDivider(curX + 8.0f);
-        curX += 17.0f;
-
-        // Info
-        m_btnInfoRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-        DrawIconButton(m_btnInfoRect, ICON_INFO, BTN_INFO, true);
-        curX += 34.0f;
-
-        // Open With
-        m_btnOpenWithRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-        DrawIconButton(m_btnOpenWithRect, ICON_OPEN_WITH, BTN_OPEN_WITH, true);
-        curX += 34.0f;
-
-        // Settings
-        m_btnSettingsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-        DrawIconButton(m_btnSettingsRect, ICON_SETTINGS, BTN_SETTINGS, true);
-        curX += 34.0f;
-
-        // Fullscreen
-        m_btnToolbarFsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-        DrawIconButton(m_btnToolbarFsRect, ICON_FULLSCREEN, BTN_TOOLBAR_FS, true);
     }
     // =========================================================================
     // DOCK RENDERING: MARKDOWN & NOTEBOOK MODE
     // =========================================================================
     else if (m_docType == DocumentType::Markdown || m_docType == DocumentType::Notebook) {
-        // Folder Navigation Capsule [ ◀ | ▶ ]
+        bool isFull = (availW >= 360.0f);
+
         float navH = 28.0f;
         float navY = dockY + (dockH - navH) / 2.0f;
         float navBtnW = 27.0f;
@@ -2828,38 +3207,42 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
         drawDivider(curX + 8.0f);
         curX += 17.0f;
 
-        // Copy Text
         m_btnCopyTextRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
         DrawIconButton(m_btnCopyTextRect, ICON_COPY, BTN_COPY_TEXT, true);
         curX += 30.0f;
 
-        drawDivider(curX + 8.0f);
-        curX += 17.0f;
+        if (isFull) {
+            drawDivider(curX + 8.0f);
+            curX += 17.0f;
 
-        // Info
-        m_btnInfoRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-        DrawIconButton(m_btnInfoRect, ICON_INFO, BTN_INFO, true);
-        curX += 34.0f;
+            m_btnInfoRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+            DrawIconButton(m_btnInfoRect, ICON_INFO, BTN_INFO, true);
+            curX += 34.0f;
 
-        // Open With
-        m_btnOpenWithRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-        DrawIconButton(m_btnOpenWithRect, ICON_OPEN_WITH, BTN_OPEN_WITH, true);
-        curX += 34.0f;
+            m_btnOpenWithRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+            DrawIconButton(m_btnOpenWithRect, ICON_OPEN_WITH, BTN_OPEN_WITH, true);
+            curX += 34.0f;
 
-        // Settings
-        m_btnSettingsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-        DrawIconButton(m_btnSettingsRect, ICON_SETTINGS, BTN_SETTINGS, true);
-        curX += 34.0f;
+            m_btnSettingsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+            DrawIconButton(m_btnSettingsRect, ICON_SETTINGS, BTN_SETTINGS, true);
+            curX += 34.0f;
 
-        // Fullscreen
-        m_btnToolbarFsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-        DrawIconButton(m_btnToolbarFsRect, ICON_FULLSCREEN, BTN_TOOLBAR_FS, true);
+            m_btnToolbarFsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+            DrawIconButton(m_btnToolbarFsRect, ICON_FULLSCREEN, BTN_TOOLBAR_FS, true);
+        } else {
+            drawDivider(curX + 8.0f);
+            curX += 17.0f;
+
+            m_btnOverflowRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+            DrawIconButton(m_btnOverflowRect, ICON_MORE, BTN_OVERFLOW_MENU, true);
+        }
     }
     // =========================================================================
     // DOCK RENDERING: FONT MODE
     // =========================================================================
     else if (m_docType == DocumentType::Font) {
-        // Folder Navigation Capsule [ ◀ | ▶ ]
+        bool isFull = (availW >= 320.0f);
+
         float navH = 28.0f;
         float navY = dockY + (dockH - navH) / 2.0f;
         float navBtnW = 27.0f;
@@ -2894,29 +3277,348 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
         m_d2d.DrawIconChevronRight(nextCx, nextCy, 13.0f, m_d2d.BrushText);
 
         curX += totalNavW;
-        drawDivider(curX + 8.0f);
-        curX += 17.0f;
 
-        // Info
-        m_btnInfoRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-        DrawIconButton(m_btnInfoRect, ICON_INFO, BTN_INFO, true);
-        curX += 34.0f;
+        if (isFull) {
+            drawDivider(curX + 8.0f);
+            curX += 17.0f;
 
-        // Open With
-        m_btnOpenWithRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-        DrawIconButton(m_btnOpenWithRect, ICON_OPEN_WITH, BTN_OPEN_WITH, true);
-        curX += 34.0f;
+            m_btnInfoRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+            DrawIconButton(m_btnInfoRect, ICON_INFO, BTN_INFO, true);
+            curX += 34.0f;
 
-        // Settings
-        m_btnSettingsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-        DrawIconButton(m_btnSettingsRect, ICON_SETTINGS, BTN_SETTINGS, true);
-        curX += 34.0f;
+            m_btnOpenWithRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+            DrawIconButton(m_btnOpenWithRect, ICON_OPEN_WITH, BTN_OPEN_WITH, true);
+            curX += 34.0f;
 
-        // Fullscreen
-        m_btnToolbarFsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-        DrawIconButton(m_btnToolbarFsRect, ICON_FULLSCREEN, BTN_TOOLBAR_FS, true);
+            m_btnSettingsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+            DrawIconButton(m_btnSettingsRect, ICON_SETTINGS, BTN_SETTINGS, true);
+            curX += 34.0f;
+
+            m_btnToolbarFsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+            DrawIconButton(m_btnToolbarFsRect, ICON_FULLSCREEN, BTN_TOOLBAR_FS, true);
+        } else {
+            drawDivider(curX + 8.0f);
+            curX += 17.0f;
+
+            m_btnOverflowRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+            DrawIconButton(m_btnOverflowRect, ICON_MORE, BTN_OVERFLOW_MENU, true);
+        }
     }
 }
+
+std::vector<AppWindow::OverflowMenuItem> AppWindow::GetCurrentOverflowItems() const {
+    std::vector<OverflowMenuItem> items;
+    std::wstring appName = m_openWithAppName.empty() ? L"Default App" : m_openWithAppName;
+    if (appName.length() > 18) {
+        appName = appName.substr(0, 16) + L"...";
+    }
+    std::wstring openWithLabel = L"Open with " + appName;
+
+    if (m_docType == DocumentType::Image) {
+        items.push_back({ BTN_ROTATE_L, ICON_ROTATE_LEFT, L"Rotate Left", L"L", false, false, true });
+        items.push_back({ BTN_ROTATE_R, ICON_ROTATE_RIGHT, L"Rotate Right", L"R", false, false, true });
+        items.push_back({ 0, ICON_MORE, L"", L"", true, false, false }); // divider
+        items.push_back({ BTN_CROP, ICON_CROP, L"Crop Image", L"C", false, false, true });
+        items.push_back({ BTN_INFO, ICON_INFO, L"File Info", L"I", false, false, true });
+        items.push_back({ BTN_OPEN_WITH, ICON_OPEN_WITH, openWithLabel, L"Enter", false, false, true });
+        items.push_back({ 0, ICON_MORE, L"", L"", true, false, false }); // divider
+        items.push_back({ BTN_SETTINGS, ICON_SETTINGS, L"Keybind Settings", L"Ctrl+,", false, false, true });
+        items.push_back({ BTN_TOOLBAR_FS, ICON_FULLSCREEN, m_isFullscreen ? L"Exit Fullscreen" : L"Fullscreen", L"F", false, false, true });
+    } else if (m_docType == DocumentType::Pdf) {
+        if (m_totalPages > 1) {
+            items.push_back({ BTN_SIDEBAR, ICON_SIDEBAR, m_showSidebar ? L"Hide Sidebar" : L"Show Sidebar", L"S", false, false, true });
+        }
+        items.push_back({ BTN_SEARCH, ICON_SEARCH, L"Search Document", L"Ctrl+F", false, false, true });
+        items.push_back({ BTN_ROTATE_L, ICON_ROTATE_LEFT, L"Rotate Left", L"L", false, false, true });
+        items.push_back({ BTN_ROTATE_R, ICON_ROTATE_RIGHT, L"Rotate Right", L"R", false, false, true });
+        items.push_back({ 0, ICON_MORE, L"", L"", true, false, false }); // divider
+        items.push_back({ BTN_INFO, ICON_INFO, L"File Info", L"I", false, false, true });
+        items.push_back({ BTN_OPEN_WITH, ICON_OPEN_WITH, openWithLabel, L"Enter", false, false, true });
+        items.push_back({ 0, ICON_MORE, L"", L"", true, false, false }); // divider
+        items.push_back({ BTN_SETTINGS, ICON_SETTINGS, L"Keybind Settings", L"Ctrl+,", false, false, true });
+        items.push_back({ BTN_TOOLBAR_FS, ICON_FULLSCREEN, m_isFullscreen ? L"Exit Fullscreen" : L"Fullscreen", L"F", false, false, true });
+    } else if (m_docType == DocumentType::Text) {
+        items.push_back({ BTN_CUT, ICON_CUT, L"Cut Selection", L"Ctrl+X", false, false, m_text.HasSelection() });
+        items.push_back({ BTN_COPY_TEXT, ICON_COPY, L"Copy", L"Ctrl+C", false, false, true });
+        items.push_back({ BTN_PASTE, ICON_PASTE, L"Paste", L"Ctrl+V", false, false, true });
+        items.push_back({ 0, ICON_MORE, L"", L"", true, false, false }); // divider
+        items.push_back({ BTN_WRAP_TEXT, ICON_WRAP, m_text.IsWordWrap() ? L"Disable Word Wrap" : L"Enable Word Wrap", L"W", false, m_text.IsWordWrap(), true });
+        items.push_back({ BTN_INFO, ICON_INFO, L"File Info", L"I", false, false, true });
+        items.push_back({ BTN_OPEN_WITH, ICON_OPEN_WITH, openWithLabel, L"Enter", false, false, true });
+        items.push_back({ 0, ICON_MORE, L"", L"", true, false, false }); // divider
+        items.push_back({ BTN_SETTINGS, ICON_SETTINGS, L"Keybind Settings", L"Ctrl+,", false, false, true });
+        items.push_back({ BTN_TOOLBAR_FS, ICON_FULLSCREEN, m_isFullscreen ? L"Exit Fullscreen" : L"Fullscreen", L"F", false, false, true });
+    } else if (m_docType == DocumentType::Spreadsheet) {
+        items.push_back({ BTN_TABLE_VIEW, ICON_TABLE, m_text.IsTableView() ? L"Raw Text Editor" : L"Table Grid View", L"T", false, m_text.IsTableView(), true });
+        items.push_back({ BTN_COPY_TEXT, ICON_COPY, L"Copy Table / Text", L"Ctrl+C", false, false, true });
+        items.push_back({ BTN_PASTE, ICON_PASTE, L"Paste", L"Ctrl+V", false, false, true });
+        items.push_back({ 0, ICON_MORE, L"", L"", true, false, false }); // divider
+        items.push_back({ BTN_INFO, ICON_INFO, L"File Info", L"I", false, false, true });
+        items.push_back({ BTN_OPEN_WITH, ICON_OPEN_WITH, openWithLabel, L"Enter", false, false, true });
+        items.push_back({ 0, ICON_MORE, L"", L"", true, false, false }); // divider
+        items.push_back({ BTN_SETTINGS, ICON_SETTINGS, L"Keybind Settings", L"Ctrl+,", false, false, true });
+        items.push_back({ BTN_TOOLBAR_FS, ICON_FULLSCREEN, m_isFullscreen ? L"Exit Fullscreen" : L"Fullscreen", L"F", false, false, true });
+    } else if (m_docType == DocumentType::Office || m_docType == DocumentType::Svg) {
+        items.push_back({ BTN_ROTATE_L, ICON_ROTATE_LEFT, L"Rotate Left", L"L", false, false, true });
+        items.push_back({ BTN_ROTATE_R, ICON_ROTATE_RIGHT, L"Rotate Right", L"R", false, false, true });
+        items.push_back({ 0, ICON_MORE, L"", L"", true, false, false }); // divider
+        items.push_back({ BTN_INFO, ICON_INFO, L"File Info", L"I", false, false, true });
+        items.push_back({ BTN_OPEN_WITH, ICON_OPEN_WITH, openWithLabel, L"Enter", false, false, true });
+        items.push_back({ 0, ICON_MORE, L"", L"", true, false, false }); // divider
+        items.push_back({ BTN_SETTINGS, ICON_SETTINGS, L"Keybind Settings", L"Ctrl+,", false, false, true });
+        items.push_back({ BTN_TOOLBAR_FS, ICON_FULLSCREEN, m_isFullscreen ? L"Exit Fullscreen" : L"Fullscreen", L"F", false, false, true });
+    } else if (m_docType == DocumentType::Markdown || m_docType == DocumentType::Notebook) {
+        items.push_back({ BTN_COPY_TEXT, ICON_COPY, L"Copy All Text", L"Ctrl+C", false, false, true });
+        items.push_back({ 0, ICON_MORE, L"", L"", true, false, false }); // divider
+        items.push_back({ BTN_INFO, ICON_INFO, L"File Info", L"I", false, false, true });
+        items.push_back({ BTN_OPEN_WITH, ICON_OPEN_WITH, openWithLabel, L"Enter", false, false, true });
+        items.push_back({ 0, ICON_MORE, L"", L"", true, false, false }); // divider
+        items.push_back({ BTN_SETTINGS, ICON_SETTINGS, L"Keybind Settings", L"Ctrl+,", false, false, true });
+        items.push_back({ BTN_TOOLBAR_FS, ICON_FULLSCREEN, m_isFullscreen ? L"Exit Fullscreen" : L"Fullscreen", L"F", false, false, true });
+    } else if (m_docType == DocumentType::Font) {
+        items.push_back({ BTN_INFO, ICON_INFO, L"Font Info", L"I", false, false, true });
+        items.push_back({ BTN_OPEN_WITH, ICON_OPEN_WITH, openWithLabel, L"Enter", false, false, true });
+        items.push_back({ 0, ICON_MORE, L"", L"", true, false, false }); // divider
+        items.push_back({ BTN_SETTINGS, ICON_SETTINGS, L"Keybind Settings", L"Ctrl+,", false, false, true });
+        items.push_back({ BTN_TOOLBAR_FS, ICON_FULLSCREEN, m_isFullscreen ? L"Exit Fullscreen" : L"Fullscreen", L"F", false, false, true });
+    }
+
+    return items;
+}
+
+void AppWindow::RenderOverflowMenu(const D2D1_RECT_F& canvasRect) {
+    ID2D1HwndRenderTarget* rt = m_d2d.GetRenderTarget();
+    if (!rt || !m_showOverflowMenu) return;
+
+    std::vector<OverflowMenuItem> items = GetCurrentOverflowItems();
+    if (items.empty()) return;
+
+    float itemH = 32.0f;
+    float dividerH = 7.0f;
+    float padY = 6.0f;
+    float menuW = 236.0f;
+
+    float totalMenuH = padY * 2.0f;
+    for (const auto& it : items) {
+        if (it.isDivider) totalMenuH += dividerH;
+        else totalMenuH += itemH;
+    }
+
+    // Anchor: right-aligned with m_btnOverflowRect
+    float menuX = m_btnOverflowRect.right - menuW;
+    float menuY = m_btnOverflowRect.bottom + 6.0f;
+
+    // Clamps
+    if (menuX + menuW > canvasRect.right - 8.0f) menuX = canvasRect.right - 8.0f - menuW;
+    if (menuX < 8.0f) menuX = 8.0f;
+    if (menuY + totalMenuH > canvasRect.bottom - 8.0f) {
+        menuY = m_btnOverflowRect.top - 6.0f - totalMenuH;
+    }
+
+    m_overflowMenuRect = D2D1::RectF(menuX, menuY, menuX + menuW, menuY + totalMenuH);
+
+    // 1. Ambient drop shadow (multi-pass falloff)
+    D2D1_ROUNDED_RECT rShadow = D2D1::RoundedRect(
+        D2D1::RectF(menuX, menuY + 2.5f, menuX + menuW, menuY + totalMenuH + 6.0f),
+        8.0f, 8.0f
+    );
+    m_d2d.BrushShadowDark->SetOpacity(0.40f);
+    rt->FillRoundedRectangle(rShadow, m_d2d.BrushShadowDark);
+    m_d2d.BrushShadowDark->SetOpacity(0.40f);
+
+    // 2. Acrylic dark glass background (#18181BF8)
+    D2D1_ROUNDED_RECT rMenu = D2D1::RoundedRect(m_overflowMenuRect, 8.0f, 8.0f);
+    m_d2d.BrushToolbar->SetOpacity(0.97f);
+    rt->FillRoundedRectangle(rMenu, m_d2d.BrushToolbar);
+    m_d2d.BrushToolbar->SetOpacity(1.0f);
+
+    // 3. Subtle 1px outer border
+    rt->DrawRoundedRectangle(rMenu, m_d2d.BrushBorderSubtle, 1.0f);
+
+    // 4. Render Items
+    float curY = menuY + padY;
+
+    for (size_t i = 0; i < items.size(); ++i) {
+        const auto& it = items[i];
+        if (it.isDivider) {
+            float lineY = curY + dividerH / 2.0f;
+            rt->DrawLine(
+                D2D1::Point2F(menuX + 12.0f, lineY),
+                D2D1::Point2F(menuX + menuW - 12.0f, lineY),
+                m_d2d.BrushBorder, 1.0f
+            );
+            curY += dividerH;
+        } else {
+            D2D1_RECT_F itemRect = D2D1::RectF(menuX + 5.0f, curY, menuX + menuW - 5.0f, curY + itemH);
+
+            bool isHovered = (m_overflowHoveredIndex == (int)i);
+            if (isHovered && it.isEnabled) {
+                D2D1_ROUNDED_RECT rHover = D2D1::RoundedRect(itemRect, 5.0f, 5.0f);
+                rt->FillRoundedRectangle(rHover, m_d2d.BrushHover);
+            }
+
+            ID2D1Brush* textBrush = it.isEnabled ? (ID2D1Brush*)m_d2d.BrushText : (ID2D1Brush*)m_d2d.BrushTextMuted;
+
+            // Draw Icon at left (center = itemRect.left + 16.0f, curY + itemH / 2.0f)
+            float iconCx = itemRect.left + 16.0f;
+            float iconCy = curY + itemH / 2.0f;
+            DrawMenuIcon(iconCx, iconCy, 15.0f, it.icon, textBrush);
+
+            // Draw Label (Leading alignment with ellipsis trimming)
+            D2D1_RECT_F labelRect = D2D1::RectF(itemRect.left + 36.0f, curY, itemRect.right - 58.0f, curY + itemH);
+            rt->DrawText(it.label.c_str(), (UINT32)it.label.length(), m_d2d.FontMenu ? m_d2d.FontMenu : m_d2d.FontCaption, labelRect, textBrush);
+
+            // Draw Shortcut Hint at right
+            if (!it.shortcut.empty()) {
+                D2D1_RECT_F scRect = D2D1::RectF(itemRect.right - 54.0f, curY, itemRect.right - 10.0f, curY + itemH);
+                IDWriteTextFormat* scFont = m_d2d.FontCaptionRight ? m_d2d.FontCaptionRight : m_d2d.FontCaption;
+                rt->DrawText(it.shortcut.c_str(), (UINT32)it.shortcut.length(), scFont, scRect, m_d2d.BrushTextMuted);
+            }
+
+            curY += itemH;
+        }
+    }
+}
+
+void AppWindow::DrawMenuIcon(float cx, float cy, float size, IconType icon, ID2D1Brush* brush) {
+    switch (icon) {
+        case ICON_SIDEBAR:        m_d2d.DrawIconSidebar(cx, cy, size, m_showSidebar, brush); break;
+        case ICON_CHEVRON_LEFT:   m_d2d.DrawIconChevronLeft(cx, cy, size, brush); break;
+        case ICON_CHEVRON_RIGHT:  m_d2d.DrawIconChevronRight(cx, cy, size, brush); break;
+        case ICON_ZOOM_OUT:       m_d2d.DrawIconZoomOut(cx, cy, size, brush); break;
+        case ICON_ZOOM_IN:        m_d2d.DrawIconZoomIn(cx, cy, size, brush); break;
+        case ICON_ZOOM_FIT:       m_d2d.DrawIconFit(cx, cy, size, brush); break;
+        case ICON_ROTATE_LEFT:    m_d2d.DrawIconRotateLeft(cx, cy, size, brush); break;
+        case ICON_ROTATE_RIGHT:   m_d2d.DrawIconRotateRight(cx, cy, size, brush); break;
+        case ICON_FULLSCREEN:     m_d2d.DrawIconFullscreen(cx, cy, size, m_isFullscreen, brush); break;
+        case ICON_SEARCH:         m_d2d.DrawIconSearch(cx, cy, size, brush); break;
+        case ICON_CROP:           m_d2d.DrawIconCrop(cx, cy, size, brush); break;
+        case ICON_INFO:           m_d2d.DrawIconInfo(cx, cy, size, brush); break;
+        case ICON_SETTINGS:       m_d2d.DrawIconSettings(cx, cy, size, brush); break;
+        case ICON_COPY:           m_d2d.DrawIconCopy(cx, cy, size, brush); break;
+        case ICON_WRAP:           m_d2d.DrawIconWrap(cx, cy, size, m_text.IsWordWrap(), brush); break;
+        case ICON_TABLE:          m_d2d.DrawIconTable(cx, cy, size, m_text.IsTableView(), brush); break;
+        case ICON_SAVE:           m_d2d.DrawIconSave(cx, cy, size, m_text.IsModified(), brush); break;
+        case ICON_UNDO:           m_d2d.DrawIconUndo(cx, cy, size, brush); break;
+        case ICON_REDO:           m_d2d.DrawIconRedo(cx, cy, size, brush); break;
+        case ICON_CUT:            m_d2d.DrawIconCut(cx, cy, size, brush); break;
+        case ICON_PASTE:          m_d2d.DrawIconPaste(cx, cy, size, brush); break;
+        case ICON_OPEN_WITH:      m_d2d.DrawIconExternalLink(cx, cy, size, brush); break;
+        case ICON_MORE:           m_d2d.DrawIconHamburger(cx, cy, size, brush); break;
+        default: break;
+    }
+}
+
+int AppWindow::GetOverflowItemIndexAt(const D2D1_POINT_2F& pt) const {
+    if (!m_showOverflowMenu) return -1;
+    if (pt.x < m_overflowMenuRect.left || pt.x > m_overflowMenuRect.right ||
+        pt.y < m_overflowMenuRect.top || pt.y > m_overflowMenuRect.bottom) {
+        return -1;
+    }
+
+    std::vector<OverflowMenuItem> items = GetCurrentOverflowItems();
+    float itemH = 32.0f;
+    float dividerH = 7.0f;
+    float padY = 6.0f;
+    float curY = m_overflowMenuRect.top + padY;
+
+    for (size_t i = 0; i < items.size(); ++i) {
+        if (items[i].isDivider) {
+            curY += dividerH;
+        } else {
+            if (pt.y >= curY && pt.y < curY + itemH) {
+                return (int)i;
+            }
+            curY += itemH;
+        }
+    }
+    return -1;
+}
+
+void AppWindow::HandleOverflowMenuClick(const D2D1_POINT_2F& pt) {
+    int idx = GetOverflowItemIndexAt(pt);
+    if (idx >= 0) {
+        std::vector<OverflowMenuItem> items = GetCurrentOverflowItems();
+        if (idx < (int)items.size() && items[idx].isEnabled && !items[idx].isDivider) {
+            ExecuteOverflowCommand(items[idx].id);
+        }
+    }
+}
+
+void AppWindow::ExecuteOverflowCommand(int buttonId) {
+    m_showOverflowMenu = false;
+    InvalidateRect(m_hwnd, NULL, FALSE);
+
+    switch (buttonId) {
+        case BTN_SIDEBAR:
+            m_showSidebar = !m_showSidebar;
+            UpdateLayout();
+            InvalidateRect(m_hwnd, NULL, FALSE);
+            break;
+        case BTN_ROTATE_L:
+            Rotate(-90);
+            break;
+        case BTN_ROTATE_R:
+            Rotate(90);
+            break;
+        case BTN_CROP:
+            ToggleCrop();
+            break;
+        case BTN_SEARCH:
+            ToggleSearch();
+            break;
+        case BTN_INFO:
+            ToggleInspector();
+            break;
+        case BTN_OPEN_WITH:
+            OpenCurrentFileInDefaultApp();
+            break;
+        case BTN_SETTINGS:
+            ToggleSettings();
+            break;
+        case BTN_TOOLBAR_FS:
+            ToggleFullscreen();
+            break;
+        case BTN_CUT:
+            if (m_text.Cut(m_hwnd)) {
+                UpdateWindowTitle();
+                ShowToast(L"Cut to clipboard");
+                InvalidateRect(m_hwnd, NULL, FALSE);
+            }
+            break;
+        case BTN_COPY_TEXT:
+            if (m_docType == DocumentType::Spreadsheet && m_text.IsTableView()) {
+                CopyTextToClipboard(m_hwnd, m_text.GetAllText());
+                ShowToast(L"Table copied to clipboard!");
+            } else {
+                if (m_text.Copy(m_hwnd)) {
+                    ShowToast(m_text.HasSelection() ? L"Copied selection" : L"Copied text");
+                }
+            }
+            InvalidateRect(m_hwnd, NULL, FALSE);
+            break;
+        case BTN_PASTE:
+            if (m_text.Paste(m_hwnd)) {
+                UpdateWindowTitle();
+                ShowToast(L"Pasted");
+                InvalidateRect(m_hwnd, NULL, FALSE);
+            }
+            break;
+        case BTN_WRAP_TEXT:
+            m_text.ToggleWordWrap();
+            ShowToast(m_text.IsWordWrap() ? L"Word Wrap: ON" : L"Word Wrap: OFF");
+            InvalidateRect(m_hwnd, NULL, FALSE);
+            break;
+        case BTN_TABLE_VIEW:
+            m_text.ToggleTableView();
+            ShowToast(m_text.IsTableView() ? L"Grid View" : L"Raw Text View");
+            InvalidateRect(m_hwnd, NULL, FALSE);
+            break;
+        default:
+            break;
+    }
+}
+
 
 void AppWindow::RenderSidebar(const D2D1_RECT_F& rect) {
     ID2D1HwndRenderTarget* rt = m_d2d.GetRenderTarget();
@@ -3167,8 +3869,11 @@ void AppWindow::RenderEmptyState(const D2D1_RECT_F& rect) {
     // 4. Interactive Keybind Indicator Pill (Click to open Settings)
     float pillY = subY + 22.0f + 24.0f;
     HotkeyConfig curCfg = ExplorerHook::GetHotkeyConfig();
-    std::wstring keybindLabel = L"Preview Keybind: [ " + curCfg.name + L" ]   •   Settings (Ctrl+,)";
+    std::wstring keybindLabel = (width < 390.0f) ?
+        (L"[ " + curCfg.name + L" ]   Settings (Ctrl+,)") :
+        (L"Preview Keybind: [ " + curCfg.name + L" ]   •   Settings (Ctrl+,)");
     float pillW = 380.0f;
+    if (pillW > width - 24.0f) pillW = width - 24.0f;
     float pillH = 36.0f;
     m_emptyStateKeybindBtn = D2D1::RectF(cx - pillW / 2.0f, pillY, cx + pillW / 2.0f, pillY + pillH);
     D2D1_ROUNDED_RECT pillR = D2D1::RoundedRect(m_emptyStateKeybindBtn, 18.0f, 18.0f);
@@ -3182,16 +3887,21 @@ void AppWindow::RenderEmptyState(const D2D1_RECT_F& rect) {
     rt->DrawText(keybindLabel.c_str(), (UINT32)keybindLabel.length(), m_d2d.FontButton, m_emptyStateKeybindBtn, m_d2d.BrushText);
 
     // 5. Clean Keyboard Legend at bottom (Always centered, never clips)
-    float legendW = 440.0f;
-    float legendH = 30.0f;
-    float legendY = rect.bottom - 46.0f;
-    D2D1_RECT_F legendRect = D2D1::RectF(cx - legendW / 2.0f, legendY, cx + legendW / 2.0f, legendY + legendH);
-    D2D1_ROUNDED_RECT rLegend = D2D1::RoundedRect(legendRect, 15.0f, 15.0f);
-    rt->FillRoundedRectangle(rLegend, m_d2d.BrushCard);
-    rt->DrawRoundedRectangle(rLegend, m_d2d.BrushBorderSubtle, 1.0f);
+    if (height >= 260.0f) {
+        float legendW = 440.0f;
+        if (legendW > width - 24.0f) legendW = width - 24.0f;
+        float legendH = 30.0f;
+        float legendY = rect.bottom - 46.0f;
+        D2D1_RECT_F legendRect = D2D1::RectF(cx - legendW / 2.0f, legendY, cx + legendW / 2.0f, legendY + legendH);
+        D2D1_ROUNDED_RECT rLegend = D2D1::RoundedRect(legendRect, 15.0f, 15.0f);
+        rt->FillRoundedRectangle(rLegend, m_d2d.BrushCard);
+        rt->DrawRoundedRectangle(rLegend, m_d2d.BrushBorderSubtle, 1.0f);
 
-    const WCHAR* hints = L"Space  Preview / Dismiss   •   Esc  Close   •   Ctrl+,  Settings";
-    rt->DrawText(hints, (UINT32)wcslen(hints), m_d2d.FontCaptionCenter ? m_d2d.FontCaptionCenter : m_d2d.FontCaption, legendRect, m_d2d.BrushTextMuted);
+        const WCHAR* hints = (width < 450.0f) ?
+            L"Space  Preview   •   Esc  Close" :
+            L"Space  Preview / Dismiss   •   Esc  Close   •   Ctrl+,  Settings";
+        rt->DrawText(hints, (UINT32)wcslen(hints), m_d2d.FontCaptionCenter ? m_d2d.FontCaptionCenter : m_d2d.FontCaption, legendRect, m_d2d.BrushTextMuted);
+    }
 }
 
 void AppWindow::LoadUnsupportedFileInfo(const std::wstring& filePath) {
@@ -7193,6 +7903,18 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 }
             }
 
+            // -0.8 Overflow Menu clicks & dismiss
+            if (m_showOverflowMenu) {
+                if (hit(m_overflowMenuRect)) {
+                    HandleOverflowMenuClick(pt);
+                    return 0;
+                } else if (!hit(m_btnOverflowRect)) {
+                    m_showOverflowMenu = false;
+                    InvalidateRect(m_hwnd, NULL, FALSE);
+                    return 0;
+                }
+            }
+
             // -1. Preferences & Keybind settings modal clicks
             if (m_showSettings) {
                 if (hit(m_settingsCloseBtn) || hit(m_settingsDoneBtn)) {
@@ -7432,6 +8154,11 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 } else if (hit(m_btnSettingsRect)) {
                     m_pressedButtonId = BTN_SETTINGS;
                     ToggleSettings();
+                } else if (hit(m_btnOverflowRect)) {
+                    m_pressedButtonId = BTN_OVERFLOW_MENU;
+                    m_showOverflowMenu = !m_showOverflowMenu;
+                    m_overflowHoveredIndex = -1;
+                    InvalidateRect(m_hwnd, NULL, FALSE);
                 }
                 return 0;
             }
@@ -7712,6 +8439,14 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 else if (hit(m_btnTableViewRect)) m_hoveredButtonId = BTN_TABLE_VIEW;
                 else if (hit(m_btnOpenWithRect)) m_hoveredButtonId = BTN_OPEN_WITH;
                 else if (hit(m_btnSettingsRect)) m_hoveredButtonId = BTN_SETTINGS;
+                else if (hit(m_btnOverflowRect)) m_hoveredButtonId = BTN_OVERFLOW_MENU;
+            }
+            if (m_showOverflowMenu) {
+                int oldHover = m_overflowHoveredIndex;
+                m_overflowHoveredIndex = GetOverflowItemIndexAt(pt);
+                if (m_overflowHoveredIndex != oldHover) {
+                    InvalidateRect(m_hwnd, NULL, FALSE);
+                }
             }
             if (m_docType == DocumentType::None && hit(m_emptyStateKeybindBtn)) {
                 m_hoveredButtonId = BTN_SETTINGS;
@@ -7981,6 +8716,13 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 m_isRecordingKeybind = false;
                 std::wstring toast = L"Keybind set to " + name;
                 ShowToast(toast.c_str());
+                InvalidateRect(m_hwnd, NULL, FALSE);
+                return 0;
+            }
+
+            // -0.5 Overflow Menu Escape
+            if (m_showOverflowMenu && wParam == VK_ESCAPE) {
+                m_showOverflowMenu = false;
                 InvalidateRect(m_hwnd, NULL, FALSE);
                 return 0;
             }
