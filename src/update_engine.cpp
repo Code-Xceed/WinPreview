@@ -75,11 +75,22 @@ void UpdateEngine::CheckForUpdatesAsync(std::function<void(const UpdateInfo&)> o
     }
 
     m_workerThread = std::thread([this, onComplete]() {
+        m_isSimulated.store(false);
         FetchUpdateInfoSync();
         if (onComplete) {
             onComplete(m_info);
         }
     });
+}
+
+void UpdateEngine::SimulateUpdateForTesting() {
+    m_info.currentVersion = L"1.0.0";
+    m_info.remoteVersion = L"1.1.0";
+    m_info.changelog = L"Simulation test release with performance optimizations and new features.";
+    m_info.isAvailable = true;
+    m_info.errorMessage.clear();
+    m_isSimulated.store(true);
+    m_state.store(UpdateState::UpdateAvailable);
 }
 
 void UpdateEngine::FetchUpdateInfoSync() {
@@ -93,13 +104,27 @@ void UpdateEngine::FetchUpdateInfoSync() {
         return;
     }
 
-    DWORD flags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_SECURE;
+    DWORD flags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_SECURE | INTERNET_FLAG_IGNORE_REDIRECT_TO_HTTPS;
     HINTERNET hUrl = InternetOpenUrlW(hInternet, UPDATE_META_URL, NULL, 0, flags, 0);
     if (!hUrl) {
         InternetCloseHandle(hInternet);
         m_info.errorMessage = L"Unable to contact update server.";
         m_state.store(UpdateState::Failed);
         return;
+    }
+
+    // Check HTTP status code
+    DWORD statusCode = 0;
+    DWORD statusSize = sizeof(statusCode);
+    DWORD index = 0;
+    if (HttpQueryInfoW(hUrl, HTTP_QUERY_STATUS_CODE | HTTP_QUERY_FLAG_NUMBER, &statusCode, &statusSize, &index)) {
+        if (statusCode < 200 || statusCode >= 300) {
+            InternetCloseHandle(hUrl);
+            InternetCloseHandle(hInternet);
+            m_info.errorMessage = L"Update server returned status " + std::to_wstring(statusCode);
+            m_state.store(UpdateState::Failed);
+            return;
+        }
     }
 
     std::string responseBody;
@@ -155,6 +180,19 @@ void UpdateEngine::DownloadUpdateAsync(std::function<void(int percent)> onProgre
         m_workerThread.detach();
     }
 
+    if (m_isSimulated.load()) {
+        m_workerThread = std::thread([this, onProgress, onComplete]() {
+            for (int p = 5; p <= 100; p += 10) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(180));
+                m_downloadProgress.store(p);
+                if (onProgress) onProgress(p);
+            }
+            m_state.store(UpdateState::Downloaded);
+            if (onComplete) onComplete(true, L"SIMULATED_TEST");
+        });
+        return;
+    }
+
     m_workerThread = std::thread([this, onProgress, onComplete]() {
         // Prepare target temporary path
         WCHAR tempPath[MAX_PATH];
@@ -168,13 +206,27 @@ void UpdateEngine::DownloadUpdateAsync(std::function<void(int percent)> onProgre
             return;
         }
 
-        DWORD flags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_SECURE;
+        DWORD flags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_SECURE | INTERNET_FLAG_IGNORE_REDIRECT_TO_HTTPS;
         HINTERNET hUrl = InternetOpenUrlW(hInternet, m_info.downloadUrl.c_str(), NULL, 0, flags, 0);
         if (!hUrl) {
             InternetCloseHandle(hInternet);
             m_state.store(UpdateState::Failed);
             if (onComplete) onComplete(false, L"");
             return;
+        }
+
+        // Verify HTTP 2xx status code
+        DWORD statusCode = 0;
+        DWORD statusSize = sizeof(statusCode);
+        DWORD statusIdx = 0;
+        if (HttpQueryInfoW(hUrl, HTTP_QUERY_STATUS_CODE | HTTP_QUERY_FLAG_NUMBER, &statusCode, &statusSize, &statusIdx)) {
+            if (statusCode < 200 || statusCode >= 300) {
+                InternetCloseHandle(hUrl);
+                InternetCloseHandle(hInternet);
+                m_state.store(UpdateState::Failed);
+                if (onComplete) onComplete(false, L"");
+                return;
+            }
         }
 
         // Query Content-Length for progress computation
@@ -231,6 +283,12 @@ void UpdateEngine::DownloadUpdateAsync(std::function<void(int percent)> onProgre
 }
 
 bool UpdateEngine::LaunchInstallerAndExit(HWND parentHwnd) {
+    if (m_isSimulated.load()) {
+        m_state.store(UpdateState::Idle);
+        m_isSimulated.store(false);
+        return true;
+    }
+
     if (m_downloadedInstallerPath.empty()) return false;
 
     // Launch the installer

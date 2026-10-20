@@ -95,7 +95,8 @@ enum ContextMenuCommand {
     IDM_CTX_FULLSCREEN,
     IDM_CTX_INFO,
     IDM_CTX_SETTINGS,
-    IDM_CTX_CHECK_UPDATES
+    IDM_CTX_CHECK_UPDATES,
+    IDM_CTX_SIMULATE_UPDATE
 };
 
 class AppWindow {

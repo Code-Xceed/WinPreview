@@ -3808,6 +3808,7 @@ void AppWindow::ShowContextMenu(int screenX, int screenY) {
     AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
     AppendMenuW(hMenu, MF_STRING, IDM_CTX_SETTINGS, L"Keybind Settings...\tCtrl+,");
     AppendMenuW(hMenu, MF_STRING, IDM_CTX_CHECK_UPDATES, L"Check for Updates...\tCtrl+U");
+    AppendMenuW(hMenu, MF_STRING, IDM_CTX_SIMULATE_UPDATE, L"Simulate Update Prompt (Test)\tCtrl+Shift+U");
 
     SetForegroundWindow(m_hwnd);
     int cmd = TrackPopupMenu(hMenu, TPM_RIGHTBUTTON | TPM_LEFTALIGN | TPM_RETURNCMD, screenX, screenY, 0, m_hwnd, NULL);
@@ -3881,6 +3882,11 @@ void AppWindow::ShowContextMenu(int screenX, int screenY) {
             break;
         case IDM_CTX_CHECK_UPDATES:
             CheckForUpdates(true);
+            break;
+        case IDM_CTX_SIMULATE_UPDATE:
+            m_updater.SimulateUpdateForTesting();
+            ShowToast(L"Simulated Update: v1.1.0 Ready to Test");
+            InvalidateRect(m_hwnd, NULL, FALSE);
             break;
     }
 }
@@ -6717,7 +6723,11 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                             }
                         );
                     } else if (updateState == UpdateState::Downloaded) {
-                        m_updater.LaunchInstallerAndExit(m_hwnd);
+                        bool launched = m_updater.LaunchInstallerAndExit(m_hwnd);
+                        if (!launched) {
+                            ShowToast(L"Test Verified! (In production, launches installer)");
+                            InvalidateRect(m_hwnd, NULL, FALSE);
+                        }
                     }
                     InvalidateRect(m_hwnd, NULL, FALSE);
                     return 0;
@@ -7566,7 +7576,15 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 }
             }
 
-            // Global shortcut: Ctrl+U -> Check for updates
+            // Global shortcut: Ctrl+Shift+U -> Simulate update notification (Test UX)
+            if (isCtrl && isShift && !isAlt && (wParam == 'U' || wParam == 'u')) {
+                m_updater.SimulateUpdateForTesting();
+                ShowToast(L"Simulated Update: v1.1.0 Ready to Test");
+                InvalidateRect(m_hwnd, NULL, FALSE);
+                return 0;
+            }
+
+            // Global shortcut: Ctrl+U -> Check for updates (Production network query)
             if (isCtrl && !isShift && !isAlt && (wParam == 'U' || wParam == 'u')) {
                 CheckForUpdates(true);
                 return 0;

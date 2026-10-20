@@ -42,6 +42,10 @@ public:
     // Launch the downloaded installer and exit
     bool LaunchInstallerAndExit(HWND parentHwnd);
 
+    // Test simulation for update banner & download UX
+    void SimulateUpdateForTesting();
+    bool IsSimulated() const { return m_isSimulated.load(); }
+
     // State getters
     UpdateState GetState() const { return m_state.load(); }
     int GetDownloadProgress() const { return m_downloadProgress.load(); }
@@ -53,6 +57,7 @@ public:
 private:
     std::atomic<UpdateState> m_state{ UpdateState::Idle };
     std::atomic<int> m_downloadProgress{ 0 };
+    std::atomic<bool> m_isSimulated{ false };
     UpdateInfo m_info;
     std::wstring m_downloadedInstallerPath;
 

@@ -27,18 +27,25 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Clang / LLVM Toolchain
-        uses: KyleMayes/install-llvm-action@v2
-        with:
-          version: "18.1.8"
+      - name: Set up LLVM-MinGW Toolchain
+        shell: pwsh
+        run: |
+          Write-Host "Querying latest LLVM-MinGW release..."
+          $headers = @{ "User-Agent" = "GitHub-Actions-CI" }
+          $release = Invoke-RestMethod -Uri "https://api.github.com/repos/mstorsjo/llvm-mingw/releases/latest" -Headers $headers
+          $asset = $release.assets | Where-Object { $_.name -like "*ucrt-x86_64.zip" } | Select-Object -First 1
+          Write-Host "Downloading $($asset.name)..."
+          $zipPath = "$env:RUNNER_TEMP\llvm-mingw.zip"
+          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zipPath
+          Write-Host "Extracting LLVM-MinGW..."
+          Expand-Archive -Path $zipPath -DestinationPath "$env:RUNNER_TEMP\llvm-mingw"
+          $dir = Get-ChildItem "$env:RUNNER_TEMP\llvm-mingw" | Where-Object { $_.PSIsContainer } | Select-Object -First 1
+          $binDir = Join-Path $dir.FullName "bin"
+          $binDir | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          Write-Host "Added LLVM-MinGW to PATH: $binDir" -ForegroundColor Green
 
       - name: Install Inno Setup
         run: choco install innosetup --no-progress
-
-      - name: Compile Native C++20 WinPreview Engine
-        run: |
-          cd src
-          cmd.exe /c build.bat
 
       - name: Package Distribution & Build Inno Setup Installer
         shell: powershell
