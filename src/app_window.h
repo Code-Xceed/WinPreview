@@ -322,6 +322,8 @@ private:
     D2D1_RECT_F m_overflowMenuRect = {};
     bool m_showOverflowMenu = false;
     int m_overflowHoveredIndex = -1;
+    float m_overflowScrollY = 0.0f;
+    float m_overflowTotalH = 0.0f;
     D2D1_RECT_F m_tabThumbsRect = {};
     D2D1_RECT_F m_tabOutlineRect = {};
     std::wstring m_openWithAppName;

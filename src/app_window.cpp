@@ -1825,18 +1825,18 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
     bool showPdfNav = (m_docType == DocumentType::Pdf && m_totalPages > 1);
 
     if (m_docType == DocumentType::Image) {
-        if (availW >= 540.0f) dockW = 498.0f;
-        else if (availW >= 390.0f) dockW = 282.0f;
-        else dockW = 196.0f;
+        if (availW >= 460.0f) dockW = 427.0f;
+        else if (availW >= 320.0f) dockW = 210.0f;
+        else dockW = 136.0f;
     } else if (m_docType == DocumentType::Pdf) {
         if (showPdfNav) {
-            if (availW >= 620.0f) dockW = 598.0f;
-            else if (availW >= 420.0f) dockW = 382.0f;
-            else dockW = 239.0f;
+            if (availW >= 560.0f) dockW = 538.0f;
+            else if (availW >= 380.0f) dockW = 322.0f;
+            else dockW = 194.0f;
         } else {
-            if (availW >= 540.0f) dockW = 498.0f;
-            else if (availW >= 390.0f) dockW = 282.0f;
-            else dockW = 196.0f;
+            if (availW >= 460.0f) dockW = 427.0f;
+            else if (availW >= 320.0f) dockW = 210.0f;
+            else dockW = 136.0f;
         }
     } else if (m_docType == DocumentType::Text) {
         if (availW >= 560.0f) dockW = 514.0f;
@@ -1847,15 +1847,15 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
         else if (availW >= 420.0f) dockW = 364.0f;
         else dockW = 232.0f;
     } else if (m_docType == DocumentType::Office || m_docType == DocumentType::Svg) {
-        if (availW >= 500.0f) dockW = 464.0f;
-        else if (availW >= 390.0f) dockW = 282.0f;
-        else dockW = 196.0f;
+        if (availW >= 440.0f) dockW = 393.0f;
+        else if (availW >= 320.0f) dockW = 210.0f;
+        else dockW = 136.0f;
     } else if (m_docType == DocumentType::Markdown || m_docType == DocumentType::Notebook) {
-        if (availW >= 360.0f) dockW = 272.0f;
-        else dockW = 159.0f;
+        if (availW >= 320.0f) dockW = 218.0f;
+        else dockW = 88.0f;
     } else if (m_docType == DocumentType::Font) {
-        if (availW >= 320.0f) dockW = 225.0f;
-        else dockW = 112.0f;
+        if (availW >= 280.0f) dockW = 172.0f;
+        else dockW = 74.0f;
     }
 
     if (dockW > availW - 16.0f) dockW = availW - 16.0f;
@@ -1897,51 +1897,11 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
     // DOCK RENDERING: IMAGE MODE
     // =========================================================================
     if (m_docType == DocumentType::Image) {
-        bool isFull = (availW >= 540.0f);
-        bool isCompact = (availW < 390.0f);
+        bool isFull = (availW >= 460.0f);
+        bool isCompact = (availW < 320.0f);
 
         if (!isCompact) {
-            // Segment 0: Folder Navigation Capsule [ ◀ | ▶ ]
-            float navH = 28.0f;
-            float navY = dockY + (dockH - navH) / 2.0f;
-            float navBtnW = 27.0f;
-            float totalNavW = navBtnW + 1.0f + navBtnW; // 55px
-
-            D2D1_RECT_F navRect = D2D1::RectF(curX, navY, curX + totalNavW, navY + navH);
-            D2D1_ROUNDED_RECT navR = D2D1::RoundedRect(navRect, 6.0f, 6.0f);
-            rt->FillRoundedRectangle(navR, m_d2d.BrushCard);
-            rt->DrawRoundedRectangle(navR, m_d2d.BrushBorderSubtle, 1.0f);
-
-            // Prev [◀]
-            m_btnPrevPageRect = D2D1::RectF(curX, navY, curX + navBtnW, navY + navH);
-            if (m_pressedButtonId == BTN_PREV_PAGE) {
-                rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnPrevPageRect, 5.0f, 5.0f), m_d2d.BrushActive);
-            } else if (m_hoveredButtonId == BTN_PREV_PAGE) {
-                rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnPrevPageRect, 5.0f, 5.0f), m_d2d.BrushHover);
-            }
-            float prevCx = m_btnPrevPageRect.left + navBtnW / 2.0f;
-            float prevCy = navY + navH / 2.0f + (m_pressedButtonId == BTN_PREV_PAGE ? 0.5f : 0.0f);
-            m_d2d.DrawIconChevronLeft(prevCx, prevCy, 13.0f, m_d2d.BrushText);
-
-            float divNavX = curX + navBtnW;
-            rt->DrawLine(D2D1::Point2F(divNavX, navY + 4.0f), D2D1::Point2F(divNavX, navY + navH - 4.0f), m_d2d.BrushBorder, 1.0f);
-
-            // Next [▶]
-            m_btnNextPageRect = D2D1::RectF(divNavX + 1.0f, navY, curX + totalNavW, navY + navH);
-            if (m_pressedButtonId == BTN_NEXT_PAGE) {
-                rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnNextPageRect, 5.0f, 5.0f), m_d2d.BrushActive);
-            } else if (m_hoveredButtonId == BTN_NEXT_PAGE) {
-                rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnNextPageRect, 5.0f, 5.0f), m_d2d.BrushHover);
-            }
-            float nextCx = m_btnNextPageRect.left + navBtnW / 2.0f;
-            float nextCy = navY + navH / 2.0f + (m_pressedButtonId == BTN_NEXT_PAGE ? 0.5f : 0.0f);
-            m_d2d.DrawIconChevronRight(nextCx, nextCy, 13.0f, m_d2d.BrushText);
-
-            curX += totalNavW;
-            drawDivider(curX + 8.0f);
-            curX += 17.0f;
-
-            // Segment 1: Inset Zoom Capsule [ - | 54% | + ]
+            // Segment 1: Inset Zoom Capsule [ - | 100% | + ]
             float capH = 28.0f;
             float capY = dockY + (dockH - capH) / 2.0f;
             float zoomBtnW = 27.0f;
@@ -1997,13 +1957,13 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
             drawDivider(curX + 8.0f);
             curX += 17.0f;
 
-            // Segment 2: Fit to Window [ <-> ]
+            // Fit to Window [ <-> ]
             m_btnZoomFitRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
             DrawIconButton(m_btnZoomFitRect, ICON_ZOOM_FIT, BTN_ZOOM_FIT, true);
             curX += 30.0f;
 
             if (isFull) {
-                // Segment 3: Rotation [ ↺  ↻ ]
+                // Rotation [ ↺  ↻ ]
                 drawDivider(curX + 8.0f);
                 curX += 17.0f;
 
@@ -2018,7 +1978,7 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
                 drawDivider(curX + 8.0f);
                 curX += 17.0f;
 
-                // Segment 4: Actions [ ⯐ ] [ ⓘ ] [ ↗ ] [ ⚙ ] [ ⛶ ]
+                // Actions [ ⯐ ] [ ⓘ ] [ ↗ ] [ ⚙ ] [ ⛶ ]
                 m_btnCropRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
                 DrawIconButton(m_btnCropRect, ICON_CROP, BTN_CROP, true);
                 curX += 34.0f;
@@ -2045,47 +2005,8 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
                 DrawIconButton(m_btnOverflowRect, ICON_MORE, BTN_OVERFLOW_MENU, true);
             }
         } else {
-            // Ultra-compact tier (< 390px down to 300px)
-            float navH = 26.0f;
-            float navY = dockY + (dockH - navH) / 2.0f;
-            float navBtnW = 23.5f;
-            float totalNavW = 48.0f;
-
-            D2D1_RECT_F navRect = D2D1::RectF(curX, navY, curX + totalNavW, navY + navH);
-            D2D1_ROUNDED_RECT navR = D2D1::RoundedRect(navRect, 6.0f, 6.0f);
-            rt->FillRoundedRectangle(navR, m_d2d.BrushCard);
-            rt->DrawRoundedRectangle(navR, m_d2d.BrushBorderSubtle, 1.0f);
-
-            // Prev [◀]
-            m_btnPrevPageRect = D2D1::RectF(curX, navY, curX + navBtnW, navY + navH);
-            if (m_pressedButtonId == BTN_PREV_PAGE) {
-                rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnPrevPageRect, 5.0f, 5.0f), m_d2d.BrushActive);
-            } else if (m_hoveredButtonId == BTN_PREV_PAGE) {
-                rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnPrevPageRect, 5.0f, 5.0f), m_d2d.BrushHover);
-            }
-            float prevCx = m_btnPrevPageRect.left + navBtnW / 2.0f;
-            float prevCy = navY + navH / 2.0f + (m_pressedButtonId == BTN_PREV_PAGE ? 0.5f : 0.0f);
-            m_d2d.DrawIconChevronLeft(prevCx, prevCy, 12.0f, m_d2d.BrushText);
-
-            float divNavX = curX + navBtnW;
-            rt->DrawLine(D2D1::Point2F(divNavX, navY + 4.0f), D2D1::Point2F(divNavX, navY + navH - 4.0f), m_d2d.BrushBorder, 1.0f);
-
-            // Next [▶]
-            m_btnNextPageRect = D2D1::RectF(divNavX + 1.0f, navY, curX + totalNavW, navY + navH);
-            if (m_pressedButtonId == BTN_NEXT_PAGE) {
-                rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnNextPageRect, 5.0f, 5.0f), m_d2d.BrushActive);
-            } else if (m_hoveredButtonId == BTN_NEXT_PAGE) {
-                rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnNextPageRect, 5.0f, 5.0f), m_d2d.BrushHover);
-            }
-            float nextCx = m_btnNextPageRect.left + navBtnW / 2.0f;
-            float nextCy = navY + navH / 2.0f + (m_pressedButtonId == BTN_NEXT_PAGE ? 0.5f : 0.0f);
-            m_d2d.DrawIconChevronRight(nextCx, nextCy, 12.0f, m_d2d.BrushText);
-
-            curX += totalNavW;
-            drawDivider(curX + 5.5f);
-            curX += 12.0f;
-
-            // Compact Zoom Pill [ 54% ]
+            // Ultra-compact tier (< 320px down to 200px)
+            // Inset Zoom Reset Pill [ 100% ]
             float capH = 26.0f;
             float capY = dockY + (dockH - capH) / 2.0f;
             float totalCapW = 46.0f;
@@ -2122,7 +2043,7 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
             DrawIconButton(m_btnOverflowRect, ICON_MORE, BTN_OVERFLOW_MENU, true);
         }
     }
-    // =========================================================================
+        // =========================================================================
     // DOCK RENDERING: PDF MODE
     // =========================================================================
     else if (m_docType == DocumentType::Pdf) {
@@ -2384,45 +2305,8 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
                 DrawIconButton(m_btnOverflowRect, ICON_MORE, BTN_OVERFLOW_MENU, true);
             }
         } else {
-            // Single-page PDF
+            // Single-page PDF (No folder navigation chevrons)
             if (!isCompact) {
-                float navH = 28.0f;
-                float navY = dockY + (dockH - navH) / 2.0f;
-                float navBtnW = 27.0f;
-                float totalNavW = navBtnW + 1.0f + navBtnW; // 55px
-
-                D2D1_RECT_F navRect = D2D1::RectF(curX, navY, curX + totalNavW, navY + navH);
-                D2D1_ROUNDED_RECT navR = D2D1::RoundedRect(navRect, 6.0f, 6.0f);
-                rt->FillRoundedRectangle(navR, m_d2d.BrushCard);
-                rt->DrawRoundedRectangle(navR, m_d2d.BrushBorderSubtle, 1.0f);
-
-                m_btnPrevPageRect = D2D1::RectF(curX, navY, curX + navBtnW, navY + navH);
-                if (m_pressedButtonId == BTN_PREV_PAGE) {
-                    rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnPrevPageRect, 5.0f, 5.0f), m_d2d.BrushActive);
-                } else if (m_hoveredButtonId == BTN_PREV_PAGE) {
-                    rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnPrevPageRect, 5.0f, 5.0f), m_d2d.BrushHover);
-                }
-                float prevCx = m_btnPrevPageRect.left + navBtnW / 2.0f;
-                float prevCy = navY + navH / 2.0f + (m_pressedButtonId == BTN_PREV_PAGE ? 0.5f : 0.0f);
-                m_d2d.DrawIconChevronLeft(prevCx, prevCy, 13.0f, m_d2d.BrushText);
-
-                float divNavX = curX + navBtnW;
-                rt->DrawLine(D2D1::Point2F(divNavX, navY + 4.0f), D2D1::Point2F(divNavX, navY + navH - 4.0f), m_d2d.BrushBorder, 1.0f);
-
-                m_btnNextPageRect = D2D1::RectF(divNavX + 1.0f, navY, curX + totalNavW, navY + navH);
-                if (m_pressedButtonId == BTN_NEXT_PAGE) {
-                    rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnNextPageRect, 5.0f, 5.0f), m_d2d.BrushActive);
-                } else if (m_hoveredButtonId == BTN_NEXT_PAGE) {
-                    rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnNextPageRect, 5.0f, 5.0f), m_d2d.BrushHover);
-                }
-                float nextCx = m_btnNextPageRect.left + navBtnW / 2.0f;
-                float nextCy = navY + navH / 2.0f + (m_pressedButtonId == BTN_NEXT_PAGE ? 0.5f : 0.0f);
-                m_d2d.DrawIconChevronRight(nextCx, nextCy, 13.0f, m_d2d.BrushText);
-
-                curX += totalNavW;
-                drawDivider(curX + 8.0f);
-                curX += 17.0f;
-
                 float capH = 28.0f;
                 float capY = dockY + (dockH - capH) / 2.0f;
                 float zoomBtnW = 27.0f;
@@ -2520,43 +2404,6 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
                 }
             } else {
                 // Compact Single-page PDF
-                float navH = 26.0f;
-                float navY = dockY + (dockH - navH) / 2.0f;
-                float navBtnW = 23.5f;
-                float totalNavW = 48.0f;
-
-                D2D1_RECT_F navRect = D2D1::RectF(curX, navY, curX + totalNavW, navY + navH);
-                D2D1_ROUNDED_RECT navR = D2D1::RoundedRect(navRect, 6.0f, 6.0f);
-                rt->FillRoundedRectangle(navR, m_d2d.BrushCard);
-                rt->DrawRoundedRectangle(navR, m_d2d.BrushBorderSubtle, 1.0f);
-
-                m_btnPrevPageRect = D2D1::RectF(curX, navY, curX + navBtnW, navY + navH);
-                if (m_pressedButtonId == BTN_PREV_PAGE) {
-                    rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnPrevPageRect, 5.0f, 5.0f), m_d2d.BrushActive);
-                } else if (m_hoveredButtonId == BTN_PREV_PAGE) {
-                    rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnPrevPageRect, 5.0f, 5.0f), m_d2d.BrushHover);
-                }
-                float prevCx = m_btnPrevPageRect.left + navBtnW / 2.0f;
-                float prevCy = navY + navH / 2.0f + (m_pressedButtonId == BTN_PREV_PAGE ? 0.5f : 0.0f);
-                m_d2d.DrawIconChevronLeft(prevCx, prevCy, 12.0f, m_d2d.BrushText);
-
-                float divNavX = curX + navBtnW;
-                rt->DrawLine(D2D1::Point2F(divNavX, navY + 4.0f), D2D1::Point2F(divNavX, navY + navH - 4.0f), m_d2d.BrushBorder, 1.0f);
-
-                m_btnNextPageRect = D2D1::RectF(divNavX + 1.0f, navY, curX + totalNavW, navY + navH);
-                if (m_pressedButtonId == BTN_NEXT_PAGE) {
-                    rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnNextPageRect, 5.0f, 5.0f), m_d2d.BrushActive);
-                } else if (m_hoveredButtonId == BTN_NEXT_PAGE) {
-                    rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnNextPageRect, 5.0f, 5.0f), m_d2d.BrushHover);
-                }
-                float nextCx = m_btnNextPageRect.left + navBtnW / 2.0f;
-                float nextCy = navY + navH / 2.0f + (m_pressedButtonId == BTN_NEXT_PAGE ? 0.5f : 0.0f);
-                m_d2d.DrawIconChevronRight(nextCx, nextCy, 12.0f, m_d2d.BrushText);
-
-                curX += totalNavW;
-                drawDivider(curX + 5.5f);
-                curX += 12.0f;
-
                 float capH = 26.0f;
                 float capY = dockY + (dockH - capH) / 2.0f;
                 float totalCapW = 46.0f;
@@ -2592,7 +2439,7 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
             }
         }
     }
-    // =========================================================================
+        // =========================================================================
     // DOCK RENDERING: TEXT & CODE MODE
     // =========================================================================
     else if (m_docType == DocumentType::Text) {
@@ -2958,47 +2805,10 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
     // DOCK RENDERING: OFFICE / PRESENTATION SLIDE MODE
     // =========================================================================
     else if (m_docType == DocumentType::Office || m_docType == DocumentType::Svg) {
-        bool isFull = (availW >= 500.0f);
-        bool isCompact = (availW < 390.0f);
+        bool isFull = (availW >= 440.0f);
+        bool isCompact = (availW < 320.0f);
 
         if (!isCompact) {
-            float navH = 28.0f;
-            float navY = dockY + (dockH - navH) / 2.0f;
-            float navBtnW = 27.0f;
-            float totalNavW = navBtnW + 1.0f + navBtnW; // 55px
-
-            D2D1_RECT_F navRect = D2D1::RectF(curX, navY, curX + totalNavW, navY + navH);
-            D2D1_ROUNDED_RECT navR = D2D1::RoundedRect(navRect, 6.0f, 6.0f);
-            rt->FillRoundedRectangle(navR, m_d2d.BrushCard);
-            rt->DrawRoundedRectangle(navR, m_d2d.BrushBorderSubtle, 1.0f);
-
-            m_btnPrevPageRect = D2D1::RectF(curX, navY, curX + navBtnW, navY + navH);
-            if (m_pressedButtonId == BTN_PREV_PAGE) {
-                rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnPrevPageRect, 5.0f, 5.0f), m_d2d.BrushActive);
-            } else if (m_hoveredButtonId == BTN_PREV_PAGE) {
-                rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnPrevPageRect, 5.0f, 5.0f), m_d2d.BrushHover);
-            }
-            float prevCx = m_btnPrevPageRect.left + navBtnW / 2.0f;
-            float prevCy = navY + navH / 2.0f + (m_pressedButtonId == BTN_PREV_PAGE ? 0.5f : 0.0f);
-            m_d2d.DrawIconChevronLeft(prevCx, prevCy, 13.0f, m_d2d.BrushText);
-
-            float divNavX = curX + navBtnW;
-            rt->DrawLine(D2D1::Point2F(divNavX, navY + 4.0f), D2D1::Point2F(divNavX, navY + navH - 4.0f), m_d2d.BrushBorder, 1.0f);
-
-            m_btnNextPageRect = D2D1::RectF(divNavX + 1.0f, navY, curX + totalNavW, navY + navH);
-            if (m_pressedButtonId == BTN_NEXT_PAGE) {
-                rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnNextPageRect, 5.0f, 5.0f), m_d2d.BrushActive);
-            } else if (m_hoveredButtonId == BTN_NEXT_PAGE) {
-                rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnNextPageRect, 5.0f, 5.0f), m_d2d.BrushHover);
-            }
-            float nextCx = m_btnNextPageRect.left + navBtnW / 2.0f;
-            float nextCy = navY + navH / 2.0f + (m_pressedButtonId == BTN_NEXT_PAGE ? 0.5f : 0.0f);
-            m_d2d.DrawIconChevronRight(nextCx, nextCy, 13.0f, m_d2d.BrushText);
-
-            curX += totalNavW;
-            drawDivider(curX + 8.0f);
-            curX += 17.0f;
-
             float capH = 28.0f;
             float capY = dockY + (dockH - capH) / 2.0f;
             float zoomBtnW = 27.0f;
@@ -3093,43 +2903,6 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
             }
         } else {
             // Compact tier
-            float navH = 26.0f;
-            float navY = dockY + (dockH - navH) / 2.0f;
-            float navBtnW = 23.5f;
-            float totalNavW = 48.0f;
-
-            D2D1_RECT_F navRect = D2D1::RectF(curX, navY, curX + totalNavW, navY + navH);
-            D2D1_ROUNDED_RECT navR = D2D1::RoundedRect(navRect, 6.0f, 6.0f);
-            rt->FillRoundedRectangle(navR, m_d2d.BrushCard);
-            rt->DrawRoundedRectangle(navR, m_d2d.BrushBorderSubtle, 1.0f);
-
-            m_btnPrevPageRect = D2D1::RectF(curX, navY, curX + navBtnW, navY + navH);
-            if (m_pressedButtonId == BTN_PREV_PAGE) {
-                rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnPrevPageRect, 5.0f, 5.0f), m_d2d.BrushActive);
-            } else if (m_hoveredButtonId == BTN_PREV_PAGE) {
-                rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnPrevPageRect, 5.0f, 5.0f), m_d2d.BrushHover);
-            }
-            float prevCx = m_btnPrevPageRect.left + navBtnW / 2.0f;
-            float prevCy = navY + navH / 2.0f + (m_pressedButtonId == BTN_PREV_PAGE ? 0.5f : 0.0f);
-            m_d2d.DrawIconChevronLeft(prevCx, prevCy, 12.0f, m_d2d.BrushText);
-
-            float divNavX = curX + navBtnW;
-            rt->DrawLine(D2D1::Point2F(divNavX, navY + 4.0f), D2D1::Point2F(divNavX, navY + navH - 4.0f), m_d2d.BrushBorder, 1.0f);
-
-            m_btnNextPageRect = D2D1::RectF(divNavX + 1.0f, navY, curX + totalNavW, navY + navH);
-            if (m_pressedButtonId == BTN_NEXT_PAGE) {
-                rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnNextPageRect, 5.0f, 5.0f), m_d2d.BrushActive);
-            } else if (m_hoveredButtonId == BTN_NEXT_PAGE) {
-                rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnNextPageRect, 5.0f, 5.0f), m_d2d.BrushHover);
-            }
-            float nextCx = m_btnNextPageRect.left + navBtnW / 2.0f;
-            float nextCy = navY + navH / 2.0f + (m_pressedButtonId == BTN_NEXT_PAGE ? 0.5f : 0.0f);
-            m_d2d.DrawIconChevronRight(nextCx, nextCy, 12.0f, m_d2d.BrushText);
-
-            curX += totalNavW;
-            drawDivider(curX + 5.5f);
-            curX += 12.0f;
-
             float capH = 26.0f;
             float capY = dockY + (dockH - capH) / 2.0f;
             float totalCapW = 46.0f;
@@ -3164,48 +2937,11 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
             DrawIconButton(m_btnOverflowRect, ICON_MORE, BTN_OVERFLOW_MENU, true);
         }
     }
-    // =========================================================================
+        // =========================================================================
     // DOCK RENDERING: MARKDOWN & NOTEBOOK MODE
     // =========================================================================
     else if (m_docType == DocumentType::Markdown || m_docType == DocumentType::Notebook) {
-        bool isFull = (availW >= 360.0f);
-
-        float navH = 28.0f;
-        float navY = dockY + (dockH - navH) / 2.0f;
-        float navBtnW = 27.0f;
-        float totalNavW = navBtnW + 1.0f + navBtnW;
-
-        D2D1_RECT_F navRect = D2D1::RectF(curX, navY, curX + totalNavW, navY + navH);
-        D2D1_ROUNDED_RECT navR = D2D1::RoundedRect(navRect, 6.0f, 6.0f);
-        rt->FillRoundedRectangle(navR, m_d2d.BrushCard);
-        rt->DrawRoundedRectangle(navR, m_d2d.BrushBorderSubtle, 1.0f);
-
-        m_btnPrevPageRect = D2D1::RectF(curX, navY, curX + navBtnW, navY + navH);
-        if (m_pressedButtonId == BTN_PREV_PAGE) {
-            rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnPrevPageRect, 5.0f, 5.0f), m_d2d.BrushActive);
-        } else if (m_hoveredButtonId == BTN_PREV_PAGE) {
-            rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnPrevPageRect, 5.0f, 5.0f), m_d2d.BrushHover);
-        }
-        float prevCx = m_btnPrevPageRect.left + navBtnW / 2.0f;
-        float prevCy = navY + navH / 2.0f + (m_pressedButtonId == BTN_PREV_PAGE ? 0.5f : 0.0f);
-        m_d2d.DrawIconChevronLeft(prevCx, prevCy, 13.0f, m_d2d.BrushText);
-
-        float divNavX = curX + navBtnW;
-        rt->DrawLine(D2D1::Point2F(divNavX, navY + 4.0f), D2D1::Point2F(divNavX, navY + navH - 4.0f), m_d2d.BrushBorder, 1.0f);
-
-        m_btnNextPageRect = D2D1::RectF(divNavX + 1.0f, navY, curX + totalNavW, navY + navH);
-        if (m_pressedButtonId == BTN_NEXT_PAGE) {
-            rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnNextPageRect, 5.0f, 5.0f), m_d2d.BrushActive);
-        } else if (m_hoveredButtonId == BTN_NEXT_PAGE) {
-            rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnNextPageRect, 5.0f, 5.0f), m_d2d.BrushHover);
-        }
-        float nextCx = m_btnNextPageRect.left + navBtnW / 2.0f;
-        float nextCy = navY + navH / 2.0f + (m_pressedButtonId == BTN_NEXT_PAGE ? 0.5f : 0.0f);
-        m_d2d.DrawIconChevronRight(nextCx, nextCy, 13.0f, m_d2d.BrushText);
-
-        curX += totalNavW;
-        drawDivider(curX + 8.0f);
-        curX += 17.0f;
+        bool isFull = (availW >= 320.0f);
 
         m_btnCopyTextRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
         DrawIconButton(m_btnCopyTextRect, ICON_COPY, BTN_COPY_TEXT, true);
@@ -3237,51 +2973,13 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
             DrawIconButton(m_btnOverflowRect, ICON_MORE, BTN_OVERFLOW_MENU, true);
         }
     }
-    // =========================================================================
+        // =========================================================================
     // DOCK RENDERING: FONT MODE
     // =========================================================================
     else if (m_docType == DocumentType::Font) {
-        bool isFull = (availW >= 320.0f);
-
-        float navH = 28.0f;
-        float navY = dockY + (dockH - navH) / 2.0f;
-        float navBtnW = 27.0f;
-        float totalNavW = navBtnW + 1.0f + navBtnW;
-
-        D2D1_RECT_F navRect = D2D1::RectF(curX, navY, curX + totalNavW, navY + navH);
-        D2D1_ROUNDED_RECT navR = D2D1::RoundedRect(navRect, 6.0f, 6.0f);
-        rt->FillRoundedRectangle(navR, m_d2d.BrushCard);
-        rt->DrawRoundedRectangle(navR, m_d2d.BrushBorderSubtle, 1.0f);
-
-        m_btnPrevPageRect = D2D1::RectF(curX, navY, curX + navBtnW, navY + navH);
-        if (m_pressedButtonId == BTN_PREV_PAGE) {
-            rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnPrevPageRect, 5.0f, 5.0f), m_d2d.BrushActive);
-        } else if (m_hoveredButtonId == BTN_PREV_PAGE) {
-            rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnPrevPageRect, 5.0f, 5.0f), m_d2d.BrushHover);
-        }
-        float prevCx = m_btnPrevPageRect.left + navBtnW / 2.0f;
-        float prevCy = navY + navH / 2.0f + (m_pressedButtonId == BTN_PREV_PAGE ? 0.5f : 0.0f);
-        m_d2d.DrawIconChevronLeft(prevCx, prevCy, 13.0f, m_d2d.BrushText);
-
-        float divNavX = curX + navBtnW;
-        rt->DrawLine(D2D1::Point2F(divNavX, navY + 4.0f), D2D1::Point2F(divNavX, navY + navH - 4.0f), m_d2d.BrushBorder, 1.0f);
-
-        m_btnNextPageRect = D2D1::RectF(divNavX + 1.0f, navY, curX + totalNavW, navY + navH);
-        if (m_pressedButtonId == BTN_NEXT_PAGE) {
-            rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnNextPageRect, 5.0f, 5.0f), m_d2d.BrushActive);
-        } else if (m_hoveredButtonId == BTN_NEXT_PAGE) {
-            rt->FillRoundedRectangle(D2D1::RoundedRect(m_btnNextPageRect, 5.0f, 5.0f), m_d2d.BrushHover);
-        }
-        float nextCx = m_btnNextPageRect.left + navBtnW / 2.0f;
-        float nextCy = navY + navH / 2.0f + (m_pressedButtonId == BTN_NEXT_PAGE ? 0.5f : 0.0f);
-        m_d2d.DrawIconChevronRight(nextCx, nextCy, 13.0f, m_d2d.BrushText);
-
-        curX += totalNavW;
+        bool isFull = (availW >= 280.0f);
 
         if (isFull) {
-            drawDivider(curX + 8.0f);
-            curX += 17.0f;
-
             m_btnInfoRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
             DrawIconButton(m_btnInfoRect, ICON_INFO, BTN_INFO, true);
             curX += 34.0f;
@@ -3297,10 +2995,14 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
             m_btnToolbarFsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
             DrawIconButton(m_btnToolbarFsRect, ICON_FULLSCREEN, BTN_TOOLBAR_FS, true);
         } else {
-            drawDivider(curX + 8.0f);
-            curX += 17.0f;
+            m_btnInfoRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+            DrawIconButton(m_btnInfoRect, ICON_INFO, BTN_INFO, true);
+            curX += 30.0f;
 
-            m_btnOverflowRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+            drawDivider(curX + 5.5f);
+            curX += 12.0f;
+
+            m_btnOverflowRect = D2D1::RectF(curX, btnY, curX + 28.0f, btnY + btnH);
             DrawIconButton(m_btnOverflowRect, ICON_MORE, BTN_OVERFLOW_MENU, true);
         }
     }
@@ -3393,33 +3095,46 @@ void AppWindow::RenderOverflowMenu(const D2D1_RECT_F& canvasRect) {
     std::vector<OverflowMenuItem> items = GetCurrentOverflowItems();
     if (items.empty()) return;
 
-    float itemH = 32.0f;
-    float dividerH = 7.0f;
-    float padY = 6.0f;
-    float menuW = 236.0f;
+    float itemH = 28.0f;
+    float dividerH = 5.0f;
+    float padY = 5.0f;
+    float menuW = 230.0f;
 
     float totalMenuH = padY * 2.0f;
     for (const auto& it : items) {
         if (it.isDivider) totalMenuH += dividerH;
         else totalMenuH += itemH;
     }
+    m_overflowTotalH = totalMenuH;
 
-    // Anchor: right-aligned with m_btnOverflowRect
+    // Anchor: right-aligned with m_btnOverflowRect, STRICTLY downwards!
     float menuX = m_btnOverflowRect.right - menuW;
     float menuY = m_btnOverflowRect.bottom + 6.0f;
 
-    // Clamps
+    // Horizontal bounds clamping
     if (menuX + menuW > canvasRect.right - 8.0f) menuX = canvasRect.right - 8.0f - menuW;
     if (menuX < 8.0f) menuX = 8.0f;
-    if (menuY + totalMenuH > canvasRect.bottom - 8.0f) {
-        menuY = m_btnOverflowRect.top - 6.0f - totalMenuH;
+
+    // Constrain height strictly to canvas bounds downwards
+    float availH = canvasRect.bottom - menuY - 8.0f;
+    if (availH < 80.0f) availH = 80.0f;
+
+    float renderH = (totalMenuH < availH) ? totalMenuH : availH;
+    bool needsScroll = (totalMenuH > renderH);
+
+    if (!needsScroll) {
+        m_overflowScrollY = 0.0f;
+    } else {
+        float maxScroll = totalMenuH - renderH;
+        if (m_overflowScrollY < 0.0f) m_overflowScrollY = 0.0f;
+        if (m_overflowScrollY > maxScroll) m_overflowScrollY = maxScroll;
     }
 
-    m_overflowMenuRect = D2D1::RectF(menuX, menuY, menuX + menuW, menuY + totalMenuH);
+    m_overflowMenuRect = D2D1::RectF(menuX, menuY, menuX + menuW, menuY + renderH);
 
     // 1. Ambient drop shadow (multi-pass falloff)
     D2D1_ROUNDED_RECT rShadow = D2D1::RoundedRect(
-        D2D1::RectF(menuX, menuY + 2.5f, menuX + menuW, menuY + totalMenuH + 6.0f),
+        D2D1::RectF(menuX, menuY + 2.5f, menuX + menuW, menuY + renderH + 6.0f),
         8.0f, 8.0f
     );
     m_d2d.BrushShadowDark->SetOpacity(0.40f);
@@ -3435,48 +3150,70 @@ void AppWindow::RenderOverflowMenu(const D2D1_RECT_F& canvasRect) {
     // 3. Subtle 1px outer border
     rt->DrawRoundedRectangle(rMenu, m_d2d.BrushBorderSubtle, 1.0f);
 
-    // 4. Render Items
-    float curY = menuY + padY;
+    // 4. Render Items with Axis Aligned Clip for smooth scrolling
+    rt->PushAxisAlignedClip(m_overflowMenuRect, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+
+    float curY = menuY + padY - m_overflowScrollY;
 
     for (size_t i = 0; i < items.size(); ++i) {
         const auto& it = items[i];
         if (it.isDivider) {
             float lineY = curY + dividerH / 2.0f;
-            rt->DrawLine(
-                D2D1::Point2F(menuX + 12.0f, lineY),
-                D2D1::Point2F(menuX + menuW - 12.0f, lineY),
-                m_d2d.BrushBorder, 1.0f
-            );
+            if (lineY >= menuY && lineY <= menuY + renderH) {
+                rt->DrawLine(
+                    D2D1::Point2F(menuX + 10.0f, lineY),
+                    D2D1::Point2F(menuX + menuW - 10.0f, lineY),
+                    m_d2d.BrushBorder, 1.0f
+                );
+            }
             curY += dividerH;
         } else {
-            D2D1_RECT_F itemRect = D2D1::RectF(menuX + 5.0f, curY, menuX + menuW - 5.0f, curY + itemH);
+            D2D1_RECT_F itemRect = D2D1::RectF(menuX + 4.0f, curY, menuX + menuW - 4.0f, curY + itemH);
 
-            bool isHovered = (m_overflowHoveredIndex == (int)i);
-            if (isHovered && it.isEnabled) {
-                D2D1_ROUNDED_RECT rHover = D2D1::RoundedRect(itemRect, 5.0f, 5.0f);
-                rt->FillRoundedRectangle(rHover, m_d2d.BrushHover);
-            }
+            if (itemRect.bottom >= menuY && itemRect.top <= menuY + renderH) {
+                bool isHovered = (m_overflowHoveredIndex == (int)i);
+                if (isHovered && it.isEnabled) {
+                    D2D1_ROUNDED_RECT rHover = D2D1::RoundedRect(itemRect, 4.0f, 4.0f);
+                    rt->FillRoundedRectangle(rHover, m_d2d.BrushHover);
+                }
 
-            ID2D1Brush* textBrush = it.isEnabled ? (ID2D1Brush*)m_d2d.BrushText : (ID2D1Brush*)m_d2d.BrushTextMuted;
+                ID2D1Brush* textBrush = it.isEnabled ? (ID2D1Brush*)m_d2d.BrushText : (ID2D1Brush*)m_d2d.BrushTextMuted;
 
-            // Draw Icon at left (center = itemRect.left + 16.0f, curY + itemH / 2.0f)
-            float iconCx = itemRect.left + 16.0f;
-            float iconCy = curY + itemH / 2.0f;
-            DrawMenuIcon(iconCx, iconCy, 15.0f, it.icon, textBrush);
+                // Draw Icon at left (center = itemRect.left + 14.0f, curY + itemH / 2.0f)
+                float iconCx = itemRect.left + 14.0f;
+                float iconCy = curY + itemH / 2.0f;
+                DrawMenuIcon(iconCx, iconCy, 14.0f, it.icon, textBrush);
 
-            // Draw Label (Leading alignment with ellipsis trimming)
-            D2D1_RECT_F labelRect = D2D1::RectF(itemRect.left + 36.0f, curY, itemRect.right - 58.0f, curY + itemH);
-            rt->DrawText(it.label.c_str(), (UINT32)it.label.length(), m_d2d.FontMenu ? m_d2d.FontMenu : m_d2d.FontCaption, labelRect, textBrush);
+                // Draw Label
+                D2D1_RECT_F labelRect = D2D1::RectF(itemRect.left + 32.0f, curY, itemRect.right - 54.0f, curY + itemH);
+                rt->DrawText(it.label.c_str(), (UINT32)it.label.length(), m_d2d.FontMenu ? m_d2d.FontMenu : m_d2d.FontCaption, labelRect, textBrush);
 
-            // Draw Shortcut Hint at right
-            if (!it.shortcut.empty()) {
-                D2D1_RECT_F scRect = D2D1::RectF(itemRect.right - 54.0f, curY, itemRect.right - 10.0f, curY + itemH);
-                IDWriteTextFormat* scFont = m_d2d.FontCaptionRight ? m_d2d.FontCaptionRight : m_d2d.FontCaption;
-                rt->DrawText(it.shortcut.c_str(), (UINT32)it.shortcut.length(), scFont, scRect, m_d2d.BrushTextMuted);
+                // Draw Shortcut Hint at right
+                if (!it.shortcut.empty()) {
+                    D2D1_RECT_F scRect = D2D1::RectF(itemRect.right - 52.0f, curY, itemRect.right - 8.0f, curY + itemH);
+                    IDWriteTextFormat* scFont = m_d2d.FontCaptionRight ? m_d2d.FontCaptionRight : m_d2d.FontCaption;
+                    rt->DrawText(it.shortcut.c_str(), (UINT32)it.shortcut.length(), scFont, scRect, m_d2d.BrushTextMuted);
+                }
             }
 
             curY += itemH;
         }
+    }
+
+    rt->PopAxisAlignedClip();
+
+    // 5. Scroll indicator when scrollable
+    if (needsScroll) {
+        float trackH = renderH - 8.0f;
+        float thumbH = (std::max)(18.0f, (renderH / totalMenuH) * trackH);
+        float maxScroll = totalMenuH - renderH;
+        float scrollPct = (maxScroll > 0.0f) ? (m_overflowScrollY / maxScroll) : 0.0f;
+        float thumbY = menuY + 4.0f + scrollPct * (trackH - thumbH);
+        D2D1_RECT_F thumbRect = D2D1::RectF(menuX + menuW - 4.5f, thumbY, menuX + menuW - 2.0f, thumbY + thumbH);
+        D2D1_ROUNDED_RECT thumbR = D2D1::RoundedRect(thumbRect, 1.5f, 1.5f);
+        m_d2d.BrushBorderSubtle->SetOpacity(0.85f);
+        rt->FillRoundedRectangle(thumbR, m_d2d.BrushBorderSubtle);
+        m_d2d.BrushBorderSubtle->SetOpacity(1.0f);
     }
 }
 
@@ -3517,10 +3254,10 @@ int AppWindow::GetOverflowItemIndexAt(const D2D1_POINT_2F& pt) const {
     }
 
     std::vector<OverflowMenuItem> items = GetCurrentOverflowItems();
-    float itemH = 32.0f;
-    float dividerH = 7.0f;
-    float padY = 6.0f;
-    float curY = m_overflowMenuRect.top + padY;
+    float itemH = 28.0f;
+    float dividerH = 5.0f;
+    float padY = 5.0f;
+    float curY = m_overflowMenuRect.top + padY - m_overflowScrollY;
 
     for (size_t i = 0; i < items.size(); ++i) {
         if (items[i].isDivider) {
@@ -7757,6 +7494,21 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             ScreenToClient(m_hwnd, &physPt);
             D2D1_POINT_2F pt = ClientToDip(physPt);
 
+            if (m_showOverflowMenu &&
+                pt.x >= m_overflowMenuRect.left && pt.x <= m_overflowMenuRect.right &&
+                pt.y >= m_overflowMenuRect.top && pt.y <= m_overflowMenuRect.bottom) {
+                float renderH = m_overflowMenuRect.bottom - m_overflowMenuRect.top;
+                if (m_overflowTotalH > renderH) {
+                    float maxScroll = m_overflowTotalH - renderH;
+                    m_overflowScrollY -= (delta > 0 ? 30.0f : -30.0f);
+                    if (m_overflowScrollY < 0.0f) m_overflowScrollY = 0.0f;
+                    if (m_overflowScrollY > maxScroll) m_overflowScrollY = maxScroll;
+                    m_overflowHoveredIndex = GetOverflowItemIndexAt(pt);
+                    InvalidateRect(m_hwnd, NULL, FALSE);
+                    return 0;
+                }
+            }
+
             if (m_showSidebar && pt.x < m_sidebarWidth) {
                 D2D1_SIZE_F clientSz = GetClientSizeDip();
                 float availH = clientSz.height;
@@ -8157,6 +7909,7 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 } else if (hit(m_btnOverflowRect)) {
                     m_pressedButtonId = BTN_OVERFLOW_MENU;
                     m_showOverflowMenu = !m_showOverflowMenu;
+                    m_overflowScrollY = 0.0f;
                     m_overflowHoveredIndex = -1;
                     InvalidateRect(m_hwnd, NULL, FALSE);
                 }
