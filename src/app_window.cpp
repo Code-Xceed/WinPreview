@@ -3994,12 +3994,15 @@ void AppWindow::CheckForUpdates(bool isUserInitiated) {
     m_updater.CheckForUpdatesAsync([this, isUserInitiated](const UpdateInfo& info) {
         if (m_hwnd && IsWindow(m_hwnd)) {
             if (info.isAvailable) {
+                if (isUserInitiated) {
+                    ShowToast(L"Update available: v" + info.remoteVersion + L"! Click Update in the top banner.");
+                }
                 PostMessageW(m_hwnd, WM_USER + 555, 0, 0);
             } else if (isUserInitiated) {
                 if (info.errorMessage.empty()) {
                     ShowToast(L"WinPreview is up to date (v" + info.currentVersion + L")");
                 } else {
-                    ShowToast(L"Update check failed (Offline)");
+                    ShowToast(L"Update check failed: " + info.errorMessage);
                 }
             }
         }
@@ -6399,7 +6402,7 @@ void AppWindow::ShowUpdatePopup() {
     if (!m_updateHwnd) return;
 
     UpdateState state = m_updater.GetState();
-    if (state != UpdateState::UpdateAvailable && state != UpdateState::Downloading && state != UpdateState::Downloaded) {
+    if (state != UpdateState::UpdateAvailable && state != UpdateState::Downloading && state != UpdateState::Downloaded && state != UpdateState::Failed) {
         HideUpdatePopup();
         return;
     }
@@ -6459,7 +6462,8 @@ void AppWindow::RenderUpdatePopup() {
     if (m_updateBrushDot) {
         D2D1_COLOR_F dotColor = (state == UpdateState::Downloaded)
             ? D2D1::ColorF(0.12f, 0.85f, 0.45f, 1.0f)
-            : ((state == UpdateState::Downloading) ? D2D1::ColorF(0.95f, 0.65f, 0.15f, 1.0f) : D2D1::ColorF(0.22f, 0.65f, 1.0f, 1.0f));
+            : ((state == UpdateState::Downloading) ? D2D1::ColorF(0.95f, 0.65f, 0.15f, 1.0f)
+            : ((state == UpdateState::Failed) ? D2D1::ColorF(0.95f, 0.35f, 0.35f, 1.0f) : D2D1::ColorF(0.22f, 0.65f, 1.0f, 1.0f)));
         m_updateBrushDot->SetColor(dotColor);
         m_updateRenderTarget->FillEllipse(D2D1::Ellipse(dotCenter, 3.5f, 3.5f), m_updateBrushDot);
     }
@@ -6557,6 +6561,39 @@ void AppWindow::RenderUpdatePopup() {
         if (cBrush && m_d2d.FontButton) {
             m_updateRenderTarget->DrawText(closeLabel.c_str(), (UINT32)closeLabel.length(), m_d2d.FontButton, m_updateCloseBtnRect, cBrush);
         }
+    } else if (state == UpdateState::Failed) {
+        std::wstring label = (wDip >= 220.0f) ? L"Download failed" : (wDip >= 160.0f ? L"Failed" : L"!");
+        float textLeft = (wDip >= 220.0f) ? 24.0f : ((wDip >= 160.0f) ? 22.0f : 18.0f);
+        float textRight = (wDip >= 220.0f) ? (wDip - 88.0f) : ((wDip >= 160.0f) ? (wDip - 74.0f) : (wDip - 46.0f));
+        D2D1_RECT_F textRect = D2D1::RectF(textLeft, 0.0f, textRight, hDip);
+        if (m_updateBrushText && fontText) {
+            m_updateRenderTarget->DrawText(label.c_str(), (UINT32)label.length(), fontText, textRect, m_updateBrushText);
+        }
+
+        // Action Pill Button [ Retry / ↺ ]
+        float btnW = (wDip >= 220.0f) ? 56.0f : ((wDip >= 160.0f) ? 46.0f : 24.0f);
+        float btnRight = (wDip >= 220.0f) ? (wDip - 28.0f) : ((wDip >= 160.0f) ? (wDip - 24.0f) : (wDip - 20.0f));
+        m_updateBtnRect = D2D1::RectF(btnRight - btnW, 5.0f, btnRight, hDip - 5.0f);
+        D2D1_ROUNDED_RECT rBtn = D2D1::RoundedRect(m_updateBtnRect, 12.0f, 12.0f);
+        ID2D1SolidColorBrush* bBrush = m_updateBtnHover ? m_updateBrushBtnHover : m_updateBrushBtn;
+        if (bBrush) {
+            m_updateRenderTarget->FillRoundedRectangle(rBtn, bBrush);
+        }
+
+        std::wstring btnLabel = (wDip >= 160.0f) ? L"Retry" : L"↺";
+        if (m_updateBrushText && m_d2d.FontButton) {
+            m_updateRenderTarget->DrawText(btnLabel.c_str(), (UINT32)btnLabel.length(), m_d2d.FontButton, m_updateBtnRect, m_updateBrushText);
+        }
+
+        // Dismiss Button [ ✕ ]
+        float closeLeft = (wDip >= 220.0f) ? (wDip - 24.0f) : ((wDip >= 160.0f) ? (wDip - 22.0f) : (wDip - 18.0f));
+        float closeRight = (wDip >= 220.0f) ? (wDip - 6.0f) : ((wDip >= 160.0f) ? (wDip - 4.0f) : (wDip - 4.0f));
+        m_updateCloseBtnRect = D2D1::RectF(closeLeft, 5.0f, closeRight, hDip - 5.0f);
+        std::wstring closeLabel = L"✕";
+        ID2D1SolidColorBrush* cBrush = m_updateCloseHover ? m_updateBrushText : m_updateBrushTextMuted;
+        if (cBrush && m_d2d.FontButton) {
+            m_updateRenderTarget->DrawText(closeLabel.c_str(), (UINT32)closeLabel.length(), m_d2d.FontButton, m_updateCloseBtnRect, cBrush);
+        }
     }
 
     m_updateRenderTarget->EndDraw();
@@ -6631,7 +6668,7 @@ LRESULT CALLBACK AppWindow::UpdatePopupWndProc(HWND hwnd, UINT msg, WPARAM wPara
             if (xDip >= self->m_updateBtnRect.left && xDip <= self->m_updateBtnRect.right &&
                 yDip >= self->m_updateBtnRect.top && yDip <= self->m_updateBtnRect.bottom) {
 
-                if (state == UpdateState::UpdateAvailable) {
+                if (state == UpdateState::UpdateAvailable || state == UpdateState::Failed) {
                     self->m_updater.DownloadUpdateAsync(
                         [self](int pct) {
                             if (self->m_updateHwnd) InvalidateRect(self->m_updateHwnd, NULL, FALSE);
@@ -6639,7 +6676,7 @@ LRESULT CALLBACK AppWindow::UpdatePopupWndProc(HWND hwnd, UINT msg, WPARAM wPara
                         [self](bool success, const std::wstring& path) {
                             if (self->m_updateHwnd) InvalidateRect(self->m_updateHwnd, NULL, FALSE);
                             if (!success) {
-                                self->ShowToast(L"Failed to download update.");
+                                self->ShowToast(L"Download failed. Click Retry in banner.");
                             }
                         }
                     );

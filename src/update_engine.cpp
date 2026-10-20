@@ -1,11 +1,13 @@
 #include "update_engine.h"
 #include <wininet.h>
+#include <urlmon.h>
 #include <shellapi.h>
 #include <shlobj.h>
 #include <vector>
 #include <sstream>
 
 #pragma comment(lib, "wininet.lib")
+#pragma comment(lib, "urlmon.lib")
 
 namespace WinPreview {
 
@@ -232,90 +234,117 @@ void UpdateEngine::DownloadUpdateAsync(std::function<void(int percent)> onProgre
     }
 
     m_workerThread = std::thread([this, onProgress, onComplete]() {
-        // Prepare target temporary path
         WCHAR tempPath[MAX_PATH];
         GetTempPathW(MAX_PATH, tempPath);
-        m_downloadedInstallerPath = std::wstring(tempPath) + L"WinPreview-Setup-x64.exe";
 
+        // Try deleting any previous installer to clean up
+        std::wstring defaultPath = std::wstring(tempPath) + L"WinPreview-Setup-x64.exe";
+        DeleteFileW(defaultPath.c_str());
+
+        // Always target a safe unique path to prevent sharing violations or AV locks
+        std::wstring targetPath = std::wstring(tempPath) + L"WinPreview-Setup-v" + 
+                                  (m_info.remoteVersion.empty() ? L"latest" : m_info.remoteVersion) + 
+                                  L"-" + std::to_wstring(GetTickCount64()) + L".exe";
+        m_downloadedInstallerPath = targetPath;
+
+        bool downloadSuccess = false;
+
+        // =====================================================================
+        // TIER 1: WinINet Stream Download (with live % progress callbacks)
+        // =====================================================================
         HINTERNET hInternet = InternetOpenW(USER_AGENT, INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
-        if (!hInternet) {
-            m_state.store(UpdateState::Failed);
-            if (onComplete) onComplete(false, L"");
-            return;
-        }
+        if (hInternet) {
+            DWORD flags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_SECURE | INTERNET_FLAG_IGNORE_REDIRECT_TO_HTTPS;
+            HINTERNET hUrl = InternetOpenUrlW(hInternet, m_info.downloadUrl.c_str(), NULL, 0, flags, 0);
+            if (hUrl) {
+                DWORD statusCode = 0;
+                DWORD statusSize = sizeof(statusCode);
+                DWORD statusIdx = 0;
+                bool statusOk = true;
+                if (HttpQueryInfoW(hUrl, HTTP_QUERY_STATUS_CODE | HTTP_QUERY_FLAG_NUMBER, &statusCode, &statusSize, &statusIdx)) {
+                    if (statusCode < 200 || statusCode >= 300) {
+                        statusOk = false;
+                    }
+                }
 
-        DWORD flags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_SECURE | INTERNET_FLAG_IGNORE_REDIRECT_TO_HTTPS;
-        HINTERNET hUrl = InternetOpenUrlW(hInternet, m_info.downloadUrl.c_str(), NULL, 0, flags, 0);
-        if (!hUrl) {
-            InternetCloseHandle(hInternet);
-            m_state.store(UpdateState::Failed);
-            if (onComplete) onComplete(false, L"");
-            return;
-        }
+                if (statusOk) {
+                    DWORD contentLength = 0;
+                    DWORD headerLength = sizeof(contentLength);
+                    DWORD index = 0;
+                    HttpQueryInfoW(hUrl, HTTP_QUERY_CONTENT_LENGTH | HTTP_QUERY_FLAG_NUMBER, &contentLength, &headerLength, &index);
 
-        // Verify HTTP 2xx status code
-        DWORD statusCode = 0;
-        DWORD statusSize = sizeof(statusCode);
-        DWORD statusIdx = 0;
-        if (HttpQueryInfoW(hUrl, HTTP_QUERY_STATUS_CODE | HTTP_QUERY_FLAG_NUMBER, &statusCode, &statusSize, &statusIdx)) {
-            if (statusCode < 200 || statusCode >= 300) {
+                    HANDLE hFile = CreateFileW(targetPath.c_str(), GENERIC_WRITE,
+                                               FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                               NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+                    if (hFile != INVALID_HANDLE_VALUE) {
+                        char buffer[16384];
+                        DWORD bytesRead = 0;
+                        DWORD totalBytesRead = 0;
+                        bool writeFailed = false;
+
+                        while (InternetReadFile(hUrl, buffer, sizeof(buffer), &bytesRead) && bytesRead > 0) {
+                            DWORD bytesWritten = 0;
+                            if (!WriteFile(hFile, buffer, bytesRead, &bytesWritten, NULL) || bytesWritten != bytesRead) {
+                                writeFailed = true;
+                                break;
+                            }
+                            totalBytesRead += bytesRead;
+                            if (contentLength > 0) {
+                                int percent = (int)(((double)totalBytesRead / contentLength) * 100.0);
+                                if (percent > 99) percent = 99;
+                                m_downloadProgress.store(percent);
+                                if (onProgress) onProgress(percent);
+                            }
+                        }
+                        CloseHandle(hFile);
+
+                        if (!writeFailed && totalBytesRead > 500000) {
+                            downloadSuccess = true;
+                        } else {
+                            DeleteFileW(targetPath.c_str());
+                        }
+                    }
+                }
                 InternetCloseHandle(hUrl);
-                InternetCloseHandle(hInternet);
-                m_state.store(UpdateState::Failed);
-                if (onComplete) onComplete(false, L"");
-                return;
             }
-        }
-
-        // Query Content-Length for progress computation
-        DWORD contentLength = 0;
-        DWORD headerLength = sizeof(contentLength);
-        DWORD index = 0;
-        HttpQueryInfoW(hUrl, HTTP_QUERY_CONTENT_LENGTH | HTTP_QUERY_FLAG_NUMBER, &contentLength, &headerLength, &index);
-
-        HANDLE hFile = CreateFileW(m_downloadedInstallerPath.c_str(), GENERIC_WRITE, 0, NULL,
-                                   CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-        if (hFile == INVALID_HANDLE_VALUE) {
-            InternetCloseHandle(hUrl);
             InternetCloseHandle(hInternet);
-            m_state.store(UpdateState::Failed);
-            if (onComplete) onComplete(false, L"");
-            return;
         }
 
-        char buffer[8192];
-        DWORD bytesRead = 0;
-        DWORD totalBytesRead = 0;
-        bool writeFailed = false;
+        // =====================================================================
+        // TIER 2: URLDownloadToFileW Fallback (if WinINet failed for any reason)
+        // =====================================================================
+        if (!downloadSuccess) {
+            DeleteFileW(targetPath.c_str());
+            if (onProgress) onProgress(35);
 
-        while (InternetReadFile(hUrl, buffer, sizeof(buffer), &bytesRead) && bytesRead > 0) {
-            DWORD bytesWritten = 0;
-            if (!WriteFile(hFile, buffer, bytesRead, &bytesWritten, NULL) || bytesWritten != bytesRead) {
-                writeFailed = true;
-                break;
-            }
-            totalBytesRead += bytesRead;
-            if (contentLength > 0) {
-                int percent = (int)(((double)totalBytesRead / contentLength) * 100.0);
-                if (percent > 100) percent = 100;
-                m_downloadProgress.store(percent);
-                if (onProgress) onProgress(percent);
+            HRESULT hr = URLDownloadToFileW(NULL, m_info.downloadUrl.c_str(), targetPath.c_str(), 0, NULL);
+            if (SUCCEEDED(hr)) {
+                HANDLE hCheck = CreateFileW(targetPath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+                if (hCheck != INVALID_HANDLE_VALUE) {
+                    LARGE_INTEGER sz;
+                    if (GetFileSizeEx(hCheck, &sz) && sz.QuadPart > 500000) {
+                        downloadSuccess = true;
+                    }
+                    CloseHandle(hCheck);
+                }
+                if (!downloadSuccess) {
+                    DeleteFileW(targetPath.c_str());
+                }
             }
         }
 
-        CloseHandle(hFile);
-        InternetCloseHandle(hUrl);
-        InternetCloseHandle(hInternet);
-
-        if (writeFailed || totalBytesRead < 1000) {
-            DeleteFileW(m_downloadedInstallerPath.c_str());
-            m_state.store(UpdateState::Failed);
-            if (onComplete) onComplete(false, L"");
-        } else {
+        // =====================================================================
+        // Final Completion
+        // =====================================================================
+        if (downloadSuccess) {
             m_downloadProgress.store(100);
             m_state.store(UpdateState::Downloaded);
             if (onProgress) onProgress(100);
-            if (onComplete) onComplete(true, m_downloadedInstallerPath);
+            if (onComplete) onComplete(true, targetPath);
+        } else {
+            DeleteFileW(targetPath.c_str());
+            m_state.store(UpdateState::Failed);
+            if (onComplete) onComplete(false, L"");
         }
     });
 }

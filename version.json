@@ -1,6 +1,6 @@
 {
-  "version": "1.0.3",
+  "version": "1.0.4",
   "release_date": "2026-10-20",
   "download_url": "https://github.com/Code-Xceed/WinPreview/releases/latest/download/WinPreview-Setup-x64.exe",
-  "changelog": "WinPreview v1.0.3 - Fixed overflow menu positioning on short windows (strictly anchored downwards with smooth scrolling) and removed folder navigation chevrons across all file types."
+  "changelog": "WinPreview v1.0.4 - Resilient multi-tier update download engine (WinINet stream + URLDownloadToFile fallback), sharing violation lock protection in Temp, and one-click Retry button for update failures."
 }
