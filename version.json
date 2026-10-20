@@ -1,6 +1,6 @@
 {
-  "version": "1.0.1",
+  "version": "1.0.2",
   "release_date": "2026-10-20",
   "download_url": "https://github.com/Code-Xceed/WinPreview/releases/latest/download/WinPreview-Setup-x64.exe",
-  "changelog": "WinPreview v1.0.1 - Minimal auto-prompt side banner, CI/CD pipeline enhancements, and performance optimizations."
+  "changelog": "WinPreview v1.0.2 - Adaptive responsive dock with frosted overflow popover menu [☰], full compact 340px viewport support, and enhanced UI polish."
 }

@@ -4,7 +4,8 @@
 #>
 param(
     [string]$Configuration = "Release",
-    [string]$OutputDir = "dist\WinPreview"
+    [string]$OutputDir = "dist\WinPreview",
+    [switch]$NoLaunch
 )
 
 $ErrorActionPreference = "Stop"
@@ -48,28 +49,13 @@ if (Test-Path $pdfium) {
     Copy-Item -LiteralPath $pdfium -Destination (Join-Path $targetPublishDir "pdfium.dll") -Force
 }
 
-$installedDir = Join-Path $env:LOCALAPPDATA "Programs\WinPreview"
-if (Test-Path $installedDir) {
-    Copy-Item -LiteralPath $builtExe -Destination (Join-Path $installedDir "WinPreview.exe") -Force
-    if (Test-Path $pdfium) {
-        Copy-Item -LiteralPath $pdfium -Destination (Join-Path $installedDir "pdfium.dll") -Force
-    }
-    Write-Host "  Updated installed program at $installedDir" -ForegroundColor Green
-}
-
 $appIco = Join-Path $ScriptDir "src\app.ico"
 if (Test-Path $appIco) {
     Copy-Item -LiteralPath $appIco -Destination (Join-Path $targetPublishDir "app.ico") -Force
-    if (Test-Path $installedDir) {
-        Copy-Item -LiteralPath $appIco -Destination (Join-Path $installedDir "app.ico") -Force
-    }
 }
 $appLogo = Join-Path $ScriptDir "src\app_logo.png"
 if (Test-Path $appLogo) {
     Copy-Item -LiteralPath $appLogo -Destination (Join-Path $targetPublishDir "app_logo.png") -Force
-    if (Test-Path $installedDir) {
-        Copy-Item -LiteralPath $appLogo -Destination (Join-Path $installedDir "app_logo.png") -Force
-    }
 }
 
 $exeSizeMb = [math]::Round((Get-Item (Join-Path $targetPublishDir "WinPreview.exe")).Length / 1MB, 2)
@@ -115,11 +101,13 @@ if ($iscc) {
     Write-Host "[WARN] Inno Setup compiler (ISCC.exe) not found. Binaries staged in $OutputDir." -ForegroundColor Yellow
 }
 
-# Start resident background instance in current interactive user desktop session
-$stagedExe = (Resolve-Path (Join-Path $targetPublishDir "WinPreview.exe")).Path
-if (Test-Path $stagedExe) {
-    Start-Process -FilePath $stagedExe -ArgumentList "--background"
-    Write-Host "  Started resident background engine ($stagedExe)" -ForegroundColor Green
+# Start resident background instance if requested (skip in CI/CD)
+if (-not $env:GITHUB_ACTIONS -and -not $NoLaunch) {
+    $stagedExe = (Resolve-Path (Join-Path $targetPublishDir "WinPreview.exe")).Path
+    if (Test-Path $stagedExe) {
+        Start-Process -FilePath $stagedExe -ArgumentList "--background"
+        Write-Host "  Started resident background engine ($stagedExe)" -ForegroundColor Green
+    }
 }
 
 Write-Host "`n==========================================================" -ForegroundColor Green
