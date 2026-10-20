@@ -336,6 +336,31 @@ private:
     ID2D1SolidColorBrush* m_hudBrushTooltipBg = nullptr;
     ID2D1SolidColorBrush* m_hudBrushTooltipBorder = nullptr;
 
+    // Top-Right Minimal Update Popup Overlay (Guaranteed on top of all media)
+    HWND m_updateHwnd = nullptr;
+    ID2D1HwndRenderTarget* m_updateRenderTarget = nullptr;
+    ID2D1SolidColorBrush* m_updateBrushBg = nullptr;
+    ID2D1SolidColorBrush* m_updateBrushBorder = nullptr;
+    ID2D1SolidColorBrush* m_updateBrushText = nullptr;
+    ID2D1SolidColorBrush* m_updateBrushTextMuted = nullptr;
+    ID2D1SolidColorBrush* m_updateBrushBtn = nullptr;
+    ID2D1SolidColorBrush* m_updateBrushBtnHover = nullptr;
+    ID2D1SolidColorBrush* m_updateBrushDot = nullptr;
+    ID2D1SolidColorBrush* m_updateBrushTrack = nullptr;
+
+    D2D1_RECT_F m_updateBtnRect = {};
+    D2D1_RECT_F m_updateCloseBtnRect = {};
+    bool m_updateBtnHover = false;
+    bool m_updateCloseHover = false;
+
+    bool CreateUpdatePopupWindow();
+    void DestroyUpdatePopupWindow();
+    void UpdatePopupPosition();
+    void ShowUpdatePopup();
+    void HideUpdatePopup();
+    void RenderUpdatePopup();
+    static LRESULT CALLBACK UpdatePopupWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
 
 
 
@@ -446,6 +471,7 @@ private:
 
     // System Tray & Background Residency
     static const UINT TIMER_EXPLORER_NAV = 7001;
+    static const UINT TIMER_PERIODIC_UPDATE = 7002;
     static const UINT WM_TRAYICON = WM_USER + 200;
     static const UINT IDM_TRAY_OPEN = 2001;
     static const UINT IDM_TRAY_AUTOSTART = 2002;

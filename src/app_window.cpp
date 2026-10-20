@@ -284,12 +284,19 @@ bool AppWindow::Create(HINSTANCE hInstance, int nCmdShow, bool showTrayNotificat
     InitTrayIcon(showTrayNotification);
     LogTime("InitTrayIcon done");
 
-    // Production In-App Auto-Update Check (Non-blocking background thread)
+    // Initialize Top-Right Minimal Update Popup Overlay (Guaranteed on top of all media)
+    CreateUpdatePopupWindow();
+
+    // Start periodic auto-update check timer (runs every 15 minutes, zero CPU overhead)
+    SetTimer(m_hwnd, TIMER_PERIODIC_UPDATE, 15 * 60 * 1000, NULL);
+
+    // Initial Auto-Check 1.5s after launch (Non-blocking background thread)
     std::thread([this]() {
-        Sleep(2500); // 2.5s delay ensures zero impact on cold start latency
+        Sleep(1500); // 1.5s delay keeps cold start sub-35ms
+        m_lastUpdateCheckTick = GetTickCount64();
         m_updater.CheckForUpdatesAsync([this](const UpdateInfo& info) {
             if (info.isAvailable && m_hwnd && IsWindow(m_hwnd)) {
-                InvalidateRect(m_hwnd, NULL, FALSE);
+                PostMessageW(m_hwnd, WM_USER + 555, 0, 0);
             }
         });
     }).detach();
@@ -1720,8 +1727,8 @@ void AppWindow::Render(HDC outHdc) {
         RenderToast(canvasRect);
     }
 
-    // 8. Render In-App Auto-Update Banner
-    RenderUpdateBanner(canvasRect);
+    // Note: In-App Auto-Update Notification is now rendered via top-level floating overlay (m_updateHwnd)
+    // so it floats strictly above LibVLC video playback, DirectX swapchains, and all media.
 
     if (outHdc) {
         ID2D1GdiInteropRenderTarget* gdiInterop = nullptr;
@@ -3513,19 +3520,20 @@ void AppWindow::RenderToast(const D2D1_RECT_F& rect) {
 }
 
 void AppWindow::CheckUpdateOnPreviewOpen() {
-    // 1. If an update was already detected, re-arm the minimal side prompt on each preview open
+    // 1. If an update was already detected, re-arm and display the top-right minimal popup on top of this preview/media!
     if (m_updater.GetUpdateInfo().isAvailable) {
         m_updater.ResetToAvailable();
+        ShowUpdatePopup();
         return;
     }
 
-    // 2. Periodic background check: query GitHub raw CDN if > 15 mins since last check
+    // 2. Periodic background check: query GitHub raw CDN if > 10 mins since last check
     ULONGLONG now = GetTickCount64();
-    if (now - m_lastUpdateCheckTick > 15 * 60 * 1000) {
+    if (now - m_lastUpdateCheckTick > 10 * 60 * 1000) {
         m_lastUpdateCheckTick = now;
         m_updater.CheckForUpdatesAsync([this](const UpdateInfo& info) {
             if (info.isAvailable && m_hwnd && IsWindow(m_hwnd)) {
-                InvalidateRect(m_hwnd, NULL, FALSE);
+                PostMessageW(m_hwnd, WM_USER + 555, 0, 0);
             }
         });
     }
@@ -3538,9 +3546,8 @@ void AppWindow::CheckForUpdates(bool isUserInitiated) {
     m_lastUpdateCheckTick = GetTickCount64();
     m_updater.CheckForUpdatesAsync([this, isUserInitiated](const UpdateInfo& info) {
         if (m_hwnd && IsWindow(m_hwnd)) {
-            InvalidateRect(m_hwnd, NULL, FALSE);
             if (info.isAvailable) {
-                ShowToast(L"Update Available: v" + info.remoteVersion);
+                PostMessageW(m_hwnd, WM_USER + 555, 0, 0);
             } else if (isUserInitiated) {
                 if (info.errorMessage.empty()) {
                     ShowToast(L"WinPreview is up to date (v" + info.currentVersion + L")");
@@ -5367,6 +5374,7 @@ void AppWindow::HideMainWindow() {
     if (m_hudHwnd) {
         ShowWindow(m_hudHwnd, SW_HIDE);
     }
+    HideUpdatePopup();
     m_hudOpacity = 0.0f;
     m_hudTargetOpacity = 0.0f;
     if (m_docType == DocumentType::Media) {
@@ -5802,11 +5810,421 @@ LRESULT AppWindow::HandleHudMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
     return DefWindowProc(m_hudHwnd, msg, wParam, lParam);
 }
 
+bool AppWindow::CreateUpdatePopupWindow() {
+    if (m_updateHwnd) return true;
+
+    WNDCLASSEXW wc = { sizeof(WNDCLASSEXW) };
+    wc.lpfnWndProc = UpdatePopupWndProc;
+    wc.hInstance = m_hInstance;
+    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+    wc.hbrBackground = NULL;
+    wc.lpszClassName = L"WinPreviewUpdatePopup";
+    wc.style = CS_HREDRAW | CS_VREDRAW;
+    RegisterClassExW(&wc);
+
+    int notifW = (int)(248.0f * m_dpiScale + 0.5f);
+    int notifH = (int)(34.0f * m_dpiScale + 0.5f);
+    int cornerR = (int)(17.0f * m_dpiScale + 0.5f);
+
+    m_updateHwnd = CreateWindowExW(
+        WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+        L"WinPreviewUpdatePopup",
+        L"",
+        WS_POPUP,
+        -9999, -9999, notifW, notifH,
+        m_hwnd,
+        NULL,
+        m_hInstance,
+        this
+    );
+
+    if (!m_updateHwnd) return false;
+    SetWindowLongPtr(m_updateHwnd, GWLP_USERDATA, (LONG_PTR)this);
+    ShowWindow(m_updateHwnd, SW_HIDE);
+
+    HRGN hRgn = CreateRoundRectRgn(0, 0, notifW + 1, notifH + 1, cornerR, cornerR);
+    SetWindowRgn(m_updateHwnd, hRgn, TRUE);
+    SetLayeredWindowAttributes(m_updateHwnd, 0, 255, LWA_ALPHA);
+
+    // Create D2D Render Target for Update Popup
+    D2D1_RENDER_TARGET_PROPERTIES rtProps = D2D1::RenderTargetProperties(
+        D2D1_RENDER_TARGET_TYPE_DEFAULT,
+        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED),
+        96.0f * m_dpiScale, 96.0f * m_dpiScale
+    );
+    D2D1_HWND_RENDER_TARGET_PROPERTIES hwndProps = D2D1::HwndRenderTargetProperties(
+        m_updateHwnd, D2D1::SizeU((UINT32)notifW, (UINT32)notifH), D2D1_PRESENT_OPTIONS_RETAIN_CONTENTS
+    );
+
+    HRESULT hr = m_d2d.GetD2DFactory()->CreateHwndRenderTarget(rtProps, hwndProps, &m_updateRenderTarget);
+    if (FAILED(hr)) return false;
+
+    m_updateRenderTarget->SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+    m_updateRenderTarget->SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE);
+
+    m_updateRenderTarget->CreateSolidColorBrush(D2D1::ColorF(0.08f, 0.08f, 0.11f, 0.96f), &m_updateBrushBg);
+    m_updateRenderTarget->CreateSolidColorBrush(D2D1::ColorF(0.24f, 0.42f, 0.85f, 0.55f), &m_updateBrushBorder);
+    m_updateRenderTarget->CreateSolidColorBrush(D2D1::ColorF(0.96f, 0.96f, 0.98f, 1.0f), &m_updateBrushText);
+    m_updateRenderTarget->CreateSolidColorBrush(D2D1::ColorF(0.60f, 0.60f, 0.65f, 1.0f), &m_updateBrushTextMuted);
+    m_updateRenderTarget->CreateSolidColorBrush(D2D1::ColorF(0.14f, 0.42f, 0.92f, 1.0f), &m_updateBrushBtn);
+    m_updateRenderTarget->CreateSolidColorBrush(D2D1::ColorF(0.24f, 0.55f, 0.98f, 1.0f), &m_updateBrushBtnHover);
+    m_updateRenderTarget->CreateSolidColorBrush(D2D1::ColorF(0.25f, 0.65f, 1.0f, 1.0f), &m_updateBrushDot);
+    m_updateRenderTarget->CreateSolidColorBrush(D2D1::ColorF(0.20f, 0.20f, 0.25f, 1.0f), &m_updateBrushTrack);
+
+    return true;
+}
+
+void AppWindow::DestroyUpdatePopupWindow() {
+    SafeRelease(m_updateBrushBg);
+    SafeRelease(m_updateBrushBorder);
+    SafeRelease(m_updateBrushText);
+    SafeRelease(m_updateBrushTextMuted);
+    SafeRelease(m_updateBrushBtn);
+    SafeRelease(m_updateBrushBtnHover);
+    SafeRelease(m_updateBrushDot);
+    SafeRelease(m_updateBrushTrack);
+    SafeRelease(m_updateRenderTarget);
+
+    if (m_updateHwnd) {
+        DestroyWindow(m_updateHwnd);
+        m_updateHwnd = nullptr;
+    }
+}
+
+void AppWindow::UpdatePopupPosition() {
+    if (!m_updateHwnd || !IsWindowVisible(m_hwnd) || IsIconic(m_hwnd)) {
+        if (m_updateHwnd && IsWindowVisible(m_updateHwnd)) ShowWindow(m_updateHwnd, SW_HIDE);
+        return;
+    }
+
+    UpdateState state = m_updater.GetState();
+    if (state != UpdateState::UpdateAvailable && state != UpdateState::Downloading && state != UpdateState::Downloaded) {
+        if (IsWindowVisible(m_updateHwnd)) ShowWindow(m_updateHwnd, SW_HIDE);
+        return;
+    }
+
+    RECT rc;
+    GetClientRect(m_hwnd, &rc);
+    int clientW = rc.right - rc.left;
+    int clientH = rc.bottom - rc.top;
+
+    float notifWDip = 248.0f;
+    float clientWDip = PxToDip(clientW);
+    if (clientWDip < 480.0f) {
+        notifWDip = 110.0f; // Mini compact badge
+    } else if (clientWDip < 660.0f) {
+        notifWDip = 180.0f; // Medium compact pill
+    }
+
+    float notifHDip = 34.0f;
+    int notifW = (int)(notifWDip * m_dpiScale + 0.5f);
+    int notifH = (int)(notifHDip * m_dpiScale + 0.5f);
+    int cornerR = (int)(17.0f * m_dpiScale + 0.5f);
+
+    int marginX = (int)(16.0f * m_dpiScale + 0.5f);
+    int marginY = (int)(14.0f * m_dpiScale + 0.5f);
+
+    POINT pt = { clientW - notifW - marginX, marginY };
+    ClientToScreen(m_hwnd, &pt);
+
+    RECT curRc;
+    GetWindowRect(m_updateHwnd, &curRc);
+    int curW = curRc.right - curRc.left;
+    int curH = curRc.bottom - curRc.top;
+
+    if (curW != notifW || curH != notifH) {
+        SetWindowPos(m_updateHwnd, HWND_TOP, pt.x, pt.y, notifW, notifH, SWP_NOACTIVATE);
+        HRGN hRgn = CreateRoundRectRgn(0, 0, notifW + 1, notifH + 1, cornerR, cornerR);
+        SetWindowRgn(m_updateHwnd, hRgn, TRUE);
+        if (m_updateRenderTarget) {
+            m_updateRenderTarget->Resize(D2D1::SizeU((UINT32)notifW, (UINT32)notifH));
+            m_updateRenderTarget->SetDpi(96.0f * m_dpiScale, 96.0f * m_dpiScale);
+        }
+    } else {
+        SetWindowPos(m_updateHwnd, HWND_TOP, pt.x, pt.y, notifW, notifH, SWP_NOACTIVATE | SWP_NOSIZE);
+    }
+}
+
+void AppWindow::ShowUpdatePopup() {
+    if (!m_updateHwnd) {
+        CreateUpdatePopupWindow();
+    }
+    if (!m_updateHwnd) return;
+
+    UpdateState state = m_updater.GetState();
+    if (state != UpdateState::UpdateAvailable && state != UpdateState::Downloading && state != UpdateState::Downloaded) {
+        HideUpdatePopup();
+        return;
+    }
+
+    if (IsWindowVisible(m_hwnd) && !IsIconic(m_hwnd)) {
+        UpdatePopupPosition();
+        ShowWindow(m_updateHwnd, SW_SHOWNOACTIVATE);
+        InvalidateRect(m_updateHwnd, NULL, FALSE);
+    }
+}
+
+void AppWindow::HideUpdatePopup() {
+    if (m_updateHwnd && IsWindowVisible(m_updateHwnd)) {
+        ShowWindow(m_updateHwnd, SW_HIDE);
+    }
+}
+
+void AppWindow::RenderUpdatePopup() {
+    if (!m_updateRenderTarget || !m_updateHwnd) return;
+
+    RECT rc;
+    GetClientRect(m_updateHwnd, &rc);
+    int w = rc.right - rc.left;
+    int h = rc.bottom - rc.top;
+    if (w <= 0 || h <= 0) return;
+
+    float wDip = PxToDip(w);
+    float hDip = PxToDip(h);
+
+    m_updateRenderTarget->BeginDraw();
+    m_updateRenderTarget->Clear(D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.0f));
+
+    UpdateState state = m_updater.GetState();
+    const UpdateInfo& info = m_updater.GetUpdateInfo();
+
+    float cornerR = hDip / 2.0f;
+    D2D1_RECT_F fullRect = D2D1::RectF(0.0f, 0.0f, wDip, hDip);
+    D2D1_ROUNDED_RECT rPill = D2D1::RoundedRect(fullRect, cornerR, cornerR);
+
+    // 1. Frosted Acrylic Surface
+    if (m_updateBrushBg) {
+        m_updateRenderTarget->FillRoundedRectangle(rPill, m_updateBrushBg);
+    }
+
+    // 2. Hairline Accent Border
+    if (m_updateBrushBorder) {
+        D2D1_COLOR_F bColor = (state == UpdateState::Downloaded)
+            ? D2D1::ColorF(0.12f, 0.75f, 0.42f, 0.65f)
+            : D2D1::ColorF(0.24f, 0.45f, 0.90f, 0.65f);
+        m_updateBrushBorder->SetColor(bColor);
+        m_updateRenderTarget->DrawRoundedRectangle(rPill, m_updateBrushBorder, 1.0f);
+    }
+
+    // 3. Status Dot Indicator
+    float dotX = (wDip >= 220.0f) ? 14.0f : ((wDip >= 160.0f) ? 12.0f : 10.0f);
+    D2D1_POINT_2F dotCenter = D2D1::Point2F(dotX, hDip / 2.0f);
+    if (m_updateBrushDot) {
+        D2D1_COLOR_F dotColor = (state == UpdateState::Downloaded)
+            ? D2D1::ColorF(0.12f, 0.85f, 0.45f, 1.0f)
+            : ((state == UpdateState::Downloading) ? D2D1::ColorF(0.95f, 0.65f, 0.15f, 1.0f) : D2D1::ColorF(0.22f, 0.65f, 1.0f, 1.0f));
+        m_updateBrushDot->SetColor(dotColor);
+        m_updateRenderTarget->FillEllipse(D2D1::Ellipse(dotCenter, 3.5f, 3.5f), m_updateBrushDot);
+    }
+
+    IDWriteTextFormat* fontText = m_d2d.FontCaption ? m_d2d.FontCaption : m_d2d.FontButton;
+
+    // 4. Responsive Content
+    if (state == UpdateState::UpdateAvailable) {
+        std::wstring label = (wDip >= 220.0f) ? (L"Update v" + info.remoteVersion) : (L"v" + info.remoteVersion);
+        float textLeft = (wDip >= 220.0f) ? 24.0f : ((wDip >= 160.0f) ? 22.0f : 18.0f);
+        float textRight = (wDip >= 220.0f) ? (wDip - 88.0f) : ((wDip >= 160.0f) ? (wDip - 74.0f) : (wDip - 46.0f));
+        D2D1_RECT_F textRect = D2D1::RectF(textLeft, 0.0f, textRight, hDip);
+        if (m_updateBrushText && fontText) {
+            m_updateRenderTarget->DrawText(label.c_str(), (UINT32)label.length(), fontText, textRect, m_updateBrushText);
+        }
+
+        // Action Pill Button [ Update / ↑ ]
+        float btnW = (wDip >= 220.0f) ? 56.0f : ((wDip >= 160.0f) ? 46.0f : 24.0f);
+        float btnRight = (wDip >= 220.0f) ? (wDip - 28.0f) : ((wDip >= 160.0f) ? (wDip - 24.0f) : (wDip - 20.0f));
+        m_updateBtnRect = D2D1::RectF(btnRight - btnW, 5.0f, btnRight, hDip - 5.0f);
+        D2D1_ROUNDED_RECT rBtn = D2D1::RoundedRect(m_updateBtnRect, 12.0f, 12.0f);
+        ID2D1SolidColorBrush* bBrush = m_updateBtnHover ? m_updateBrushBtnHover : m_updateBrushBtn;
+        if (bBrush) {
+            m_updateRenderTarget->FillRoundedRectangle(rBtn, bBrush);
+        }
+
+        std::wstring btnLabel = (wDip >= 160.0f) ? L"Update" : L"↑";
+        if (m_updateBrushText && m_d2d.FontButton) {
+            m_updateRenderTarget->DrawText(btnLabel.c_str(), (UINT32)btnLabel.length(), m_d2d.FontButton, m_updateBtnRect, m_updateBrushText);
+        }
+
+        // Dismiss Button [ ✕ ]
+        float closeLeft = (wDip >= 220.0f) ? (wDip - 24.0f) : ((wDip >= 160.0f) ? (wDip - 22.0f) : (wDip - 18.0f));
+        float closeRight = (wDip >= 220.0f) ? (wDip - 6.0f) : ((wDip >= 160.0f) ? (wDip - 4.0f) : (wDip - 4.0f));
+        m_updateCloseBtnRect = D2D1::RectF(closeLeft, 5.0f, closeRight, hDip - 5.0f);
+        std::wstring closeLabel = L"✕";
+        ID2D1SolidColorBrush* cBrush = m_updateCloseHover ? m_updateBrushText : m_updateBrushTextMuted;
+        if (cBrush && m_d2d.FontButton) {
+            m_updateRenderTarget->DrawText(closeLabel.c_str(), (UINT32)closeLabel.length(), m_d2d.FontButton, m_updateCloseBtnRect, cBrush);
+        }
+    } else if (state == UpdateState::Downloading) {
+        int pct = m_updater.GetDownloadProgress();
+        std::wstring dlText = (wDip >= 200.0f) ? (L"Downloading... " + std::to_wstring(pct) + L"%") : (std::to_wstring(pct) + L"%");
+        float textLeft = (wDip >= 200.0f) ? 24.0f : 20.0f;
+        D2D1_RECT_F textRect = D2D1::RectF(textLeft, 0.0f, wDip - 12.0f, hDip - 5.0f);
+        if (m_updateBrushText && fontText) {
+            m_updateRenderTarget->DrawText(dlText.c_str(), (UINT32)dlText.length(), fontText, textRect, m_updateBrushText);
+        }
+
+        // Inset Progress Bar Track along bottom of pill
+        D2D1_RECT_F trackRect = D2D1::RectF(14.0f, hDip - 5.5f, wDip - 14.0f, hDip - 3.0f);
+        D2D1_ROUNDED_RECT rTrack = D2D1::RoundedRect(trackRect, 1.25f, 1.25f);
+        if (m_updateBrushTrack) {
+            m_updateRenderTarget->FillRoundedRectangle(rTrack, m_updateBrushTrack);
+        }
+        float fillW = (trackRect.right - trackRect.left) * (std::max(1, pct) / 100.0f);
+        D2D1_RECT_F fillRect = D2D1::RectF(trackRect.left, trackRect.top, trackRect.left + fillW, trackRect.bottom);
+        D2D1_ROUNDED_RECT rFill = D2D1::RoundedRect(fillRect, 1.25f, 1.25f);
+        if (m_updateBrushBtnHover) {
+            m_updateRenderTarget->FillRoundedRectangle(rFill, m_updateBrushBtnHover);
+        }
+    } else if (state == UpdateState::Downloaded) {
+        std::wstring title = (wDip >= 200.0f) ? L"Update Ready" : L"Ready";
+        float textLeft = (wDip >= 220.0f) ? 24.0f : ((wDip >= 160.0f) ? 22.0f : 18.0f);
+        float textRight = (wDip >= 220.0f) ? (wDip - 88.0f) : ((wDip >= 160.0f) ? (wDip - 80.0f) : (wDip - 46.0f));
+        D2D1_RECT_F textRect = D2D1::RectF(textLeft, 0.0f, textRight, hDip);
+        if (m_updateBrushText && fontText) {
+            m_updateRenderTarget->DrawText(title.c_str(), (UINT32)title.length(), fontText, textRect, m_updateBrushText);
+        }
+
+        // Action Pill Button [ Restart / ✓ ]
+        float btnW = (wDip >= 220.0f) ? 58.0f : ((wDip >= 160.0f) ? 54.0f : 24.0f);
+        float btnRight = (wDip >= 220.0f) ? (wDip - 28.0f) : ((wDip >= 160.0f) ? (wDip - 24.0f) : (wDip - 20.0f));
+        m_updateBtnRect = D2D1::RectF(btnRight - btnW, 5.0f, btnRight, hDip - 5.0f);
+        D2D1_ROUNDED_RECT rBtn = D2D1::RoundedRect(m_updateBtnRect, 12.0f, 12.0f);
+        ID2D1SolidColorBrush* bBrush = nullptr;
+        D2D1_COLOR_F rColor = m_updateBtnHover ? D2D1::ColorF(0.12f, 0.78f, 0.44f, 1.0f) : D2D1::ColorF(0.08f, 0.65f, 0.36f, 1.0f);
+        m_updateRenderTarget->CreateSolidColorBrush(rColor, &bBrush);
+        if (bBrush) {
+            m_updateRenderTarget->FillRoundedRectangle(rBtn, bBrush);
+            bBrush->Release();
+        }
+
+        std::wstring btnLabel = (wDip >= 160.0f) ? L"Restart" : L"✓";
+        if (m_updateBrushText && m_d2d.FontButton) {
+            m_updateRenderTarget->DrawText(btnLabel.c_str(), (UINT32)btnLabel.length(), m_d2d.FontButton, m_updateBtnRect, m_updateBrushText);
+        }
+
+        // Dismiss Button [ ✕ ]
+        float closeLeft = (wDip >= 220.0f) ? (wDip - 24.0f) : ((wDip >= 160.0f) ? (wDip - 22.0f) : (wDip - 18.0f));
+        float closeRight = (wDip >= 220.0f) ? (wDip - 6.0f) : ((wDip >= 160.0f) ? (wDip - 4.0f) : (wDip - 4.0f));
+        m_updateCloseBtnRect = D2D1::RectF(closeLeft, 5.0f, closeRight, hDip - 5.0f);
+        std::wstring closeLabel = L"✕";
+        ID2D1SolidColorBrush* cBrush = m_updateCloseHover ? m_updateBrushText : m_updateBrushTextMuted;
+        if (cBrush && m_d2d.FontButton) {
+            m_updateRenderTarget->DrawText(closeLabel.c_str(), (UINT32)closeLabel.length(), m_d2d.FontButton, m_updateCloseBtnRect, cBrush);
+        }
+    }
+
+    m_updateRenderTarget->EndDraw();
+}
+
+LRESULT CALLBACK AppWindow::UpdatePopupWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    AppWindow* self = (AppWindow*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+    if (!self) {
+        if (msg == WM_CREATE) {
+            CREATESTRUCTW* cs = (CREATESTRUCTW*)lParam;
+            self = (AppWindow*)cs->lpCreateParams;
+            SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)self);
+        }
+        return DefWindowProc(hwnd, msg, wParam, lParam);
+    }
+
+    switch (msg) {
+        case WM_PAINT: {
+            PAINTSTRUCT ps;
+            BeginPaint(hwnd, &ps);
+            self->RenderUpdatePopup();
+            EndPaint(hwnd, &ps);
+            return 0;
+        }
+
+        case WM_MOUSEMOVE: {
+            TRACKMOUSEEVENT tme = { sizeof(TRACKMOUSEEVENT), TME_LEAVE, hwnd, 0 };
+            TrackMouseEvent(&tme);
+
+            POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            float xDip = self->PxToDip(pt.x);
+            float yDip = self->PxToDip(pt.y);
+
+            bool btnHov = (xDip >= self->m_updateBtnRect.left && xDip <= self->m_updateBtnRect.right &&
+                           yDip >= self->m_updateBtnRect.top && yDip <= self->m_updateBtnRect.bottom);
+            bool clsHov = (xDip >= self->m_updateCloseBtnRect.left && xDip <= self->m_updateCloseBtnRect.right &&
+                           yDip >= self->m_updateCloseBtnRect.top && yDip <= self->m_updateCloseBtnRect.bottom);
+
+            if (btnHov != self->m_updateBtnHover || clsHov != self->m_updateCloseHover) {
+                self->m_updateBtnHover = btnHov;
+                self->m_updateCloseHover = clsHov;
+                InvalidateRect(hwnd, NULL, FALSE);
+            }
+            return 0;
+        }
+
+        case WM_MOUSELEAVE: {
+            if (self->m_updateBtnHover || self->m_updateCloseHover) {
+                self->m_updateBtnHover = false;
+                self->m_updateCloseHover = false;
+                InvalidateRect(hwnd, NULL, FALSE);
+            }
+            return 0;
+        }
+
+        case WM_SETCURSOR: {
+            if (self->m_updateBtnHover || self->m_updateCloseHover) {
+                SetCursor(LoadCursor(NULL, IDC_HAND));
+                return TRUE;
+            }
+            SetCursor(LoadCursor(NULL, IDC_ARROW));
+            return TRUE;
+        }
+
+        case WM_LBUTTONDOWN: {
+            POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            float xDip = self->PxToDip(pt.x);
+            float yDip = self->PxToDip(pt.y);
+
+            UpdateState state = self->m_updater.GetState();
+
+            if (xDip >= self->m_updateBtnRect.left && xDip <= self->m_updateBtnRect.right &&
+                yDip >= self->m_updateBtnRect.top && yDip <= self->m_updateBtnRect.bottom) {
+
+                if (state == UpdateState::UpdateAvailable) {
+                    self->m_updater.DownloadUpdateAsync(
+                        [self](int pct) {
+                            if (self->m_updateHwnd) InvalidateRect(self->m_updateHwnd, NULL, FALSE);
+                        },
+                        [self](bool success, const std::wstring& path) {
+                            if (self->m_updateHwnd) InvalidateRect(self->m_updateHwnd, NULL, FALSE);
+                            if (!success) {
+                                self->ShowToast(L"Failed to download update.");
+                            }
+                        }
+                    );
+                } else if (state == UpdateState::Downloaded) {
+                    self->m_updater.LaunchInstallerAndExit(self->m_hwnd);
+                }
+                InvalidateRect(hwnd, NULL, FALSE);
+                return 0;
+            }
+
+            if (xDip >= self->m_updateCloseBtnRect.left && xDip <= self->m_updateCloseBtnRect.right &&
+                yDip >= self->m_updateCloseBtnRect.top && yDip <= self->m_updateCloseBtnRect.bottom) {
+                self->m_updater.Dismiss();
+                self->HideUpdatePopup();
+                return 0;
+            }
+            return 0;
+        }
+    }
+    return DefWindowProc(hwnd, msg, wParam, lParam);
+}
+
 
 
 
 LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
+        case WM_USER + 555: {
+            ShowUpdatePopup();
+            return 0;
+        }
+
         case WM_GETICON: {
             if (wParam == ICON_BIG || wParam == 2 /* ICON_SMALL2 */) {
                 return (LRESULT)(m_hIconBig ? m_hIconBig : m_hIconSmall);
@@ -5975,12 +6393,14 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
 
         case WM_MOVE: {
             UpdateHudPosition();
+            UpdatePopupPosition();
             return 0;
         }
 
         case WM_SIZE: {
             if (wParam == SIZE_MINIMIZED) {
                 if (m_hudHwnd) ShowWindow(m_hudHwnd, SW_HIDE);
+                HideUpdatePopup();
                 m_hudOpacity = 0.0f;
                 m_hudTargetOpacity = 0.0f;
                 if (m_docType == DocumentType::Media && m_media.IsPlaying()) {
@@ -5993,6 +6413,7 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             }
             UpdateLayout();
             UpdateHudPosition();
+            UpdatePopupPosition();
             InvalidateRect(m_hwnd, NULL, FALSE);
             return 0;
         }
@@ -6055,6 +6476,11 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         }
 
         case WM_TIMER: {
+            if (wParam == TIMER_PERIODIC_UPDATE) {
+                CheckForUpdates(false);
+                return 0;
+            }
+
             if (wParam == TIMER_EXPLORER_NAV) {
                 KillTimer(m_hwnd, TIMER_EXPLORER_NAV);
                 std::wstring selectedPath;
@@ -6321,6 +6747,7 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             if (!wParam) {
                 // Window is being hidden: ensure HUD is hidden, media paused, timer stopped
                 if (m_hudHwnd) ShowWindow(m_hudHwnd, SW_HIDE);
+                HideUpdatePopup();
                 m_hudOpacity = 0.0f;
                 m_hudTargetOpacity = 0.0f;
                 if (m_docType == DocumentType::Media) {
@@ -6339,6 +6766,9 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 SetTimer(m_hwnd, 1, 30, NULL);
                 if (m_docType == DocumentType::Media) {
                     UpdateHudPosition();
+                }
+                if (m_updater.GetUpdateInfo().isAvailable) {
+                    ShowUpdatePopup();
                 }
             }
             return 0;
@@ -7604,7 +8034,7 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             if (isCtrl && isShift && !isAlt && (wParam == 'U' || wParam == 'u')) {
                 m_updater.SimulateUpdateForTesting();
                 ShowToast(L"Simulated Update: v1.1.0 Ready to Test");
-                InvalidateRect(m_hwnd, NULL, FALSE);
+                ShowUpdatePopup();
                 return 0;
             }
 
@@ -8033,6 +8463,7 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 RemoveTrayIcon();
                 ExplorerHook::UninstallHook();
                 DestroyHudWindow();
+                DestroyUpdatePopupWindow();
                 ExitProcess(0);
             }
             return 0;
@@ -8042,6 +8473,7 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             RemoveTrayIcon();
             ExplorerHook::UninstallHook();
             DestroyHudWindow();
+            DestroyUpdatePopupWindow();
             PostQuitMessage(0);
             return 0;
         }
