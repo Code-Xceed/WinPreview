@@ -1,6 +1,6 @@
 {
-  "version": "1.0.5",
+  "version": "1.0.6",
   "release_date": "2026-10-21",
   "download_url": "https://github.com/Code-Xceed/WinPreview/releases/latest/download/WinPreview-Setup-x64.exe",
-  "changelog": "WinPreview v1.0.5 - Fixed text & line numbers overlap across all text editors and code previews with isolated rendering layers, strict hardware clipping, bounded horizontal scroll clamping, collision-free responsive status bar layout, and click-to-select line numbers."
+  "changelog": "WinPreview v1.0.6 - Full smooth motion & physics architecture across all document engines, focal-point preserving zoom, kinetic momentum dragging with physical friction, tactile click feedback, Emil Kowalski fluid reveals, and adaptive 120Hz/144Hz high-refresh render loop."
 }
