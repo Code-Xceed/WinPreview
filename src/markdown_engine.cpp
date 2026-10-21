@@ -293,6 +293,8 @@ void MarkdownEngine::Scroll(float dy) {
 void MarkdownEngine::Render(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D1_RECT_F& targetRect, float dpiScale) {
     if (!rt || !m_isLoaded) return;
 
+    rt->PushAxisAlignedClip(targetRect, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+
     float clientW = targetRect.right - targetRect.left;
     float clientH = targetRect.bottom - targetRect.top;
     float marginX = (std::max)(48.0f, (clientW - 860.0f) / 2.0f);
@@ -474,6 +476,8 @@ void MarkdownEngine::Render(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D1_RE
     }
 
     m_contentHeight = curY - (targetRect.top + 36.0f + m_scrollY);
+
+    rt->PopAxisAlignedClip();
 }
 
 std::wstring MarkdownEngine::GetFormatBadge() const {

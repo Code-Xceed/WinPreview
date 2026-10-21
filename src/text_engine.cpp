@@ -691,6 +691,26 @@ void TextEngine::EnsureCursorVisible(const D2D1_RECT_F& viewportRect, float dpiS
 void TextEngine::HandleClick(float x, float y, const D2D1_RECT_F& viewportRect, bool shiftHeld, float dpiScale) {
     if (HandleStatusBarClick(x, y, viewportRect, dpiScale)) return;
 
+    float gutterW = GetGutterWidth(dpiScale);
+    float topPadding = GetHeaderTopPadding(dpiScale);
+    float textOriginX = viewportRect.left + gutterW;
+
+    // Clicking inside line numbers gutter selects the entire line
+    if (x >= viewportRect.left && x < textOriginX && y >= viewportRect.top + topPadding) {
+        float relY = y - (viewportRect.top + topPadding) + m_scrollY;
+        int line = 0;
+        if (m_lineHeight > 0.0f && relY > 0.0f) {
+            line = (int)(relY / m_lineHeight);
+        }
+        line = std::clamp(line, 0, (int)m_lines.size() - 1);
+        m_cursor = { line, (int)m_lines[line].length() };
+        m_anchor = { line, 0 };
+        m_isSelectingText = true;
+        ResetCaretBlink();
+        EnsureCursorVisible(viewportRect, dpiScale);
+        return;
+    }
+
     TextPos pos = PointToPosition(x, y, viewportRect, dpiScale);
     m_cursor = pos;
     if (!shiftHeld) {
@@ -1329,50 +1349,53 @@ void TextEngine::RenderText(
     // 1. Dark sleek VS Code zinc background (#141417)
     rt->FillRectangle(viewportRect, d2d.BrushCard);
 
-    // 2. Line numbers gutter calculation
+    // 2. Viewport and coordinate calculations
     EnsureBrushes(rt);
-    D2D1_RECT_F gutterRect = D2D1::RectF(codeViewport.left, codeViewport.top, codeViewport.left + m_gutterWidth, codeViewport.bottom);
+    float textOriginX = codeViewport.left + m_gutterWidth;
+    D2D1_RECT_F textAreaClip = D2D1::RectF(textOriginX, codeViewport.top, codeViewport.right, codeViewport.bottom);
+    D2D1_RECT_F gutterRect = D2D1::RectF(codeViewport.left, codeViewport.top, textOriginX, codeViewport.bottom);
 
-    // Gutter background (#121215) & border
-    if (m_brGutterBg) {
-        rt->FillRectangle(gutterRect, m_brGutterBg);
-    }
-    rt->DrawLine(
-        D2D1::Point2F(codeViewport.left + m_gutterWidth, codeViewport.top),
-        D2D1::Point2F(codeViewport.left + m_gutterWidth, codeViewport.bottom),
-        d2d.BrushBorderSubtle,
-        1.0f
-    );
-
-    // 3. Scroll clamping
+    // 3. Scroll clamping (vertical & horizontal)
     int totalLines = (int)m_lines.size();
     float totalH = (float)totalLines * m_lineHeight;
     float viewH = codeViewport.bottom - codeViewport.top;
     float maxScrollY = std::max(0.0f, totalH - viewH + 60.0f * dpiScale);
-    m_targetScrollY = std::min(m_targetScrollY, maxScrollY);
-    m_scrollY = std::min(m_scrollY, maxScrollY);
+    m_targetScrollY = std::clamp(m_targetScrollY, 0.0f, maxScrollY);
+    m_scrollY = std::clamp(m_scrollY, 0.0f, maxScrollY);
 
-    // 4. Clip to code editing viewport
-    rt->PushAxisAlignedClip(codeViewport, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+    float textVisibleW = (codeViewport.right - textOriginX) - 32.0f * dpiScale;
+    float maxLineWidth = 0.0f;
+    for (const auto& line : m_lines) {
+        float lw = (float)line.length() * m_charWidth;
+        if (lw > maxLineWidth) maxLineWidth = lw;
+    }
+    float maxScrollX = std::max(0.0f, maxLineWidth - textVisibleW + 60.0f * dpiScale);
+    m_targetScrollX = std::clamp(m_targetScrollX, 0.0f, maxScrollX);
+    m_scrollX = std::clamp(m_scrollX, 0.0f, maxScrollX);
 
     int startLine = std::max(0, (int)(m_scrollY / m_lineHeight));
     int endLine = std::min(totalLines, startLine + (int)(viewH / m_lineHeight) + 3);
 
     // VS Code Syntax & Selection Brushes (cached in m_brComment, m_brString, etc. via EnsureBrushes)
-    float textLeft = codeViewport.left + m_gutterWidth + 12.0f * dpiScale - m_scrollX;
+    float textLeft = textOriginX + 12.0f * dpiScale - m_scrollX;
     float textRight = codeViewport.right - 16.0f * dpiScale;
 
     TextPos selStart = GetSelectionStart();
     TextPos selEnd = GetSelectionEnd();
     bool hasSel = HasSelection();
 
+    // =========================================================================
+    // LAYER 1: CODE TEXT VIEWPORT (Strictly clipped to text area - cannot bleed into gutter)
+    // =========================================================================
+    rt->PushAxisAlignedClip(textAreaClip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+
     for (int i = startLine; i < endLine; ++i) {
         float lineY = codeViewport.top + (float)i * m_lineHeight - m_scrollY;
         if (lineY + m_lineHeight < codeViewport.top || lineY > codeViewport.bottom) continue;
 
-        // Active Line Highlight
+        // Active Line Highlight (inside text area)
         if (i == m_cursor.line && m_brActiveLine) {
-            D2D1_RECT_F activeRect = D2D1::RectF(codeViewport.left, lineY, codeViewport.right, lineY + m_lineHeight);
+            D2D1_RECT_F activeRect = D2D1::RectF(textOriginX, lineY, codeViewport.right, lineY + m_lineHeight);
             rt->FillRectangle(activeRect, m_brActiveLine);
         }
 
@@ -1402,18 +1425,6 @@ void TextEngine::RenderText(
                 rt->FillRectangle(selBox, m_brSelection);
             }
         }
-
-        // Gutter Line Number (Active line is pure white, others muted)
-        WCHAR numBuf[32];
-        swprintf_s(numBuf, L"%d", i + 1);
-        D2D1_RECT_F numRect = D2D1::RectF(
-            codeViewport.left + 4.0f,
-            lineY,
-            codeViewport.left + m_gutterWidth - 8.0f * dpiScale,
-            lineY + m_lineHeight
-        );
-        ID2D1Brush* numBrush = (i == m_cursor.line) ? (ID2D1Brush*)d2d.BrushText : (ID2D1Brush*)d2d.BrushTextMuted;
-        rt->DrawText(numBuf, (UINT32)wcslen(numBuf), d2d.FontBadge, numRect, numBrush);
 
         // Code Line Text
         const std::wstring& line = m_lines[i];
@@ -1471,7 +1482,48 @@ void TextEngine::RenderText(
 
     rt->PopAxisAlignedClip();
 
-    // 5. Vertical Scrollbar
+    // =========================================================================
+    // LAYER 2: PINNED GUTTER COLUMN (Solid background, line numbers, border)
+    // =========================================================================
+    rt->PushAxisAlignedClip(gutterRect, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+
+    // Solid Gutter background (#121215)
+    rt->FillRectangle(gutterRect, m_brGutterBg ? m_brGutterBg : d2d.BrushCard);
+
+    for (int i = startLine; i < endLine; ++i) {
+        float lineY = codeViewport.top + (float)i * m_lineHeight - m_scrollY;
+        if (lineY + m_lineHeight < codeViewport.top || lineY > codeViewport.bottom) continue;
+
+        // Active line highlight in gutter
+        if (i == m_cursor.line && m_brActiveLine) {
+            D2D1_RECT_F gutterActiveRect = D2D1::RectF(gutterRect.left, lineY, gutterRect.right, lineY + m_lineHeight);
+            rt->FillRectangle(gutterActiveRect, m_brActiveLine);
+        }
+
+        // Gutter Line Number (Active line is pure white, others muted)
+        WCHAR numBuf[32];
+        swprintf_s(numBuf, L"%d", i + 1);
+        D2D1_RECT_F numRect = D2D1::RectF(
+            gutterRect.left + 4.0f * dpiScale,
+            lineY,
+            gutterRect.right - 8.0f * dpiScale,
+            lineY + m_lineHeight
+        );
+        ID2D1Brush* numBrush = (i == m_cursor.line) ? (ID2D1Brush*)d2d.BrushText : (ID2D1Brush*)d2d.BrushTextMuted;
+        rt->DrawText(numBuf, (UINT32)wcslen(numBuf), d2d.FontBadge, numRect, numBrush);
+    }
+
+    rt->PopAxisAlignedClip();
+
+    // Gutter vertical separator line (pinned at textOriginX)
+    rt->DrawLine(
+        D2D1::Point2F(textOriginX, codeViewport.top),
+        D2D1::Point2F(textOriginX, codeViewport.bottom),
+        d2d.BrushBorderSubtle,
+        1.0f
+    );
+
+    // 5. Scrollbars (Vertical & Horizontal)
     if (totalH > viewH) {
         float scrollbarW = 6.0f * dpiScale;
         float trackH = viewH;
@@ -1488,8 +1540,24 @@ void TextEngine::RenderText(
         rt->FillRoundedRectangle(rThumb, d2d.BrushBorder);
     }
 
+    if (maxScrollX > 0.0f) {
+        float scrollbarH = 4.0f * dpiScale;
+        float trackW = textVisibleW;
+        float thumbW = std::max(28.0f * dpiScale, (trackW / (trackW + maxScrollX)) * trackW);
+        float thumbX = textOriginX + (m_scrollX / maxScrollX) * (trackW - thumbW);
+
+        D2D1_RECT_F thumbRect = D2D1::RectF(
+            thumbX,
+            codeViewport.bottom - scrollbarH - 2.0f,
+            thumbX + thumbW,
+            codeViewport.bottom - 2.0f
+        );
+        D2D1_ROUNDED_RECT rThumb = D2D1::RoundedRect(thumbRect, scrollbarH / 2.0f, scrollbarH / 2.0f);
+        rt->FillRoundedRectangle(rThumb, d2d.BrushBorder);
+    }
+
     // =========================================================================
-    // 6. MINI VS CODE STATUS BAR (Bottom 24px)
+    // 6. MINI VS CODE STATUS BAR (Bottom 24px) - Collision-Free & Responsive
     // =========================================================================
     D2D1_RECT_F statusRect = D2D1::RectF(
         viewportRect.left,
@@ -1509,65 +1577,85 @@ void TextEngine::RenderText(
         1.0f
     );
 
-    float statX = statusRect.left + 12.0f * dpiScale;
     float statY = statusRect.top;
     float statH = statusH;
+    float rightX = statusRect.right - 14.0f * dpiScale;
+    IDWriteTextFormat* fontRight = d2d.FontCaptionRight ? d2d.FontCaptionRight : d2d.FontCaption;
 
-    // A. Line & Column readout: "Ln 14, Col 21"
-    WCHAR posBuf[64];
-    if (hasSel) {
-        std::wstring sel = GetSelectedText();
-        swprintf_s(posBuf, L"Ln %d, Col %d (%zu selected)", m_cursor.line + 1, m_cursor.col + 1, sel.length());
-    } else {
-        swprintf_s(posBuf, L"Ln %d, Col %d", m_cursor.line + 1, m_cursor.col + 1);
-    }
-    D2D1_RECT_F posRect = D2D1::RectF(statX, statY, statX + 160.0f * dpiScale, statY + statH);
-    rt->DrawText(posBuf, (UINT32)wcslen(posBuf), d2d.FontCaption, posRect, d2d.BrushText);
-    statX += 170.0f * dpiScale;
-
-    // B. Indentation Pill: "Spaces: 4" (Clickable!)
-    WCHAR tabBuf[32];
-    swprintf_s(tabBuf, L"Spaces: %d", m_tabSpaces);
-    m_statusSpacesRect = D2D1::RectF(statX, statY, statX + 75.0f * dpiScale, statY + statH);
-    rt->DrawText(tabBuf, (UINT32)wcslen(tabBuf), d2d.FontCaption, m_statusSpacesRect, d2d.BrushTextMuted);
-    statX += 85.0f * dpiScale;
-
-    // C. Word Wrap Pill: "Wrap: ON/OFF" (Clickable!)
-    const WCHAR* wrapStr = m_wordWrap ? L"Wrap: ON" : L"Wrap: OFF";
-    m_statusWrapRect = D2D1::RectF(statX, statY, statX + 75.0f * dpiScale, statY + statH);
-    rt->DrawText(wrapStr, (UINT32)wcslen(wrapStr), d2d.FontCaption, m_statusWrapRect, m_wordWrap ? d2d.BrushAccent : d2d.BrushTextMuted);
-    statX += 85.0f * dpiScale;
-
-    // D. Right-aligned status indicators
-    float rightX = statusRect.right - 12.0f * dpiScale;
-
+    // 1. Right-aligned items (Language, EOL, Encoding, Modified)
     // Modified Badge (if dirty): "● Modified (Ctrl+S)"
     if (m_isModified) {
         const WCHAR* modText = L"● Modified (Ctrl+S)";
         float modW = 125.0f * dpiScale;
         m_statusSaveRect = D2D1::RectF(rightX - modW, statY, rightX, statY + statH);
-        rt->DrawText(modText, (UINT32)wcslen(modText), d2d.FontCaption, m_statusSaveRect, d2d.BrushAccent);
-        rightX -= modW + 16.0f * dpiScale;
+        rt->DrawText(modText, (UINT32)wcslen(modText), fontRight, m_statusSaveRect, d2d.BrushAccent);
+        rightX -= modW + 14.0f * dpiScale;
     } else {
         m_statusSaveRect = D2D1::RectF(0, 0, 0, 0);
     }
 
-    // Language Name: e.g. "Python", "TypeScript", "C++"
-    float langW = 90.0f * dpiScale;
+    // Language Name: e.g. "Python", "TypeScript", "Plain Text"
+    float langW = std::max(60.0f * dpiScale, (float)m_languageName.length() * 7.5f * dpiScale + 12.0f * dpiScale);
     D2D1_RECT_F langRect = D2D1::RectF(rightX - langW, statY, rightX, statY + statH);
-    rt->DrawText(m_languageName.c_str(), (UINT32)m_languageName.length(), d2d.FontCaption, langRect, d2d.BrushText);
-    rightX -= langW + 16.0f * dpiScale;
+    rt->DrawText(m_languageName.c_str(), (UINT32)m_languageName.length(), fontRight, langRect, d2d.BrushText);
+    rightX -= langW + 14.0f * dpiScale;
 
-    // Line Ending: "CRLF" / "LF"
-    float eolW = 45.0f * dpiScale;
-    D2D1_RECT_F eolRect = D2D1::RectF(rightX - eolW, statY, rightX, statY + statH);
-    rt->DrawText(m_lineEndingName.c_str(), (UINT32)m_lineEndingName.length(), d2d.FontCaption, eolRect, d2d.BrushTextMuted);
-    rightX -= eolW + 16.0f * dpiScale;
+    // Line Ending: "CRLF" / "LF" (only if enough space)
+    if (rightX > 480.0f * dpiScale) {
+        float eolW = 38.0f * dpiScale;
+        D2D1_RECT_F eolRect = D2D1::RectF(rightX - eolW, statY, rightX, statY + statH);
+        rt->DrawText(m_lineEndingName.c_str(), (UINT32)m_lineEndingName.length(), fontRight, eolRect, d2d.BrushTextMuted);
+        rightX -= eolW + 14.0f * dpiScale;
+    }
 
-    // Encoding: "UTF-8"
-    float encW = 65.0f * dpiScale;
-    D2D1_RECT_F encRect = D2D1::RectF(rightX - encW, statY, rightX, statY + statH);
-    rt->DrawText(m_encodingName.c_str(), (UINT32)m_encodingName.length(), d2d.FontCaption, encRect, d2d.BrushTextMuted);
+    // Encoding: "UTF-8" (only if enough space)
+    if (rightX > 420.0f * dpiScale) {
+        float encW = 54.0f * dpiScale;
+        D2D1_RECT_F encRect = D2D1::RectF(rightX - encW, statY, rightX, statY + statH);
+        rt->DrawText(m_encodingName.c_str(), (UINT32)m_encodingName.length(), fontRight, encRect, d2d.BrushTextMuted);
+        rightX -= encW + 14.0f * dpiScale;
+    }
+
+    // 2. Left-aligned items (Line/Col, Spaces, Wrap)
+    float statX = statusRect.left + 12.0f * dpiScale;
+
+    // A. Line & Column readout: "Ln 14, Col 21"
+    WCHAR posBuf[64];
+    if (hasSel) {
+        std::wstring sel = GetSelectedText();
+        swprintf_s(posBuf, L"Ln %d, Col %d (%zu sel)", m_cursor.line + 1, m_cursor.col + 1, sel.length());
+    } else {
+        swprintf_s(posBuf, L"Ln %d, Col %d", m_cursor.line + 1, m_cursor.col + 1);
+    }
+    float posW = (float)wcslen(posBuf) * 7.5f * dpiScale + 12.0f * dpiScale;
+    if (statX + posW < rightX - 10.0f * dpiScale) {
+        D2D1_RECT_F posRect = D2D1::RectF(statX, statY, statX + posW, statY + statH);
+        rt->DrawText(posBuf, (UINT32)wcslen(posBuf), d2d.FontCaption, posRect, d2d.BrushText);
+        statX += posW + 16.0f * dpiScale;
+    }
+
+    // B. Indentation Pill: "Spaces: 4" (Clickable!)
+    WCHAR tabBuf[32];
+    swprintf_s(tabBuf, L"Spaces: %d", m_tabSpaces);
+    float tabW = 68.0f * dpiScale;
+    if (statX + tabW < rightX - 10.0f * dpiScale) {
+        m_statusSpacesRect = D2D1::RectF(statX, statY, statX + tabW, statY + statH);
+        rt->DrawText(tabBuf, (UINT32)wcslen(tabBuf), d2d.FontCaption, m_statusSpacesRect, d2d.BrushTextMuted);
+        statX += tabW + 14.0f * dpiScale;
+    } else {
+        m_statusSpacesRect = D2D1::RectF(0, 0, 0, 0);
+    }
+
+    // C. Word Wrap Pill: "Wrap: ON/OFF" (Clickable!)
+    const WCHAR* wrapStr = m_wordWrap ? L"Wrap: ON" : L"Wrap: OFF";
+    float wrapW = 68.0f * dpiScale;
+    if (statX + wrapW < rightX - 10.0f * dpiScale) {
+        m_statusWrapRect = D2D1::RectF(statX, statY, statX + wrapW, statY + statH);
+        rt->DrawText(wrapStr, (UINT32)wcslen(wrapStr), d2d.FontCaption, m_statusWrapRect, m_wordWrap ? d2d.BrushAccent : d2d.BrushTextMuted);
+        statX += wrapW + 14.0f * dpiScale;
+    } else {
+        m_statusWrapRect = D2D1::RectF(0, 0, 0, 0);
+    }
 }
 
 void TextEngine::RenderSpreadsheet(

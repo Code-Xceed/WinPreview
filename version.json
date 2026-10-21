@@ -1,6 +1,6 @@
 {
-  "version": "1.0.4",
-  "release_date": "2026-10-20",
+  "version": "1.0.5",
+  "release_date": "2026-10-21",
   "download_url": "https://github.com/Code-Xceed/WinPreview/releases/latest/download/WinPreview-Setup-x64.exe",
-  "changelog": "WinPreview v1.0.4 - Resilient multi-tier update download engine (WinINet stream + URLDownloadToFile fallback), sharing violation lock protection in Temp, and one-click Retry button for update failures."
+  "changelog": "WinPreview v1.0.5 - Fixed text & line numbers overlap across all text editors and code previews with isolated rendering layers, strict hardware clipping, bounded horizontal scroll clamping, collision-free responsive status bar layout, and click-to-select line numbers."
 }
