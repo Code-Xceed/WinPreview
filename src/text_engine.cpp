@@ -429,6 +429,8 @@ void TextEngine::ResetCaretBlink() {
 void TextEngine::Scroll(float deltaY, float deltaX) {
     m_targetScrollY = std::max(0.0f, m_targetScrollY + deltaY);
     m_targetScrollX = std::max(0.0f, m_targetScrollX + deltaX);
+    m_scrollY = m_targetScrollY;
+    m_scrollX = m_targetScrollX;
 }
 
 void TextEngine::PageUp(float viewportHeight) {
@@ -442,11 +444,14 @@ void TextEngine::PageDown(float viewportHeight) {
 void TextEngine::ScrollToTop() {
     m_targetScrollY = 0.0f;
     m_targetScrollX = 0.0f;
+    m_scrollY = 0.0f;
+    m_scrollX = 0.0f;
 }
 
 void TextEngine::ScrollToBottom(float viewportHeight) {
     float totalH = (float)m_lines.size() * m_lineHeight;
     m_targetScrollY = std::max(0.0f, totalH - viewportHeight + 100.0f);
+    m_scrollY = m_targetScrollY;
 }
 
 void TextEngine::SetScrollPosition(float scrollY, float scrollX) {
@@ -474,25 +479,12 @@ void TextEngine::ResetZoom() {
 bool TextEngine::UpdateAnimation(float dt) {
     bool dirty = false;
 
-    // Smooth Kinetic Lerp Scroll (Frame-rate independent exponential decay)
-    float dy = m_targetScrollY - m_scrollY;
-    float dx = m_targetScrollX - m_scrollX;
-
-    float safeDt = (std::max)(0.001f, (std::min)(0.1f, dt));
-    float decay = 1.0f - std::exp(-22.0f * safeDt);
-
-    if (std::abs(dy) > 0.25f) {
-        m_scrollY += dy * decay;
-        dirty = true;
-    } else if (m_scrollY != m_targetScrollY) {
+    if (m_scrollY != m_targetScrollY) {
         m_scrollY = m_targetScrollY;
         dirty = true;
     }
 
-    if (std::abs(dx) > 0.25f) {
-        m_scrollX += dx * decay;
-        dirty = true;
-    } else if (m_scrollX != m_targetScrollX) {
+    if (m_scrollX != m_targetScrollX) {
         m_scrollX = m_targetScrollX;
         dirty = true;
     }

@@ -333,19 +333,14 @@ bool FolderEngine::LoadFromZipArchive(const std::wstring& zipPath) {
 
 void FolderEngine::Scroll(float dy) {
     float maxScroll = (std::max)(0.0f, m_contentHeight - 400.0f);
-    m_targetScrollY += dy;
-    if (m_targetScrollY > 0.0f) m_targetScrollY = 0.0f;
-    if (m_targetScrollY < -maxScroll) m_targetScrollY = -maxScroll;
+    m_scrollY += dy;
+    if (m_scrollY > 0.0f) m_scrollY = 0.0f;
+    if (m_scrollY < -maxScroll) m_scrollY = -maxScroll;
+    m_targetScrollY = m_scrollY;
 }
 
 bool FolderEngine::UpdateAnimation(float dt) {
-    float dy = m_targetScrollY - m_scrollY;
-    if (std::abs(dy) > 0.25f) {
-        float safeDt = (std::max)(0.001f, (std::min)(0.1f, dt));
-        float decay = 1.0f - std::exp(-22.0f * safeDt);
-        m_scrollY += dy * decay;
-        return true;
-    } else if (m_scrollY != m_targetScrollY) {
+    if (m_scrollY != m_targetScrollY) {
         m_scrollY = m_targetScrollY;
         return true;
     }

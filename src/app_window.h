@@ -213,8 +213,6 @@ private:
     float m_dragVelX = 0.0f;
     float m_dragVelY = 0.0f;
     bool m_isMomentumActive = false;
-    D2D1_POINT_2F m_lastDragSamplePt = {};
-    ULONGLONG m_lastDragSampleTime = 0;
     int m_rotation = 0; // 0, 90, 180, 270
     float m_dpiScale = 1.0f;
 

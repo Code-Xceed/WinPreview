@@ -1206,11 +1206,14 @@ void AppWindow::ZoomIn() {
     if (m_docType == DocumentType::Text || m_docType == DocumentType::Spreadsheet) {
         m_text.ZoomIn();
     } else {
-        float oldTarget = m_targetZoom;
-        m_targetZoom = (std::clamp)(m_targetZoom * 1.25f, 0.05f, 25.0f);
-        float factor = m_targetZoom / (oldTarget > 0.001f ? oldTarget : 1.0f);
-        m_targetPanX *= factor;
-        m_targetPanY *= factor;
+        float oldZoom = m_zoom;
+        m_zoom = (std::clamp)(m_zoom * 1.25f, 0.05f, 25.0f);
+        float factor = m_zoom / (oldZoom > 0.001f ? oldZoom : 1.0f);
+        m_panX *= factor;
+        m_panY *= factor;
+        m_targetZoom = m_zoom;
+        m_targetPanX = m_panX;
+        m_targetPanY = m_panY;
     }
     InvalidateRect(m_hwnd, NULL, FALSE);
 }
@@ -1219,16 +1222,22 @@ void AppWindow::ZoomOut() {
     if (m_docType == DocumentType::Text || m_docType == DocumentType::Spreadsheet) {
         m_text.ZoomOut();
     } else {
-        float oldTarget = m_targetZoom;
-        m_targetZoom = (std::clamp)(m_targetZoom * 0.8f, 0.05f, 25.0f);
-        float factor = m_targetZoom / (oldTarget > 0.001f ? oldTarget : 1.0f);
-        m_targetPanX *= factor;
-        m_targetPanY *= factor;
+        float oldZoom = m_zoom;
+        m_zoom = (std::clamp)(m_zoom * 0.8f, 0.05f, 25.0f);
+        float factor = m_zoom / (oldZoom > 0.001f ? oldZoom : 1.0f);
+        m_panX *= factor;
+        m_panY *= factor;
+        m_targetZoom = m_zoom;
+        m_targetPanX = m_panX;
+        m_targetPanY = m_panY;
     }
     InvalidateRect(m_hwnd, NULL, FALSE);
 }
 
 void AppWindow::ResetZoom() {
+    m_zoom = 1.0f;
+    m_panX = 0.0f;
+    m_panY = 0.0f;
     m_targetZoom = 1.0f;
     m_targetPanX = 0.0f;
     m_targetPanY = 0.0f;
@@ -3145,7 +3154,7 @@ std::vector<AppWindow::OverflowMenuItem> AppWindow::GetCurrentOverflowItems() co
 
 void AppWindow::RenderOverflowMenu(const D2D1_RECT_F& canvasRect) {
     ID2D1HwndRenderTarget* rt = m_d2d.GetRenderTarget();
-    if (!rt || (!m_showOverflowMenu && m_overflowMenuAnim <= 0.005f)) {
+    if (!rt || !m_showOverflowMenu) {
         m_overflowMenuRect = {};
         return;
     }
@@ -3153,7 +3162,6 @@ void AppWindow::RenderOverflowMenu(const D2D1_RECT_F& canvasRect) {
     std::vector<OverflowMenuItem> items = GetCurrentOverflowItems();
     if (items.empty()) return;
 
-    float t = (std::clamp)(m_overflowMenuAnim, 0.0f, 1.0f);
     float itemH = 28.0f;
     float dividerH = 5.0f;
     float padY = 5.0f;
@@ -3192,24 +3200,17 @@ void AppWindow::RenderOverflowMenu(const D2D1_RECT_F& canvasRect) {
 
     m_overflowMenuRect = D2D1::RectF(menuX, menuY, menuX + menuW, menuY + renderH);
 
-    D2D1_MATRIX_3X2_F oldXform;
-    rt->GetTransform(&oldXform);
-    float scale = 0.95f + 0.05f * t;
-    D2D1_MATRIX_3X2_F xform = D2D1::Matrix3x2F::Scale(scale, scale, D2D1::Point2F(menuX + menuW - 14.0f, menuY)) * oldXform;
-    rt->SetTransform(xform);
-
     // 1. Ambient drop shadow (multi-pass falloff)
     D2D1_ROUNDED_RECT rShadow = D2D1::RoundedRect(
         D2D1::RectF(menuX, menuY + 2.5f, menuX + menuW, menuY + renderH + 6.0f),
         8.0f, 8.0f
     );
-    m_d2d.BrushShadowDark->SetOpacity(0.40f * t);
-    rt->FillRoundedRectangle(rShadow, m_d2d.BrushShadowDark);
     m_d2d.BrushShadowDark->SetOpacity(0.40f);
+    rt->FillRoundedRectangle(rShadow, m_d2d.BrushShadowDark);
 
     // 2. Acrylic dark glass background (#18181BF8)
     D2D1_ROUNDED_RECT rMenu = D2D1::RoundedRect(m_overflowMenuRect, 8.0f, 8.0f);
-    m_d2d.BrushToolbar->SetOpacity(0.97f * t);
+    m_d2d.BrushToolbar->SetOpacity(0.97f);
     rt->FillRoundedRectangle(rMenu, m_d2d.BrushToolbar);
     m_d2d.BrushToolbar->SetOpacity(1.0f);
 
@@ -3280,11 +3281,6 @@ void AppWindow::RenderOverflowMenu(const D2D1_RECT_F& canvasRect) {
         m_d2d.BrushBorderSubtle->SetOpacity(0.85f);
         rt->FillRoundedRectangle(thumbR, m_d2d.BrushBorderSubtle);
         m_d2d.BrushBorderSubtle->SetOpacity(1.0f);
-    }
-
-    rt->SetTransform(oldXform);
-    if (!m_showOverflowMenu) {
-        m_overflowMenuRect = {};
     }
 }
 
@@ -4963,7 +4959,7 @@ void AppWindow::RenderCanvas(const D2D1_RECT_F& rect) {
 }
 
 void AppWindow::RenderSearchBar(const D2D1_RECT_F& canvasRect) {
-    if ((!m_showSearch && m_searchAnim <= 0.005f) || m_docType != DocumentType::Pdf) {
+    if (!m_showSearch || m_docType != DocumentType::Pdf) {
         m_searchBarRect = {};
         m_searchPrevBtn = {};
         m_searchNextBtn = {};
@@ -4973,16 +4969,15 @@ void AppWindow::RenderSearchBar(const D2D1_RECT_F& canvasRect) {
     ID2D1HwndRenderTarget* rt = m_d2d.GetRenderTarget();
     if (!rt) return;
 
-    float t = (std::clamp)(m_searchAnim, 0.0f, 1.0f);
     float availW = canvasRect.right - canvasRect.left;
     float barW = (std::min)(340.0f, availW - 24.0f);
     float barH = 38.0f;
     float barX = canvasRect.right - barW - 14.0f;
     if (barX < canvasRect.left + 12.0f) barX = canvasRect.left + 12.0f;
 
-    // Anchor cleanly below the top dock pill with smooth slide-down
+    // Anchor cleanly below the top dock pill
     float dockBottom = (m_topDockRect.bottom > 0.0f) ? m_topDockRect.bottom : 0.0f;
-    float barY = (std::max)(dockBottom + 10.0f, canvasRect.top + 14.0f) + (1.0f - t) * -16.0f;
+    float barY = (std::max)(dockBottom + 10.0f, canvasRect.top + 14.0f);
 
     m_searchBarRect = D2D1::RectF(barX, barY, barX + barW, barY + barH);
     D2D1_ROUNDED_RECT barR = D2D1::RoundedRect(m_searchBarRect, 8.0f, 8.0f);
@@ -5155,7 +5150,7 @@ void AppWindow::RenderCropOverlay(const D2D1_RECT_F& canvasRect) {
 }
 
 void AppWindow::RenderInspector(const D2D1_RECT_F& canvasRect) {
-    if (!m_showInspector && m_inspectorAnim <= 0.005f) {
+    if (!m_showInspector) {
         m_inspectorRect = {};
         m_inspectorCloseRect = {};
         m_inspectorCopyRect = {};
@@ -5164,10 +5159,9 @@ void AppWindow::RenderInspector(const D2D1_RECT_F& canvasRect) {
     ID2D1HwndRenderTarget* rt = m_d2d.GetRenderTarget();
     if (!rt) return;
 
-    float t = (std::clamp)(m_inspectorAnim, 0.0f, 1.0f);
     float availW = canvasRect.right - canvasRect.left;
     float cardW = (std::min)(310.0f, availW - 24.0f);
-    float cardX = canvasRect.right - cardW - 14.0f + (1.0f - t) * 35.0f;
+    float cardX = canvasRect.right - cardW - 14.0f;
     if (cardX < canvasRect.left + 10.0f) cardX = canvasRect.left + 10.0f;
 
     // Anchor below search bar if active, otherwise below top dock pill
@@ -5181,11 +5175,6 @@ void AppWindow::RenderInspector(const D2D1_RECT_F& canvasRect) {
 
     m_inspectorRect = D2D1::RectF(cardX, cardY, cardX + cardW, cardY + cardH);
 
-    D2D1_MATRIX_3X2_F oldXform;
-    rt->GetTransform(&oldXform);
-    float scale = 0.96f + 0.04f * t;
-    D2D1_MATRIX_3X2_F xform = D2D1::Matrix3x2F::Scale(scale, scale, D2D1::Point2F(cardX + cardW, cardY + 20.0f)) * oldXform;
-    rt->SetTransform(xform);
     D2D1_ROUNDED_RECT cardR = D2D1::RoundedRect(m_inspectorRect, 12.0f, 12.0f);
 
     // Drop shadow
@@ -5370,13 +5359,6 @@ void AppWindow::RenderInspector(const D2D1_RECT_F& canvasRect) {
     }
 
     drawRow(L"Folder Nav", L"Arrow keys (← / →)");
-    rt->SetTransform(oldXform);
-
-    if (!m_showInspector) {
-        m_inspectorRect = {};
-        m_inspectorCloseRect = {};
-        m_inspectorCopyRect = {};
-    }
 }
 
 void AppWindow::CopyInspectorMetadata() {
@@ -5646,7 +5628,7 @@ void AppWindow::TogglePreviewFromHook() {
 }
 
 void AppWindow::RenderSettingsModal(const D2D1_RECT_F& canvasRect) {
-    if (!m_showSettings && m_settingsAnim <= 0.005f) {
+    if (!m_showSettings) {
         m_settingsModalRect = {};
         m_settingsCloseBtn = {};
         m_settingsRecordBtn = {};
@@ -5660,10 +5642,8 @@ void AppWindow::RenderSettingsModal(const D2D1_RECT_F& canvasRect) {
     ID2D1HwndRenderTarget* rt = m_d2d.GetRenderTarget();
     if (!rt) return;
 
-    float t = (std::clamp)(m_settingsAnim, 0.0f, 1.0f);
-
     // 1. Full-screen backdrop tint (#000000 at 55% opacity)
-    m_d2d.BrushShadowDark->SetOpacity(0.55f * t);
+    m_d2d.BrushShadowDark->SetOpacity(0.55f);
     rt->FillRectangle(canvasRect, m_d2d.BrushShadowDark);
     m_d2d.BrushShadowDark->SetOpacity(0.40f);
 
@@ -5675,12 +5655,6 @@ void AppWindow::RenderSettingsModal(const D2D1_RECT_F& canvasRect) {
     float cy = canvasRect.top + availH / 2.0f;
 
     m_settingsModalRect = D2D1::RectF(cx - modalW / 2.0f, cy - modalH / 2.0f, cx + modalW / 2.0f, cy + modalH / 2.0f);
-
-    D2D1_MATRIX_3X2_F oldXform;
-    rt->GetTransform(&oldXform);
-    float scale = 0.94f + 0.06f * t;
-    D2D1_MATRIX_3X2_F xform = D2D1::Matrix3x2F::Scale(scale, scale, D2D1::Point2F(cx, cy)) * oldXform;
-    rt->SetTransform(xform);
 
     // 2. Card Drop Shadow
     D2D1_ROUNDED_RECT shadowR = D2D1::RoundedRect(
@@ -5911,17 +5885,6 @@ void AppWindow::RenderSettingsModal(const D2D1_RECT_F& canvasRect) {
     D2D1_RECT_F doneTextR = D2D1::RectF(doneX, curY + 7.0f, doneX + doneW, curY + doneH);
     const WCHAR* doneText = L"Done";
     rt->DrawText(doneText, (UINT32)wcslen(doneText), m_d2d.FontButton ? m_d2d.FontButton : m_d2d.FontCaption, doneTextR, m_d2d.BrushText);
-
-    rt->SetTransform(oldXform);
-    if (!m_showSettings) {
-        m_settingsModalRect = {};
-        m_settingsCloseBtn = {};
-        m_settingsRecordBtn = {};
-        m_settingsResetBtn = {};
-        m_settingsDoneBtn = {};
-        m_settingsAutostartBtn = {};
-        for (int i = 0; i < 5; ++i) m_settingsPresetRects[i] = {};
-    }
 }
 
 bool AppWindow::CreateHudWindow() {
@@ -7453,180 +7416,45 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             if (dt < 0.001f) dt = 0.001f;
             if (dt > 0.1f) dt = 0.033f;
 
-            // 1. Text & Spreadsheet smooth kinetic scrolling
+            // 1. Text caret blink update
             if (m_docType == DocumentType::Text || m_docType == DocumentType::Spreadsheet) {
                 if (m_text.UpdateAnimation(dt)) {
-                    isAnimating = true;
-                    InvalidateRect(m_hwnd, NULL, FALSE);
-                }
-            }
-            // 2. Markdown & Jupyter Notebook smooth kinetic scrolling
-            else if (m_docType == DocumentType::Markdown || m_docType == DocumentType::Notebook) {
-                if (m_md.UpdateAnimation(dt)) {
-                    isAnimating = true;
-                    InvalidateRect(m_hwnd, NULL, FALSE);
-                }
-            }
-            // 3. Folder & Archive Directory tree kinetic scrolling
-            else if (m_docType == DocumentType::Folder) {
-                if (m_folder.UpdateAnimation(dt)) {
-                    isAnimating = true;
-                    InvalidateRect(m_hwnd, NULL, FALSE);
-                }
-            }
-            // 4. Font specimen & character grid kinetic scrolling
-            else if (m_docType == DocumentType::Font) {
-                if (m_font.UpdateAnimation(dt)) {
-                    isAnimating = true;
-                    InvalidateRect(m_hwnd, NULL, FALSE);
-                }
-            }
-            // 5. System binaries, shortcuts, certificates kinetic scrolling
-            else if (m_docType == DocumentType::Binary || m_docType == DocumentType::Shortcut || m_docType == DocumentType::Certificate) {
-                if (m_system.UpdateAnimation(dt)) {
-                    isAnimating = true;
                     InvalidateRect(m_hwnd, NULL, FALSE);
                 }
             }
 
-            // 6. Viewport Smooth Zoom & Pan Kinetic Lerp (Images, PDF, Office, SVG)
+            // 2. Viewport direct sync (Images, PDF, Office, SVG)
             if (m_docType == DocumentType::Image || m_docType == DocumentType::Pdf ||
                 m_docType == DocumentType::Office || m_docType == DocumentType::Svg) {
-                
-                float tLerp = 1.0f - std::exp(-22.0f * dt);
-
-                bool zoomChanged = false;
-                if (std::abs(m_targetZoom - m_zoom) > 0.0005f) {
-                    m_zoom += (m_targetZoom - m_zoom) * tLerp;
-                    zoomChanged = true;
-                    isAnimating = true;
-                } else if (m_zoom != m_targetZoom) {
+                if (m_zoom != m_targetZoom || m_panX != m_targetPanX || m_panY != m_targetPanY) {
                     m_zoom = m_targetZoom;
-                    zoomChanged = true;
-                }
-
-                bool panChanged = false;
-                if (m_isMomentumActive) {
-                    float friction = std::exp(-7.0f * dt);
-                    m_panX += m_dragVelX * dt;
-                    m_panY += m_dragVelY * dt;
-                    m_targetPanX = m_panX;
-                    m_targetPanY = m_panY;
-                    m_dragVelX *= friction;
-                    m_dragVelY *= friction;
-                    panChanged = true;
-                    isAnimating = true;
-
-                    if (std::abs(m_dragVelX) < 1.0f && std::abs(m_dragVelY) < 1.0f) {
-                        m_dragVelX = 0.0f;
-                        m_dragVelY = 0.0f;
-                        m_isMomentumActive = false;
-                    }
-                } else if (!m_isDragging) {
-                    if (std::abs(m_targetPanX - m_panX) > 0.15f || std::abs(m_targetPanY - m_panY) > 0.15f) {
-                        m_panX += (m_targetPanX - m_panX) * tLerp;
-                        m_panY += (m_targetPanY - m_panY) * tLerp;
-                        panChanged = true;
-                        isAnimating = true;
-                    } else if (m_panX != m_targetPanX || m_panY != m_targetPanY) {
-                        m_panX = m_targetPanX;
-                        m_panY = m_targetPanY;
-                        panChanged = true;
-                    }
-                }
-
-                if (zoomChanged || panChanged) {
+                    m_panX = m_targetPanX;
+                    m_panY = m_targetPanY;
                     InvalidateRect(m_hwnd, NULL, FALSE);
                 }
             }
 
-            // 7. Sidebar smooth kinetic scrolling (Thumbnails & Outline)
+            // 3. Sidebar scroll sync
             if (m_showSidebar) {
-                float tScroll = 1.0f - std::exp(-22.0f * dt);
-                if (std::abs(m_targetSidebarScrollY - m_sidebarScrollY) > 0.15f) {
-                    m_sidebarScrollY += (m_targetSidebarScrollY - m_sidebarScrollY) * tScroll;
-                    isAnimating = true;
-                    InvalidateRect(m_hwnd, NULL, FALSE);
-                } else if (m_sidebarScrollY != m_targetSidebarScrollY) {
+                if (m_sidebarScrollY != m_targetSidebarScrollY || m_outlineScrollY != m_targetOutlineScrollY) {
                     m_sidebarScrollY = m_targetSidebarScrollY;
-                    InvalidateRect(m_hwnd, NULL, FALSE);
-                }
-
-                if (std::abs(m_targetOutlineScrollY - m_outlineScrollY) > 0.15f) {
-                    m_outlineScrollY += (m_targetOutlineScrollY - m_outlineScrollY) * tScroll;
-                    isAnimating = true;
-                    InvalidateRect(m_hwnd, NULL, FALSE);
-                } else if (m_outlineScrollY != m_targetOutlineScrollY) {
                     m_outlineScrollY = m_targetOutlineScrollY;
                     InvalidateRect(m_hwnd, NULL, FALSE);
                 }
             }
 
-            // 8. Overflow menu smooth kinetic scrolling
+            // 4. Overflow menu scroll sync
             if (m_showOverflowMenu) {
-                float tScroll = 1.0f - std::exp(-25.0f * dt);
-                if (std::abs(m_targetOverflowScrollY - m_overflowScrollY) > 0.15f) {
-                    m_overflowScrollY += (m_targetOverflowScrollY - m_overflowScrollY) * tScroll;
-                    isAnimating = true;
-                    InvalidateRect(m_hwnd, NULL, FALSE);
-                } else if (m_overflowScrollY != m_targetOverflowScrollY) {
+                if (m_overflowScrollY != m_targetOverflowScrollY) {
                     m_overflowScrollY = m_targetOverflowScrollY;
                     InvalidateRect(m_hwnd, NULL, FALSE);
                 }
             }
 
-            // 9. Inspector drawer smooth ease-out slide-in & fade
-            float targetInsp = m_showInspector ? 1.0f : 0.0f;
-            if (std::abs(targetInsp - m_inspectorAnim) > 0.005f) {
-                m_inspectorAnim += (targetInsp - m_inspectorAnim) * (1.0f - std::exp(-24.0f * dt));
-                isAnimating = true;
-                InvalidateRect(m_hwnd, NULL, FALSE);
-            } else if (m_inspectorAnim != targetInsp) {
-                m_inspectorAnim = targetInsp;
-                InvalidateRect(m_hwnd, NULL, FALSE);
-            }
-
-            // 10. Overflow popover menu smooth spring scale & fade
-            float targetOverflow = m_showOverflowMenu ? 1.0f : 0.0f;
-            if (std::abs(targetOverflow - m_overflowMenuAnim) > 0.005f) {
-                m_overflowMenuAnim += (targetOverflow - m_overflowMenuAnim) * (1.0f - std::exp(-28.0f * dt));
-                isAnimating = true;
-                InvalidateRect(m_hwnd, NULL, FALSE);
-            } else if (m_overflowMenuAnim != targetOverflow) {
-                m_overflowMenuAnim = targetOverflow;
-                InvalidateRect(m_hwnd, NULL, FALSE);
-            }
-
-            // 11. Search bar smooth slide-down from top
-            float targetSearch = m_showSearch ? 1.0f : 0.0f;
-            if (std::abs(targetSearch - m_searchAnim) > 0.005f) {
-                m_searchAnim += (targetSearch - m_searchAnim) * (1.0f - std::exp(-26.0f * dt));
-                isAnimating = true;
-                InvalidateRect(m_hwnd, NULL, FALSE);
-            } else if (m_searchAnim != targetSearch) {
-                m_searchAnim = targetSearch;
-                InvalidateRect(m_hwnd, NULL, FALSE);
-            }
-
-            // 12. Preferences & Keybind settings modal smooth scale & fade
-            float targetSettings = m_showSettings ? 1.0f : 0.0f;
-            if (std::abs(targetSettings - m_settingsAnim) > 0.005f) {
-                m_settingsAnim += (targetSettings - m_settingsAnim) * (1.0f - std::exp(-26.0f * dt));
-                isAnimating = true;
-                InvalidateRect(m_hwnd, NULL, FALSE);
-            } else if (m_settingsAnim != targetSettings) {
-                m_settingsAnim = targetSettings;
-                InvalidateRect(m_hwnd, NULL, FALSE);
-            }
-
-            // 13. Dynamic High-Refresh-Rate Render Loop (8ms = 120Hz/125FPS when moving, 30ms = 0% CPU when stationary)
-            bool isBusy = isAnimating || isDockFading || isHudFading || m_isDragging || m_isMomentumActive ||
-                          (m_toastOpacity > 0.0f) || (m_docType == DocumentType::Media && m_media.IsPlaying());
-            UINT desiredTimer = isBusy ? 8 : 30;
-            if (desiredTimer != m_timerInterval) {
-                m_timerInterval = desiredTimer;
-                SetTimer(m_hwnd, 1, m_timerInterval, NULL);
-            }
+            m_inspectorAnim = m_showInspector ? 1.0f : 0.0f;
+            m_overflowMenuAnim = m_showOverflowMenu ? 1.0f : 0.0f;
+            m_searchAnim = m_showSearch ? 1.0f : 0.0f;
+            m_settingsAnim = m_showSettings ? 1.0f : 0.0f;
             return 0;
         }
 
@@ -7952,6 +7780,7 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                     float maxScroll = m_overflowTotalH - renderH;
                     m_targetOverflowScrollY += (delta > 0 ? -45.0f : 45.0f);
                     m_targetOverflowScrollY = (std::clamp)(m_targetOverflowScrollY, 0.0f, maxScroll);
+                    m_overflowScrollY = m_targetOverflowScrollY;
                     m_overflowHoveredIndex = GetOverflowItemIndexAt(pt);
                     InvalidateRect(m_hwnd, NULL, FALSE);
                     return 0;
@@ -7967,12 +7796,14 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                     if (minScroll > 0.0f) minScroll = 0.0f;
                     m_targetSidebarScrollY += (delta > 0 ? 80.0f : -80.0f);
                     m_targetSidebarScrollY = (std::clamp)(m_targetSidebarScrollY, minScroll, 0.0f);
+                    m_sidebarScrollY = m_targetSidebarScrollY;
                 } else {
                     float totalH = 54.0f + m_outline.size() * 31.0f;
                     float minScroll = availH - totalH;
                     if (minScroll > 0.0f) minScroll = 0.0f;
                     m_targetOutlineScrollY += (delta > 0 ? 70.0f : -70.0f);
                     m_targetOutlineScrollY = (std::clamp)(m_targetOutlineScrollY, minScroll, 0.0f);
+                    m_outlineScrollY = m_targetOutlineScrollY;
                 }
                 InvalidateRect(m_hwnd, NULL, FALSE);
                 return 0;
@@ -8032,12 +7863,17 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             float cursorDocY = (pt.y - canvasCenterY - m_panY) / (m_zoom > 0.001f ? m_zoom : 1.0f);
 
             float factor = (delta > 0) ? 1.15f : (1.0f / 1.15f);
-            m_targetZoom = (std::clamp)(m_targetZoom * factor, 0.05f, 25.0f);
+            m_zoom = (std::clamp)(m_zoom * factor, 0.05f, 25.0f);
+            m_targetZoom = m_zoom;
 
-            // Anchor target pan so the document pixel directly under the mouse stays pinned
-            m_targetPanX = pt.x - canvasCenterX - cursorDocX * m_targetZoom;
-            m_targetPanY = pt.y - canvasCenterY - cursorDocY * m_targetZoom;
+            // Anchor pan so the document pixel directly under the mouse stays pinned
+            m_panX = pt.x - canvasCenterX - cursorDocX * m_zoom;
+            m_panY = pt.y - canvasCenterY - cursorDocY * m_zoom;
+            m_targetPanX = m_panX;
+            m_targetPanY = m_panY;
             m_isMomentumActive = false;
+            m_dragVelX = 0.0f;
+            m_dragVelY = 0.0f;
 
             InvalidateRect(m_hwnd, NULL, FALSE);
             return 0;
@@ -8050,7 +7886,8 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 m_text.Scroll(0.0f, (float)delta * 0.8f);
                 InvalidateRect(m_hwnd, NULL, FALSE);
             } else if (m_docType == DocumentType::Image || m_docType == DocumentType::Pdf || m_docType == DocumentType::Office || m_docType == DocumentType::Svg) {
-                m_targetPanX -= (float)delta * 0.6f;
+                m_panX -= (float)delta * 0.6f;
+                m_targetPanX = m_panX;
                 InvalidateRect(m_hwnd, NULL, FALSE);
             }
             return 0;
@@ -8492,8 +8329,6 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             m_isMomentumActive = false;
             m_dragVelX = 0.0f;
             m_dragVelY = 0.0f;
-            m_lastDragSamplePt = pt;
-            m_lastDragSampleTime = GetTickCount64();
             m_targetPanX = m_panX;
             m_targetPanY = m_panY;
             return 0;
@@ -8713,18 +8548,6 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 m_targetPanX = m_panX;
                 m_targetPanY = m_panY;
                 m_lastMousePos = pt;
-
-                ULONGLONG now = GetTickCount64();
-                float sampleDt = (float)(now - m_lastDragSampleTime) / 1000.0f;
-                if (sampleDt >= 0.012f) {
-                    float instVx = (pt.x - m_lastDragSamplePt.x) / sampleDt;
-                    float instVy = (pt.y - m_lastDragSamplePt.y) / sampleDt;
-                    m_dragVelX = m_dragVelX * 0.35f + instVx * 0.65f;
-                    m_dragVelY = m_dragVelY * 0.35f + instVy * 0.65f;
-                    m_lastDragSamplePt = pt;
-                    m_lastDragSampleTime = now;
-                }
-
                 InvalidateRect(m_hwnd, NULL, FALSE);
             }
             return 0;
@@ -8742,26 +8565,10 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
 
         case WM_LBUTTONUP: {
             ReleaseCapture();
-            if (m_isDragging) {
-                ULONGLONG now = GetTickCount64();
-                if (now - m_lastDragSampleTime < 100) {
-                    float speed = std::sqrt(m_dragVelX * m_dragVelX + m_dragVelY * m_dragVelY);
-                    if (speed > 40.0f) {
-                        m_isMomentumActive = true;
-                        m_targetPanX = m_panX;
-                        m_targetPanY = m_panY;
-                    } else {
-                        m_dragVelX = 0.0f;
-                        m_dragVelY = 0.0f;
-                        m_isMomentumActive = false;
-                    }
-                } else {
-                    m_dragVelX = 0.0f;
-                    m_dragVelY = 0.0f;
-                    m_isMomentumActive = false;
-                }
-                m_isDragging = false;
-            }
+            m_isDragging = false;
+            m_isMomentumActive = false;
+            m_dragVelX = 0.0f;
+            m_dragVelY = 0.0f;
             m_isScrubbing = false;
             m_isWaveformSeeking = false;
             m_isSelectingText = false;
