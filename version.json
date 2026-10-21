@@ -1,6 +1,6 @@
 {
-  "version": "1.0.7",
+  "version": "1.0.8",
   "release_date": "2026-10-21",
   "download_url": "https://github.com/Code-Xceed/WinPreview/releases/latest/download/WinPreview-Setup-x64.exe",
-  "changelog": "WinPreview v1.0.7 - High-performance input responsiveness fix: restored instant 1:1 direct dragging with zero momentum drift, direct focal-point mousewheel zooming, zero-latency document scrolling across all engines (Text, Markdown, Folder, Font, System, Sidebar), eliminated dynamic 8ms timer pump starvation, and restored instant popover hit-testing without scale transform latency."
+  "changelog": "WinPreview v1.0.8 - Ultra-responsive input architecture: instant 1:1 direct dragging, responsive focal-point zoom, zero-latency document scrolling across all file types, steady 30ms render loop, and F5 instant update check."
 }

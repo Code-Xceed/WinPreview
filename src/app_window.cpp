@@ -294,9 +294,9 @@ bool AppWindow::Create(HINSTANCE hInstance, int nCmdShow, bool showTrayNotificat
     // Start periodic auto-update check timer (runs every 15 minutes, zero CPU overhead)
     SetTimer(m_hwnd, TIMER_PERIODIC_UPDATE, 15 * 60 * 1000, NULL);
 
-    // Initial Auto-Check 1.5s after launch (Non-blocking background thread)
+    // Initial Auto-Check 400ms after launch (Non-blocking background thread)
     std::thread([this]() {
-        Sleep(1500); // 1.5s delay keeps cold start sub-35ms
+        Sleep(400);
         m_lastUpdateCheckTick = GetTickCount64();
         m_updater.CheckForUpdatesAsync([this](const UpdateInfo& info) {
             if (info.isAvailable && m_hwnd && IsWindow(m_hwnd)) {
@@ -7494,6 +7494,8 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 }
                 if (m_updater.GetUpdateInfo().isAvailable) {
                     ShowUpdatePopup();
+                } else if (GetTickCount64() - m_lastUpdateCheckTick > 60000) {
+                    CheckForUpdates(false);
                 }
             }
             return 0;
@@ -8816,14 +8818,16 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 }
             }
 
-            // Global shortcut: F5 or Ctrl+R -> Reload current preview
+            // Global shortcut: F5 or Ctrl+R -> Reload current preview and check for updates
             if ((wParam == VK_F5) || (isCtrl && !isShift && !isAlt && (wParam == 'R' || wParam == 'r'))) {
+                CheckForUpdates(true);
                 if (!m_currentFilePath.empty()) {
                     std::wstring cur = m_currentFilePath;
                     OpenFile(cur);
                     ShowToast(L"Reloaded preview");
                     return 0;
                 }
+                return 0;
             }
 
             // Global shortcut: Ctrl+Shift+U -> Simulate update notification (Test UX)
