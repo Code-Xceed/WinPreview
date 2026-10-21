@@ -63,6 +63,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     int screenshotWidth = 0;
     int screenshotHeight = 0;
     bool screenshotOpenMenu = false;
+    bool screenshotOpenInspector = false;
 
     if (argv) {
         for (int i = 1; i < argc; ++i) {
@@ -76,6 +77,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
                 screenshotHeight = _wtoi(argv[++i]);
             } else if (_wcsicmp(argv[i], L"--open-menu") == 0) {
                 screenshotOpenMenu = true;
+            } else if (_wcsicmp(argv[i], L"--open-inspector") == 0) {
+                screenshotOpenInspector = true;
             } else if (fileToOpen.empty() && argv[i][0] != L'-' && argv[i][0] != L'/') {
                 fileToOpen = argv[i];
             }
@@ -172,6 +175,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
                 }
                 if (screenshotOpenMenu) {
                     app.SetShowOverflowMenu(true);
+                }
+                if (screenshotOpenInspector) {
+                    app.SetShowInspector(true);
                 }
                 LogTime("Calling SaveScreenshot");
                 app.SaveScreenshot(screenshotPath);

@@ -64,7 +64,9 @@ enum ButtonId {
     BTN_SYSTEM_PRIMARY = 49,
     BTN_SYSTEM_SECONDARY = 50,
     BTN_OPEN_WITH = 52,
-    BTN_OVERFLOW_MENU = 53
+    BTN_OVERFLOW_MENU = 53,
+    BTN_INSPECTOR_CLOSE = 54,
+    BTN_INSPECTOR_COPY = 55
 };
 
 static void CopyTextToClipboard(HWND hwnd, const std::wstring& text) {
@@ -1368,9 +1370,12 @@ void AppWindow::DrawIconButton(const D2D1_RECT_F& rect, IconType icon, int butto
 
     bool isStateActive = isLoopActive || isCropActive || isSearchActive || isInfoActive || isSettingsActive || isWrapActive || isTableActive || isSaveActive || isOverflowActive;
 
-    // Active (press) state: tactile scale down + active fill
+    // Active (press) state: tactile scale down (0.95) + active fill (Emil Kowalski / better-ui)
     if (m_pressedButtonId == buttonId && enabled) {
-        rt->FillRoundedRectangle(rrect, m_d2d.BrushActive);
+        D2D1_RECT_F insetRect = D2D1::RectF(rect.left + 0.6f, rect.top + 0.6f, rect.right - 0.6f, rect.bottom - 0.6f);
+        D2D1_ROUNDED_RECT insetR = D2D1::RoundedRect(insetRect, 5.0f, 5.0f);
+        rt->FillRoundedRectangle(insetR, m_d2d.BrushActive);
+        iconSize *= 0.95f;
         cy += 0.5f; // optical press down
     } else if (isStateActive) {
         rt->FillRoundedRectangle(rrect, m_d2d.BrushCardSelected);
@@ -1424,9 +1429,14 @@ void AppWindow::DrawTextButton(const D2D1_RECT_F& rect, const WCHAR* label, int 
     if (!rt) return;
 
     D2D1_ROUNDED_RECT rrect = D2D1::RoundedRect(rect, 6.0f, 6.0f);
+    D2D1_RECT_F drawRect = rect;
 
     if (m_pressedButtonId == buttonId && enabled) {
-        rt->FillRoundedRectangle(rrect, m_d2d.BrushActive);
+        D2D1_RECT_F insetRect = D2D1::RectF(rect.left + 0.6f, rect.top + 0.6f, rect.right - 0.6f, rect.bottom - 0.6f);
+        D2D1_ROUNDED_RECT insetR = D2D1::RoundedRect(insetRect, 5.0f, 5.0f);
+        rt->FillRoundedRectangle(insetR, m_d2d.BrushActive);
+        drawRect.top += 0.5f;
+        drawRect.bottom += 0.5f;
     } else if (m_hoveredButtonId == buttonId && enabled) {
         rt->FillRoundedRectangle(rrect, m_d2d.BrushHover);
         rt->DrawRoundedRectangle(rrect, m_d2d.BrushBorderSubtle, 1.0f);
@@ -1434,7 +1444,7 @@ void AppWindow::DrawTextButton(const D2D1_RECT_F& rect, const WCHAR* label, int 
 
     ID2D1Brush* brush = enabled ? (ID2D1Brush*)m_d2d.BrushText : (ID2D1Brush*)m_d2d.BrushTextMuted;
     IDWriteTextFormat* font = m_d2d.FontButton ? m_d2d.FontButton : m_d2d.FontCaption;
-    rt->DrawText(label, (UINT32)wcslen(label), font, rect, brush, D2D1_DRAW_TEXT_OPTIONS_NONE);
+    rt->DrawText(label, (UINT32)wcslen(label), font, drawRect, brush, D2D1_DRAW_TEXT_OPTIONS_NONE);
 }
 
 const WCHAR* AppWindow::GetButtonTooltip(int buttonId) const {
@@ -1457,16 +1467,23 @@ const WCHAR* AppWindow::GetButtonTooltip(int buttonId) const {
         case BTN_HUD_LOOP: return m_isLooping ? L"Loop: On" : L"Loop: Off";
         case BTN_SKIP_BACK: return L"Rewind 5s (←)";
         case BTN_SKIP_FORWARD: return L"Forward 5s (→)";
+        case BTN_SEARCH: return L"Search Document (Ctrl+F)";
         case BTN_CROP:
             if (m_hasDetectedContentBounds) {
                 return m_trimBlackBars ? L"Show Full Canvas (Include Black Bars) (Ctrl+T)" : L"Trim Black Bars (Fit Content) (Ctrl+T)";
             }
             return m_isCropActive ? L"Commit Crop (Enter)" : L"Crop Image (C)";
+        case BTN_INFO: return L"File Info (I)";
         case BTN_SIDEBAR_TAB_THUMBS: return L"Thumbnails View";
         case BTN_SIDEBAR_TAB_OUTLINE: return L"Table of Contents Outline";
         case BTN_SEARCH_PREV: return L"Previous Match (Shift+Enter)";
         case BTN_SEARCH_NEXT: return L"Next Match (Enter)";
         case BTN_SEARCH_CLOSE: return L"Close Search (Esc)";
+        case BTN_INSPECTOR_CLOSE: return L"Close Inspector (Esc)";
+        case BTN_INSPECTOR_COPY: return L"Copy Details to Clipboard";
+        case BTN_UNSUPPORTED_OPEN: return L"Open File with Default Program (Enter)";
+        case BTN_UNSUPPORTED_REVEAL: return L"Reveal in File Explorer (Ctrl+Shift+R)";
+        case BTN_UNSUPPORTED_COPY: return L"Copy File Path to Clipboard (Ctrl+C)";
         case BTN_SAVE_FILE: return m_text.IsModified() ? L"Save Changes (Ctrl+S)" : L"File Saved (Ctrl+S)";
         case BTN_UNDO: return L"Undo (Ctrl+Z)";
         case BTN_REDO: return L"Redo (Ctrl+Y)";
@@ -1509,6 +1526,11 @@ D2D1_RECT_F AppWindow::GetButtonRect(int buttonId) const {
         case BTN_SEARCH_PREV: return m_searchPrevBtn;
         case BTN_SEARCH_NEXT: return m_searchNextBtn;
         case BTN_SEARCH_CLOSE: return m_searchCloseBtn;
+        case BTN_INSPECTOR_CLOSE: return m_inspectorCloseRect;
+        case BTN_INSPECTOR_COPY: return m_inspectorCopyRect;
+        case BTN_UNSUPPORTED_OPEN: return m_unsupportedOpenBtnRect;
+        case BTN_UNSUPPORTED_REVEAL: return m_unsupportedRevealBtnRect;
+        case BTN_UNSUPPORTED_COPY: return m_unsupportedCopyBtnRect;
         case BTN_SAVE_FILE: return m_btnSaveTextRect;
         case BTN_UNDO: return m_btnUndoRect;
         case BTN_REDO: return m_btnRedoRect;
@@ -1723,7 +1745,13 @@ void AppWindow::Render(HDC outHdc) {
     }
 
     // 6. Render Micro-tooltip if active
-    if (m_tooltipAlpha > 0.05f && m_hoveredButtonId != BTN_NONE && m_dockOpacity > 0.5f) {
+    bool isDockBtn = (m_hoveredButtonId >= BTN_SIDEBAR && m_hoveredButtonId <= BTN_TOOLBAR_FS) ||
+                     m_hoveredButtonId == BTN_SEARCH || m_hoveredButtonId == BTN_CROP ||
+                     m_hoveredButtonId == BTN_INFO || m_hoveredButtonId == BTN_OPEN_WITH ||
+                     m_hoveredButtonId == BTN_SETTINGS || m_hoveredButtonId == BTN_OVERFLOW_MENU ||
+                     (m_hoveredButtonId >= BTN_SAVE_FILE && m_hoveredButtonId <= BTN_TABLE_VIEW);
+
+    if (m_tooltipAlpha > 0.05f && m_hoveredButtonId != BTN_NONE && (!isDockBtn || m_dockOpacity > 0.5f)) {
         const WCHAR* tipText = GetButtonTooltip(m_hoveredButtonId);
         if (tipText) {
             D2D1_RECT_F btnRect = GetButtonRect(m_hoveredButtonId);
@@ -3635,8 +3663,8 @@ void AppWindow::RenderEmptyState(const D2D1_RECT_F& rect) {
         rt->DrawRoundedRectangle(rLegend, m_d2d.BrushBorderSubtle, 1.0f);
 
         const WCHAR* hints = (width < 450.0f) ?
-            L"Space  Preview   •   Esc  Close" :
-            L"Space  Preview / Dismiss   •   Esc  Close   •   Ctrl+,  Settings";
+            L"Space  Preview   •   ←/→  Next   •   Esc  Close" :
+            L"Space  Preview / Dismiss   •   ←/→  Next File   •   Esc  Close   •   Ctrl+,  Settings";
         rt->DrawText(hints, (UINT32)wcslen(hints), m_d2d.FontCaptionCenter ? m_d2d.FontCaptionCenter : m_d2d.FontCaption, legendRect, m_d2d.BrushTextMuted);
     }
 }
@@ -5078,13 +5106,15 @@ void AppWindow::RenderCropOverlay(const D2D1_RECT_F& canvasRect) {
 void AppWindow::RenderInspector(const D2D1_RECT_F& canvasRect) {
     if (!m_showInspector) {
         m_inspectorRect = {};
+        m_inspectorCloseRect = {};
+        m_inspectorCopyRect = {};
         return;
     }
     ID2D1HwndRenderTarget* rt = m_d2d.GetRenderTarget();
     if (!rt) return;
 
     float availW = canvasRect.right - canvasRect.left;
-    float cardW = (std::min)(300.0f, availW - 24.0f);
+    float cardW = (std::min)(310.0f, availW - 24.0f);
     float cardX = canvasRect.right - cardW - 14.0f;
     if (cardX < canvasRect.left + 10.0f) cardX = canvasRect.left + 10.0f;
 
@@ -5095,7 +5125,7 @@ void AppWindow::RenderInspector(const D2D1_RECT_F& canvasRect) {
         : ((dockBottom > 0.0f) ? (dockBottom + 10.0f) : (canvasRect.top + 14.0f));
 
     float maxH = canvasRect.bottom - cardY - 14.0f;
-    float cardH = (std::min)(360.0f, (std::max)(160.0f, maxH));
+    float cardH = (std::min)(420.0f, (std::max)(180.0f, maxH));
 
     m_inspectorRect = D2D1::RectF(cardX, cardY, cardX + cardW, cardY + cardH);
     D2D1_ROUNDED_RECT cardR = D2D1::RoundedRect(m_inspectorRect, 12.0f, 12.0f);
@@ -5110,27 +5140,56 @@ void AppWindow::RenderInspector(const D2D1_RECT_F& canvasRect) {
     rt->DrawRoundedRectangle(cardR, m_d2d.BrushBorder, 1.2f);
 
     // Header bar
-    D2D1_RECT_F headerR = D2D1::RectF(cardX + 16.0f, cardY + 14.0f, cardX + cardW - 40.0f, cardY + 36.0f);
+    D2D1_RECT_F headerR = D2D1::RectF(cardX + 16.0f, cardY + 12.0f, cardX + cardW - 44.0f, cardY + 36.0f);
     rt->DrawText(L"Inspector", 9, m_d2d.FontTitle ? m_d2d.FontTitle : m_d2d.FontBody, headerR, m_d2d.BrushText);
 
-    // Close 'x' button
-    float closeX = cardX + cardW - 32.0f;
-    float closeY = cardY + 12.0f;
-    float cr = 4.0f;
-    rt->DrawLine(D2D1::Point2F(closeX - cr, closeY - cr + 6.0f), D2D1::Point2F(closeX + cr, closeY + cr + 6.0f), m_d2d.BrushTextMuted, 1.5f);
-    rt->DrawLine(D2D1::Point2F(closeX + cr, closeY - cr + 6.0f), D2D1::Point2F(closeX - cr, closeY + cr + 6.0f), m_d2d.BrushTextMuted, 1.5f);
+    // Close button (24x24 hit area, optical center)
+    float closeX = cardX + cardW - 24.0f;
+    float closeY = cardY + 24.0f;
+    m_inspectorCloseRect = D2D1::RectF(closeX - 12.0f, closeY - 12.0f, closeX + 12.0f, closeY + 12.0f);
+    D2D1_ROUNDED_RECT closeR = D2D1::RoundedRect(m_inspectorCloseRect, 6.0f, 6.0f);
+
+    if (m_pressedButtonId == BTN_INSPECTOR_CLOSE) {
+        rt->FillRoundedRectangle(closeR, m_d2d.BrushActive);
+        closeY += 0.5f;
+    } else if (m_hoveredButtonId == BTN_INSPECTOR_CLOSE) {
+        rt->FillRoundedRectangle(closeR, m_d2d.BrushHover);
+    }
+    float cr = 4.5f;
+    ID2D1Brush* closeBrush = (m_hoveredButtonId == BTN_INSPECTOR_CLOSE || m_pressedButtonId == BTN_INSPECTOR_CLOSE) ? (ID2D1Brush*)m_d2d.BrushText : (ID2D1Brush*)m_d2d.BrushTextMuted;
+    rt->DrawLine(D2D1::Point2F(closeX - cr, closeY - cr), D2D1::Point2F(closeX + cr, closeY + cr), closeBrush, 1.5f);
+    rt->DrawLine(D2D1::Point2F(closeX + cr, closeY - cr), D2D1::Point2F(closeX - cr, closeY + cr), closeBrush, 1.5f);
 
     // Divider line
     rt->DrawLine(D2D1::Point2F(cardX + 16.0f, cardY + 44.0f), D2D1::Point2F(cardX + cardW - 16.0f, cardY + 44.0f), m_d2d.BrushBorderSubtle, 1.0f);
 
-    float rowY = cardY + 54.0f;
-    float rowH = 26.0f;
-    float labelW = 100.0f;
+    // Action button at bottom: Copy Metadata
+    float copyBtnH = 26.0f;
+    float copyBtnY = cardY + cardH - copyBtnH - 12.0f;
+    m_inspectorCopyRect = D2D1::RectF(cardX + 16.0f, copyBtnY, cardX + cardW - 16.0f, copyBtnY + copyBtnH);
+    D2D1_ROUNDED_RECT copyR = D2D1::RoundedRect(m_inspectorCopyRect, 6.0f, 6.0f);
+
+    if (m_pressedButtonId == BTN_INSPECTOR_COPY) {
+        rt->FillRoundedRectangle(copyR, m_d2d.BrushActive);
+    } else if (m_hoveredButtonId == BTN_INSPECTOR_COPY) {
+        rt->FillRoundedRectangle(copyR, m_d2d.BrushHover);
+        rt->DrawRoundedRectangle(copyR, m_d2d.BrushAccent, 1.0f);
+    } else {
+        rt->FillRoundedRectangle(copyR, m_d2d.BrushCard);
+        rt->DrawRoundedRectangle(copyR, m_d2d.BrushBorderSubtle, 1.0f);
+    }
+    const WCHAR* copyLabel = L"Copy Metadata";
+    rt->DrawText(copyLabel, (UINT32)wcslen(copyLabel), m_d2d.FontButton ? m_d2d.FontButton : m_d2d.FontCaption, m_inspectorCopyRect, m_d2d.BrushText);
+
+    // Rows rendering
+    float rowY = cardY + 52.0f;
+    float rowH = 24.0f;
+    float labelW = 95.0f;
     float valX = cardX + 16.0f + labelW;
     float valW = cardW - 32.0f - labelW;
 
     auto drawRow = [&](const WCHAR* label, const std::wstring& val) {
-        if (val.empty()) return;
+        if (val.empty() || rowY + rowH > copyBtnY - 4.0f) return;
         D2D1_RECT_F lblR = D2D1::RectF(cardX + 16.0f, rowY, cardX + 16.0f + labelW, rowY + rowH);
         D2D1_RECT_F vR = D2D1::RectF(valX, rowY, valX + valW, rowY + rowH);
         rt->DrawText(label, (UINT32)wcslen(label), m_d2d.FontCaption, lblR, m_d2d.BrushTextMuted);
@@ -5139,6 +5198,32 @@ void AppWindow::RenderInspector(const D2D1_RECT_F& canvasRect) {
     };
 
     drawRow(L"File Name", m_fileName);
+
+    // Location directory
+    if (!m_currentFilePath.empty()) {
+        size_t slash = m_currentFilePath.find_last_of(L"\\/");
+        std::wstring dirPath = (slash != std::wstring::npos) ? m_currentFilePath.substr(0, slash) : L"";
+        if (!dirPath.empty()) {
+            drawRow(L"Location", dirPath);
+        }
+    }
+
+    // File Size for all document types
+    WIN32_FILE_ATTRIBUTE_DATA fad;
+    if (GetFileAttributesExW(m_currentFilePath.c_str(), GetFileExInfoStandard, &fad)) {
+        ULONGLONG sizeBytes = ((ULONGLONG)fad.nFileSizeHigh << 32) | fad.nFileSizeLow;
+        WCHAR szBuf[64];
+        if (sizeBytes < 1024) {
+            swprintf_s(szBuf, L"%lld bytes", (long long)sizeBytes);
+        } else if (sizeBytes < 1024 * 1024) {
+            swprintf_s(szBuf, L"%.1f KB (%lld bytes)", (float)sizeBytes / 1024.0f, (long long)sizeBytes);
+        } else if (sizeBytes < 1024 * 1024 * 1024) {
+            swprintf_s(szBuf, L"%.2f MB (%lld bytes)", (float)sizeBytes / (1024.0f * 1024.0f), (long long)sizeBytes);
+        } else {
+            swprintf_s(szBuf, L"%.2f GB", (float)sizeBytes / (1024.0f * 1024.0f * 1024.0f));
+        }
+        drawRow(L"File Size", szBuf);
+    }
 
     if (m_docType == DocumentType::Image) {
         WCHAR dimBuf[64];
@@ -5212,18 +5297,12 @@ void AppWindow::RenderInspector(const D2D1_RECT_F& canvasRect) {
     } else if (m_docType == DocumentType::Text) {
         drawRow(L"File Format", m_text.GetLanguageName());
         drawRow(L"Total Lines", std::to_wstring(m_text.GetLineCount()));
-        WCHAR szBuf[64];
-        swprintf_s(szBuf, L"%.1f KB (%lld bytes)", (float)m_text.GetFileSize() / 1024.0f, (long long)m_text.GetFileSize());
-        drawRow(L"File Size", szBuf);
         drawRow(L"Encoding", m_text.GetEncodingName());
         drawRow(L"Word Wrap", m_text.IsWordWrap() ? L"Enabled" : L"Disabled");
     } else if (m_docType == DocumentType::Spreadsheet) {
         drawRow(L"Format", L"Delimited Spreadsheet");
         drawRow(L"Columns", std::to_wstring(m_text.GetColumnCount()));
         drawRow(L"Rows", std::to_wstring(m_text.GetRowCount()));
-        WCHAR szBuf[64];
-        swprintf_s(szBuf, L"%.1f KB (%lld bytes)", (float)m_text.GetFileSize() / 1024.0f, (long long)m_text.GetFileSize());
-        drawRow(L"File Size", szBuf);
         drawRow(L"View Mode", m_text.IsTableView() ? L"Tabular Grid" : L"Raw Delimited");
     } else if (m_docType == DocumentType::Office) {
         drawRow(L"Format", m_formatBadgeText);
@@ -5231,6 +5310,72 @@ void AppWindow::RenderInspector(const D2D1_RECT_F& canvasRect) {
         swprintf_s(dimBuf, L"%u × %u px", m_officeWidth, m_officeHeight);
         drawRow(L"Slide Preview", dimBuf);
     }
+
+    drawRow(L"Folder Nav", L"Arrow keys (← / →)");
+}
+
+void AppWindow::CopyInspectorMetadata() {
+    std::wstring text;
+    text += L"File Name: " + m_fileName + L"\r\n";
+    if (!m_currentFilePath.empty()) {
+        text += L"Path: " + m_currentFilePath + L"\r\n";
+    }
+
+    WIN32_FILE_ATTRIBUTE_DATA fad;
+    if (GetFileAttributesExW(m_currentFilePath.c_str(), GetFileExInfoStandard, &fad)) {
+        ULONGLONG sizeBytes = ((ULONGLONG)fad.nFileSizeHigh << 32) | fad.nFileSizeLow;
+        WCHAR szBuf[64];
+        if (sizeBytes < 1024) swprintf_s(szBuf, L"%lld bytes", (long long)sizeBytes);
+        else if (sizeBytes < 1024 * 1024) swprintf_s(szBuf, L"%.1f KB (%lld bytes)", (float)sizeBytes / 1024.0f, (long long)sizeBytes);
+        else swprintf_s(szBuf, L"%.2f MB (%lld bytes)", (float)sizeBytes / (1024.0f * 1024.0f), (long long)sizeBytes);
+        text += L"File Size: ";
+        text += szBuf;
+        text += L"\r\n";
+    }
+
+    if (m_docType == DocumentType::Image) {
+        WCHAR dimBuf[64];
+        swprintf_s(dimBuf, L"%u x %u px", m_imageWidth, m_imageHeight);
+        text += L"Dimensions: "; text += dimBuf; text += L"\r\n";
+        if (m_imageMeta.dpiX > 0.0f) {
+            WCHAR dpiBuf[32];
+            swprintf_s(dpiBuf, L"%.0f x %.0f DPI", m_imageMeta.dpiX, m_imageMeta.dpiY);
+            text += L"Resolution: "; text += dpiBuf; text += L"\r\n";
+        }
+        if (!m_imageMeta.cameraMake.empty() || !m_imageMeta.cameraModel.empty()) {
+            text += L"Device: " + m_imageMeta.cameraMake + L" " + m_imageMeta.cameraModel + L"\r\n";
+        }
+        if (!m_imageMeta.dateTaken.empty()) {
+            text += L"Date Taken: " + m_imageMeta.dateTaken + L"\r\n";
+        }
+    } else if (m_docType == DocumentType::Pdf) {
+        text += L"Total Pages: " + std::to_wstring(m_totalPages) + L"\r\n";
+        text += L"Current Page: " + std::to_wstring(m_currentPage + 1) + L"\r\n";
+        WCHAR sizeBuf[64];
+        swprintf_s(sizeBuf, L"%.0f x %.0f pt", m_pdfPageWidth, m_pdfPageHeight);
+        text += L"Page Size: "; text += sizeBuf; text += L"\r\n";
+    } else if (m_docType == DocumentType::Media) {
+        text += L"Media Type: "; text += m_isAudioOnly ? L"Audio" : L"Video"; text += L"\r\n";
+        if (!m_isAudioOnly && m_videoWidth > 0 && m_videoHeight > 0) {
+            WCHAR resBuf[64];
+            swprintf_s(resBuf, L"%d x %d px", m_videoWidth, m_videoHeight);
+            text += L"Resolution: "; text += resBuf; text += L"\r\n";
+        }
+        libvlc_time_t totalLen = m_media.GetLength();
+        if (totalLen > 0) {
+            text += L"Duration: " + m_media.FormatTime(totalLen) + L"\r\n";
+        }
+    } else if (m_docType == DocumentType::Text) {
+        text += L"Format: " + m_text.GetLanguageName() + L"\r\n";
+        text += L"Lines: " + std::to_wstring(m_text.GetLineCount()) + L"\r\n";
+        text += L"Encoding: " + m_text.GetEncodingName() + L"\r\n";
+    } else if (m_docType == DocumentType::Spreadsheet) {
+        text += L"Columns: " + std::to_wstring(m_text.GetColumnCount()) + L"\r\n";
+        text += L"Rows: " + std::to_wstring(m_text.GetRowCount()) + L"\r\n";
+    }
+
+    CopyTextToClipboard(m_hwnd, text);
+    ShowToast(L"Metadata copied to clipboard");
 }
 
 void AppWindow::CopySelectedText() {
@@ -5397,6 +5542,10 @@ void AppWindow::ToggleInspector() {
     m_showInspector = !m_showInspector;
     if (!m_showInspector) {
         m_inspectorRect = {};
+        m_inspectorCloseRect = {};
+        m_inspectorCopyRect = {};
+    } else {
+        WakeAllUiAndCursor("ToggleInspector");
     }
     InvalidateRect(m_hwnd, NULL, FALSE);
 }
@@ -6986,10 +7135,18 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             }
 
             // Micro-tooltip hover delay and smooth fade (zero idle CPU once complete)
-            if (m_hoveredButtonId != BTN_NONE && m_dockOpacity > 0.5f) {
+            bool isDockBtn = (m_hoveredButtonId >= BTN_SIDEBAR && m_hoveredButtonId <= BTN_TOOLBAR_FS) ||
+                             m_hoveredButtonId == BTN_SEARCH || m_hoveredButtonId == BTN_CROP ||
+                             m_hoveredButtonId == BTN_INFO || m_hoveredButtonId == BTN_OPEN_WITH ||
+                             m_hoveredButtonId == BTN_SETTINGS || m_hoveredButtonId == BTN_OVERFLOW_MENU ||
+                             (m_hoveredButtonId >= BTN_SAVE_FILE && m_hoveredButtonId <= BTN_TABLE_VIEW);
+            bool canShowTooltip = (m_hoveredButtonId != BTN_NONE) && (!isDockBtn || m_dockOpacity > 0.5f);
+
+            if (canShowTooltip) {
                 m_hoverTimeMs += 30;
-                if (m_hoverTimeMs > 400 && m_tooltipAlpha < 1.0f) {
-                    m_tooltipAlpha += 0.20f;
+                // Fast swap: if a tooltip was already active on an adjacent button, show immediately without waiting 400ms (Emil Kowalski)
+                if ((m_tooltipAlpha > 0.4f || m_hoverTimeMs > 400) && m_tooltipAlpha < 1.0f) {
+                    m_tooltipAlpha += 0.35f;
                     if (m_tooltipAlpha > 1.0f) m_tooltipAlpha = 1.0f;
                     InvalidateRect(m_hwnd, NULL, FALSE);
                 }
@@ -7050,8 +7207,8 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             );
 
             // 4. Inactivity & Auto-Hide state machine
-            if (isActivelyInteracting) {
-                // Actively holding mouse button down or dragging: keep 100% visible
+            if (isActivelyInteracting || m_showOverflowMenu || m_showInspector || m_showSearch || m_showSettings) {
+                // Actively holding mouse button down, dragging, or menu/modal open: keep 100% visible
                 m_inactivityMs = 0;
                 m_dockTargetOpacity = 1.0f;
                 if (m_docType == DocumentType::Media) m_hudTargetOpacity = 255.0f;
@@ -7806,10 +7963,15 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             }
 
             if (m_showInspector && hit(m_inspectorRect)) {
-                float closeX = m_inspectorRect.right - 32.0f;
-                float closeY = m_inspectorRect.top + 12.0f;
-                if (std::abs(pt.x - closeX) <= 12.0f && std::abs(pt.y - closeY - 6.0f) <= 12.0f) {
+                if (hit(m_inspectorCloseRect)) {
+                    m_pressedButtonId = BTN_INSPECTOR_CLOSE;
                     ToggleInspector();
+                    return 0;
+                }
+                if (hit(m_inspectorCopyRect)) {
+                    m_pressedButtonId = BTN_INSPECTOR_COPY;
+                    CopyInspectorMetadata();
+                    return 0;
                 }
                 return 0;
             }
@@ -8256,6 +8418,11 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             else if (hit(m_searchNextBtn)) m_hoveredButtonId = BTN_SEARCH_NEXT;
             else if (hit(m_searchCloseBtn)) m_hoveredButtonId = BTN_SEARCH_CLOSE;
 
+            if (m_showInspector) {
+                if (hit(m_inspectorCloseRect)) m_hoveredButtonId = BTN_INSPECTOR_CLOSE;
+                else if (hit(m_inspectorCopyRect)) m_hoveredButtonId = BTN_INSPECTOR_COPY;
+            }
+
             if (m_showSettings) {
                 if (hit(m_settingsCloseBtn)) m_hoveredButtonId = BTN_SETTINGS_CLOSE;
                 else if (hit(m_settingsRecordBtn)) m_hoveredButtonId = BTN_SETTINGS_RECORD;
@@ -8520,6 +8687,12 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             // 0. Settings Modal Escape
             if (m_showSettings && wParam == VK_ESCAPE) {
                 ToggleSettings();
+                return 0;
+            }
+
+            // 0.1 Inspector Escape
+            if (m_showInspector && wParam == VK_ESCAPE) {
+                ToggleInspector();
                 return 0;
             }
 
@@ -8921,6 +9094,9 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                         InvalidateRect(m_hwnd, NULL, FALSE);
                         return 0;
                     }
+                    break;
+                case 'I':
+                    ToggleInspector();
                     break;
                 case 'S':
                     if (m_docType == DocumentType::Pdf && m_totalPages > 1 && !isCtrl) {

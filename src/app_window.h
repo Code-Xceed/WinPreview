@@ -109,6 +109,7 @@ public:
     bool OpenFile(const std::wstring& filePath);
     bool SaveScreenshot(const std::wstring& outPath);
     void SetShowOverflowMenu(bool show) { m_showOverflowMenu = show; }
+    void SetShowInspector(bool show) { m_showInspector = show; }
     void RunMessageLoop();
 
     HWND GetHwnd() const { return m_hwnd; }
@@ -251,7 +252,10 @@ private:
     // Inspector HUD (Ctrl+I)
     bool m_showInspector = false;
     D2D1_RECT_F m_inspectorRect = {};
+    D2D1_RECT_F m_inspectorCloseRect = {};
+    D2D1_RECT_F m_inspectorCopyRect = {};
     void ToggleInspector();
+    void CopyInspectorMetadata();
 
     // Preferences & Keybind Settings Modal (Ctrl+,)
     bool m_showSettings = false;
