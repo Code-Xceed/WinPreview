@@ -33,6 +33,7 @@ public:
     bool LoadFromZipArchive(const std::wstring& zipPath);
     void Render(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D1_RECT_F& targetRect, float dpiScale);
     void Scroll(float dy);
+    bool UpdateAnimation(float dt);
     void Close();
 
     bool IsLoaded() const { return m_isLoaded; }
@@ -54,6 +55,7 @@ private:
     std::vector<FolderItemEntry> m_items;
 
     float m_scrollY = 0.0f;
+    float m_targetScrollY = 0.0f;
     float m_contentHeight = 0.0f;
 };
 

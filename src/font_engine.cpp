@@ -28,6 +28,7 @@ void FontEngine::Close() {
     m_info = {};
     m_filePath.clear();
     m_scrollY = 0.0f;
+    m_targetScrollY = 0.0f;
     m_contentHeight = 0.0f;
     m_dwrite = nullptr;
 }
@@ -164,10 +165,24 @@ bool FontEngine::LoadFromFile(IDWriteFactory* dwrite, const std::wstring& filePa
 }
 
 void FontEngine::Scroll(float dy) {
-    m_scrollY += dy;
-    if (m_scrollY > 0.0f) m_scrollY = 0.0f;
     float maxScroll = (std::max)(0.0f, m_contentHeight - 500.0f);
-    if (m_scrollY < -maxScroll) m_scrollY = -maxScroll;
+    m_targetScrollY += dy;
+    if (m_targetScrollY > 0.0f) m_targetScrollY = 0.0f;
+    if (m_targetScrollY < -maxScroll) m_targetScrollY = -maxScroll;
+}
+
+bool FontEngine::UpdateAnimation(float dt) {
+    float dy = m_targetScrollY - m_scrollY;
+    if (std::abs(dy) > 0.25f) {
+        float safeDt = (std::max)(0.001f, (std::min)(0.1f, dt));
+        float decay = 1.0f - std::exp(-22.0f * safeDt);
+        m_scrollY += dy * decay;
+        return true;
+    } else if (m_scrollY != m_targetScrollY) {
+        m_scrollY = m_targetScrollY;
+        return true;
+    }
+    return false;
 }
 
 void FontEngine::Render(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D1_RECT_F& targetRect, float dpiScale) {

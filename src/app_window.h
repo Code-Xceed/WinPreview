@@ -108,8 +108,8 @@ public:
     bool Create(HINSTANCE hInstance, int nCmdShow, bool showTrayNotification = false);
     bool OpenFile(const std::wstring& filePath);
     bool SaveScreenshot(const std::wstring& outPath);
-    void SetShowOverflowMenu(bool show) { m_showOverflowMenu = show; }
-    void SetShowInspector(bool show) { m_showInspector = show; }
+    void SetShowOverflowMenu(bool show) { m_showOverflowMenu = show; m_overflowMenuAnim = show ? 1.0f : 0.0f; }
+    void SetShowInspector(bool show) { m_showInspector = show; m_inspectorAnim = show ? 1.0f : 0.0f; }
     void RunMessageLoop();
 
     HWND GetHwnd() const { return m_hwnd; }
@@ -205,8 +205,16 @@ private:
 
     // Viewport transform
     float m_zoom = 1.0f;
+    float m_targetZoom = 1.0f;
     float m_panX = 0.0f;
     float m_panY = 0.0f;
+    float m_targetPanX = 0.0f;
+    float m_targetPanY = 0.0f;
+    float m_dragVelX = 0.0f;
+    float m_dragVelY = 0.0f;
+    bool m_isMomentumActive = false;
+    D2D1_POINT_2F m_lastDragSamplePt = {};
+    ULONGLONG m_lastDragSampleTime = 0;
     int m_rotation = 0; // 0, 90, 180, 270
     float m_dpiScale = 1.0f;
 
@@ -215,7 +223,9 @@ private:
     int m_sidebarTab = 0; // 0: Thumbnails, 1: Outline
     float m_sidebarWidth = 220.0f;
     float m_sidebarScrollY = 0.0f;
+    float m_targetSidebarScrollY = 0.0f;
     float m_outlineScrollY = 0.0f;
+    float m_targetOutlineScrollY = 0.0f;
     std::vector<ThumbnailItem> m_thumbnails;
     std::vector<PdfOutlineItem> m_outline;
 
@@ -227,6 +237,7 @@ private:
 
     // In-Document Search (Ctrl+F)
     bool m_showSearch = false;
+    float m_searchAnim = 0.0f;
     std::wstring m_searchQuery;
     std::vector<PdfSearchMatch> m_searchMatches;
     int m_currentMatchIndex = -1;
@@ -251,6 +262,7 @@ private:
 
     // Inspector HUD (Ctrl+I)
     bool m_showInspector = false;
+    float m_inspectorAnim = 0.0f;
     D2D1_RECT_F m_inspectorRect = {};
     D2D1_RECT_F m_inspectorCloseRect = {};
     D2D1_RECT_F m_inspectorCopyRect = {};
@@ -259,6 +271,7 @@ private:
 
     // Preferences & Keybind Settings Modal (Ctrl+,)
     bool m_showSettings = false;
+    float m_settingsAnim = 0.0f;
     bool m_isRecordingKeybind = false;
     D2D1_RECT_F m_settingsModalRect = {};
     D2D1_RECT_F m_settingsCloseBtn = {};
@@ -325,8 +338,10 @@ private:
     D2D1_RECT_F m_btnOverflowRect = {};
     D2D1_RECT_F m_overflowMenuRect = {};
     bool m_showOverflowMenu = false;
+    float m_overflowMenuAnim = 0.0f;
     int m_overflowHoveredIndex = -1;
     float m_overflowScrollY = 0.0f;
+    float m_targetOverflowScrollY = 0.0f;
     float m_overflowTotalH = 0.0f;
     D2D1_RECT_F m_tabThumbsRect = {};
     D2D1_RECT_F m_tabOutlineRect = {};
@@ -499,6 +514,7 @@ private:
     D2D1_POINT_2F CanvasToPageCoords(float canvasX, float canvasY, const D2D1_RECT_F& canvasRect);
 
     // System Tray & Background Residency
+    UINT m_timerInterval = 30;
     static const UINT TIMER_EXPLORER_NAV = 7001;
     static const UINT TIMER_PERIODIC_UPDATE = 7002;
     static const UINT WM_TRAYICON = WM_USER + 200;

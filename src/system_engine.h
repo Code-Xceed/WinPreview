@@ -86,6 +86,7 @@ public:
 
     void Render(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D1_RECT_F& targetRect, float dpiScale, int hoveredBtnId);
     void Scroll(float dy);
+    bool UpdateAnimation(float dt);
 
     bool IsLoaded() const { return m_isLoaded; }
     SystemItemType GetItemType() const { return m_itemType; }
@@ -107,6 +108,7 @@ private:
     ID2D1Bitmap* m_iconBitmap = nullptr;
     IWICBitmapSource* m_wicIcon = nullptr;
     float m_scrollY = 0.0f;
+    float m_targetScrollY = 0.0f;
     float m_contentHeight = 0.0f;
 
     D2D1_RECT_F m_primaryBtnRect = {};

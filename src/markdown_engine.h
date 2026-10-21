@@ -43,6 +43,7 @@ public:
     bool LoadNotebookFile(const std::wstring& filePath);
     void Render(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D1_RECT_F& targetRect, float dpiScale);
     void Scroll(float dy);
+    bool UpdateAnimation(float dt);
     void Close();
 
     bool IsLoaded() const { return m_isLoaded; }
@@ -58,6 +59,7 @@ private:
     std::wstring m_filePath;
     std::vector<MdBlock> m_blocks;
     float m_scrollY = 0.0f;
+    float m_targetScrollY = 0.0f;
     float m_contentHeight = 0.0f;
     UINT32 m_cellCount = 0;
     std::wstring m_kernelName;

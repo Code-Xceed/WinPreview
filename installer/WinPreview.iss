@@ -4,7 +4,7 @@
 ; =====================================================================
 
 #define MyAppName "WinPreview"
-#define MyAppVersion "1.0.5"
+#define MyAppVersion "1.0.6"
 #define MyAppPublisher "Code-Xceed"
 #define MyAppURL "https://github.com/Code-Xceed/WinPreview"
 #define MyAppExeName "WinPreview.exe"
