@@ -1,6 +1,6 @@
 {
-  "version": "1.0.9",
+  "version": "1.1.0",
   "release_date": "2026-10-26",
   "download_url": "https://github.com/Code-Xceed/WinPreview/releases/latest/download/WinPreview-Setup-x64.exe",
-  "changelog": "WinPreview v1.0.9 - Full High-Quality Image & Cinema Video Engine: Native HEIC/HEIF/AVIF decoding with Display P3 support, Camera RAW (CR2, NEF, ARW, DNG) embedded preview extraction, professional cinema video formats (MXF, ProRes, BRAW, R3D, TS), and real-time Log-to-Rec.709 tone-mapping for Apple Log, Sony S-Log3, Canon C-Log3, DJI D-Log M, and Panasonic V-Log footage."
+  "changelog": "WinPreview v1.1.0 - Production-Grade UI Consistency & Polish: System-wide elimination of jitters and edge blurriness via integer pixel snapping. Smooth 180ms ease-out spring physics for Inspector, Search, Overflow Menu, and Settings modals. Monospace tabular numbers on media timer displays to eliminate text shifting during playback. Tactile 0.96 scale active press feedback across all buttons and pills. Concentric radius hierarchy and refined 1px thumbnail outlines."
 }

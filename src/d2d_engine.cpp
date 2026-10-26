@@ -13,7 +13,7 @@ D2DEngine::D2DEngine()
       BrushShadowDark(nullptr), BrushShadowSoft(nullptr),
       FontHero(nullptr), FontHeroCenter(nullptr), FontTitle(nullptr), FontTitleCenter(nullptr),
       FontBody(nullptr), FontBodyCenter(nullptr), FontCaption(nullptr), FontCaptionCenter(nullptr),
-      FontBadge(nullptr), FontMono(nullptr), FontButton(nullptr), FontCaptionRight(nullptr), FontMenu(nullptr), RoundStrokeStyle(nullptr)
+      FontBadge(nullptr), FontMono(nullptr), FontButton(nullptr), FontCaptionRight(nullptr), FontMenu(nullptr), FontTimer(nullptr), RoundStrokeStyle(nullptr)
 {
 }
 
@@ -31,6 +31,8 @@ D2DEngine::~D2DEngine() {
     SafeRelease(FontMono);
     SafeRelease(FontButton);
     SafeRelease(FontCaptionRight);
+    SafeRelease(FontMenu);
+    SafeRelease(FontTimer);
     SafeRelease(RoundStrokeStyle);
     SafeRelease(m_dwriteFactory);
     SafeRelease(m_wicFactory);
@@ -77,6 +79,8 @@ void D2DEngine::CreateFonts() {
     SafeRelease(FontMono);
     SafeRelease(FontButton);
     SafeRelease(FontCaptionRight);
+    SafeRelease(FontMenu);
+    SafeRelease(FontTimer);
 
     if (!m_dwriteFactory) return;
 
@@ -255,6 +259,23 @@ void D2DEngine::CreateFonts() {
             FontMenu->SetTrimming(&trimming, ellipsis);
             ellipsis->Release();
         }
+    }
+
+    // Monospace Timer & Numeric Readouts (zero jitter during playback & counting)
+    HRESULT hrTimer = m_dwriteFactory->CreateTextFormat(
+        L"Cascadia Code", NULL,
+        DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+        11.5f, L"en-us", &FontTimer);
+    if (FAILED(hrTimer) || !FontTimer) {
+        m_dwriteFactory->CreateTextFormat(
+            L"Consolas", NULL,
+            DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+            11.5f, L"en-us", &FontTimer);
+    }
+    if (FontTimer) {
+        FontTimer->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+        FontTimer->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+        FontTimer->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
     }
 }
 
@@ -915,14 +936,14 @@ void D2DEngine::DrawMicroTooltip(float centerX, float topY, const WCHAR* text, f
     float pillW = textW + padH * 2.0f;
     float pillH = 24.0f;
 
-    float left = centerX - pillW / 2.0f;
-    float top = above ? (topY - pillH - 8.0f) : (topY + 8.0f);
+    float left = std::floor(centerX - pillW / 2.0f + 0.5f);
+    float top = std::floor((above ? (topY - pillH - 8.0f) : (topY + 8.0f)) + 0.5f);
     D2D1_RECT_F pillRect = D2D1::RectF(left, top, left + pillW, top + pillH);
-    D2D1_ROUNDED_RECT rpill = D2D1::RoundedRect(pillRect, 5.0f, 5.0f);
+    D2D1_ROUNDED_RECT rpill = D2D1::RoundedRect(pillRect, 6.0f, 6.0f);
 
     // Drop shadow
     D2D1_ROUNDED_RECT rshadow = D2D1::RoundedRect(
-        D2D1::RectF(pillRect.left, pillRect.top + 2.0f, pillRect.right, pillRect.bottom + 4.0f), 5.0f, 5.0f
+        D2D1::RectF(pillRect.left, pillRect.top + 2.0f, pillRect.right, pillRect.bottom + 4.0f), 6.0f, 6.0f
     );
     BrushShadowDark->SetOpacity(alpha * 0.45f);
     m_renderTarget->FillRoundedRectangle(rshadow, BrushShadowDark);
@@ -935,10 +956,10 @@ void D2DEngine::DrawMicroTooltip(float centerX, float topY, const WCHAR* text, f
     BrushBorder->SetOpacity(alpha * 0.90f);
     m_renderTarget->DrawRoundedRectangle(rpill, BrushBorder, 1.0f);
 
-    // Text
-    D2D1_RECT_F textRect = D2D1::RectF(pillRect.left + padH, pillRect.top + padV - 1.0f, pillRect.right - padH, pillRect.bottom - padV);
+    // Text (optically centered horizontally and vertically)
+    D2D1_RECT_F textRect = D2D1::RectF(pillRect.left, pillRect.top + 1.0f, pillRect.right, pillRect.bottom);
     BrushText->SetOpacity(alpha);
-    m_renderTarget->DrawText(text, len, FontCaption, textRect, BrushText);
+    m_renderTarget->DrawText(text, len, FontCaptionCenter ? FontCaptionCenter : FontCaption, textRect, BrushText);
 
     // Reset opacities
     BrushShadowDark->SetOpacity(0.40f);

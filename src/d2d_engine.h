@@ -89,6 +89,7 @@ public:
     IDWriteTextFormat* FontButton = nullptr;
     IDWriteTextFormat* FontCaptionRight = nullptr;
     IDWriteTextFormat* FontMenu = nullptr;
+    IDWriteTextFormat* FontTimer = nullptr;
 
     // Stroke styles
     ID2D1StrokeStyle* RoundStrokeStyle = nullptr;

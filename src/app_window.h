@@ -110,6 +110,8 @@ public:
     bool SaveScreenshot(const std::wstring& outPath);
     void SetShowOverflowMenu(bool show) { m_showOverflowMenu = show; m_overflowMenuAnim = show ? 1.0f : 0.0f; }
     void SetShowInspector(bool show) { m_showInspector = show; m_inspectorAnim = show ? 1.0f : 0.0f; }
+    void SetShowSettings(bool show) { m_showSettings = show; m_settingsAnim = show ? 1.0f : 0.0f; }
+    void SetSettingsActiveTab(int tab) { m_settingsActiveTab = tab; }
     void RunMessageLoop();
 
     HWND GetHwnd() const { return m_hwnd; }
@@ -198,8 +200,9 @@ private:
     void LoadPersistedUiState();
     void SaveLoopPref();
     void SavePdfSidebarPref();
+    void SaveGeneralSettings();
     ULONGLONG m_lastUpdateCheckTick = 0;
-    static const UINT UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000; // once per day
+    static const UINT UPDATE_CHECK_INTERVAL_MS = 2 * 60 * 60 * 1000; // 2 hours
     static const wchar_t* REG_VAL_LAST_UPDATE_CHECK;
     void RegWriteUpdateCheckTick();
     void RenderUpdateBanner(const D2D1_RECT_F& rect);
@@ -319,6 +322,20 @@ private:
     bool m_showSettings = false;
     float m_settingsAnim = 0.0f;
     bool m_isRecordingKeybind = false;
+    int m_settingsActiveTab = 0; // 0 = General, 1 = Hotkeys, 2 = Viewer & Media, 3 = About
+
+    // Configurable Settings Variables
+    bool m_closeOnFocusLoss = false;
+    bool m_keepInMemory = true;
+    bool m_autoCheckUpdates = true;
+    bool m_arrowKeyNavEnabled = true;
+    bool m_loopFolderNav = true;
+    bool m_autoPlayMedia = true;
+    bool m_autoDetectLog = true;
+    bool m_showFormatBadge = true;
+    bool m_rememberWindowSize = false;
+
+    // Settings Modal Hit Rectangles
     D2D1_RECT_F m_settingsModalRect = {};
     D2D1_RECT_F m_settingsCloseBtn = {};
     D2D1_RECT_F m_settingsRecordBtn = {};
@@ -326,9 +343,24 @@ private:
     D2D1_RECT_F m_settingsDoneBtn = {};
     D2D1_RECT_F m_settingsAutostartBtn = {};
     D2D1_RECT_F m_settingsPresetRects[5] = {};
+    D2D1_RECT_F m_settingsTabRects[4] = {};
+    D2D1_RECT_F m_settingsToggleFocusLossRect = {};
+    D2D1_RECT_F m_settingsToggleKeepMemoryRect = {};
+    D2D1_RECT_F m_settingsToggleUpdateCheckRect = {};
+    D2D1_RECT_F m_settingsToggleArrowNavRect = {};
+    D2D1_RECT_F m_settingsToggleLoopFolderRect = {};
+    D2D1_RECT_F m_settingsToggleAutoplayRect = {};
+    D2D1_RECT_F m_settingsToggleLoopMediaRect = {};
+    D2D1_RECT_F m_settingsToggleLogDetectRect = {};
+    D2D1_RECT_F m_settingsToggleFormatBadgeRect = {};
+    D2D1_RECT_F m_settingsToggleRememberSizeRect = {};
+    D2D1_RECT_F m_settingsAboutUpdateBtn = {};
+    D2D1_RECT_F m_settingsAboutGithubBtn = {};
     D2D1_RECT_F m_emptyStateKeybindBtn = {};
+
     void ToggleSettings();
     void RenderSettingsModal(const D2D1_RECT_F& canvasRect);
+    void DrawToggleSwitch(const D2D1_RECT_F& rect, bool isOn, int buttonId);
     void TogglePreviewFromHook();
     DWORD m_lastHookToggleTime = 0;
 
@@ -444,6 +476,10 @@ private:
     float m_dockOpacity = 1.0f;
     float m_dockTargetOpacity = 1.0f;
     ID2D1Layer* m_dockLayer = nullptr;
+    ID2D1Layer* m_inspectorLayer = nullptr;
+    ID2D1Layer* m_searchLayer = nullptr;
+    ID2D1Layer* m_overflowMenuLayer = nullptr;
+    ID2D1Layer* m_settingsLayer = nullptr;
     int m_inactivityMs = 0;
 
     // HUD buttons hitboxes (local coordinates in HUD)
