@@ -14,7 +14,8 @@
 
 namespace WinPreview {
 
-static const wchar_t* UPDATE_META_URL = L"https://raw.githubusercontent.com/Code-Xceed/WinPreview/main/version.json";
+static const wchar_t* UPDATE_META_URL = L"https://github.com/Code-Xceed/WinPreview/releases/latest/download/version.json";
+static const wchar_t* UPDATE_META_FALLBACK_URL = L"https://raw.githubusercontent.com/Code-Xceed/WinPreview/main/version.json";
 static const wchar_t* USER_AGENT = L"WinPreview-AutoUpdater/1.0 (Windows NT; x64)";
 
 // Bounded network waits so a worker joins quickly when the app shuts down.
@@ -200,45 +201,37 @@ void UpdateEngine::FetchUpdateInfoSync(UpdateInfo& result) {
     }
     ApplyWinInetTimeouts(hInternet);
 
-    // Cache-busting query parameter forces fresh manifest from GitHub edge CDN
-    std::wstring metaUrl = std::wstring(UPDATE_META_URL) + L"?t=" + std::to_wstring(GetTickCount64());
-
-    HINTERNET hUrl = InternetOpenUrlW(hInternet, metaUrl.c_str(), NULL, 0,
-        INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_SECURE |
-        INTERNET_FLAG_IGNORE_REDIRECT_TO_HTTPS, 0);
-    if (!hUrl) {
-        InternetCloseHandle(hInternet);
-        result.errorMessage = L"Unable to contact update server.";
-        CommitInfo(UpdateState::Failed, result);
-        return;
-    }
-
-    // Check HTTP status code
-    DWORD statusCode = 0;
-    DWORD statusSize = sizeof(statusCode);
-    DWORD index = 0;
-    if (HttpQueryInfoW(hUrl, HTTP_QUERY_STATUS_CODE | HTTP_QUERY_FLAG_NUMBER, &statusCode, &statusSize, &index)) {
-        if (statusCode < 200 || statusCode >= 300) {
-            InternetCloseHandle(hUrl);
-            InternetCloseHandle(hInternet);
-            result.errorMessage = L"Update server returned status " + std::to_wstring(statusCode);
-            CommitInfo(UpdateState::Failed, result);
-            return;
+    auto tryFetchFromUrl = [&](const wchar_t* baseUrl) -> std::string {
+        std::wstring urlWithBuster = std::wstring(baseUrl) + L"?t=" + std::to_wstring(GetTickCount64());
+        HINTERNET hUrl = InternetOpenUrlW(hInternet, urlWithBuster.c_str(), NULL, 0,
+            INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_SECURE |
+            INTERNET_FLAG_IGNORE_REDIRECT_TO_HTTPS, 0);
+        if (!hUrl) return "";
+        DWORD statusCode = 0, statusSize = sizeof(statusCode), index = 0;
+        if (HttpQueryInfoW(hUrl, HTTP_QUERY_STATUS_CODE | HTTP_QUERY_FLAG_NUMBER, &statusCode, &statusSize, &index)) {
+            if (statusCode < 200 || statusCode >= 300) {
+                InternetCloseHandle(hUrl);
+                return "";
+            }
         }
-    }
+        std::string body;
+        char buf[4096];
+        DWORD read = 0;
+        while (InternetReadFile(hUrl, buf, sizeof(buf), &read) && read > 0) {
+            body.append(buf, read);
+        }
+        InternetCloseHandle(hUrl);
+        return body;
+    };
 
-    std::string responseBody;
-    char buffer[4096];
-    DWORD bytesRead = 0;
-    while (InternetReadFile(hUrl, buffer, sizeof(buffer), &bytesRead) && bytesRead > 0) {
-        responseBody.append(buffer, bytesRead);
+    std::string responseBody = tryFetchFromUrl(UPDATE_META_URL);
+    if (responseBody.empty()) {
+        responseBody = tryFetchFromUrl(UPDATE_META_FALLBACK_URL);
     }
-
-    InternetCloseHandle(hUrl);
     InternetCloseHandle(hInternet);
 
     if (responseBody.empty()) {
-        result.errorMessage = L"Empty update manifest.";
+        result.errorMessage = L"Unable to contact update server.";
         CommitInfo(UpdateState::Failed, result);
         return;
     }

@@ -1965,8 +1965,10 @@ void AppWindow::Render(HDC outHdc) {
         RenderToast(canvasRect);
     }
 
-    // Note: In-App Auto-Update Notification is now rendered via top-level floating overlay (m_updateHwnd)
-    // so it floats strictly above LibVLC video playback, DirectX swapchains, and all media.
+        // In-App Auto-Update Notification: Rendered in D2D surface if popup window is hidden or in screenshots
+    if (!m_updateHwnd || !IsWindowVisible(m_updateHwnd)) {
+        RenderUpdateBanner(canvasRect);
+    }
 
     if (outHdc) {
         ID2D1GdiInteropRenderTarget* gdiInterop = nullptr;
