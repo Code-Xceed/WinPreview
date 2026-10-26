@@ -112,6 +112,7 @@ public:
     void SetShowInspector(bool show) { m_showInspector = show; m_inspectorAnim = show ? 1.0f : 0.0f; }
     void SetShowSettings(bool show) { m_showSettings = show; m_settingsAnim = show ? 1.0f : 0.0f; }
     void SetSettingsActiveTab(int tab) { m_settingsActiveTab = tab; }
+    UpdateEngine& GetUpdater() { return m_updater; }
     void RunMessageLoop();
 
     HWND GetHwnd() const { return m_hwnd; }

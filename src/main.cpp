@@ -66,6 +66,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     bool screenshotOpenInspector = false;
     bool screenshotOpenSettings = false;
     int screenshotSettingsTab = 0;
+    bool screenshotSimulateUpdate = false;
 
     if (argv) {
         for (int i = 1; i < argc; ++i) {
@@ -85,6 +86,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
                 screenshotOpenSettings = true;
             } else if (_wcsicmp(argv[i], L"--settings-tab") == 0 && i + 1 < argc) {
                 screenshotSettingsTab = _wtoi(argv[++i]);
+            } else if (_wcsicmp(argv[i], L"--simulate-update") == 0) {
+                screenshotSimulateUpdate = true;
             } else if (fileToOpen.empty() && argv[i][0] != L'-' && argv[i][0] != L'/') {
                 fileToOpen = argv[i];
             }
@@ -188,6 +191,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
                 if (screenshotOpenSettings) {
                     app.SetShowSettings(true);
                     app.SetSettingsActiveTab(screenshotSettingsTab);
+                }
+                if (screenshotSimulateUpdate) {
+                    app.GetUpdater().SimulateUpdateForTesting();
                 }
                 LogTime("Calling SaveScreenshot");
                 app.SaveScreenshot(screenshotPath);
