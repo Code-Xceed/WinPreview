@@ -191,10 +191,33 @@ private:
     D2D1_RECT_F m_updateDismissBtnRect = {};
     bool m_updateActionBtnHover = false;
     bool m_updateDismissBtnHover = false;
+
+    // Persisted UI preferences (same registry key as the update throttle).
+    static const wchar_t* REG_VAL_UI_LOOP;          // media loop toggle
+    static const wchar_t* REG_VAL_UI_PDF_SIDEBAR;   // PDF sidebar shown on open
+    void LoadPersistedUiState();
+    void SaveLoopPref();
+    void SavePdfSidebarPref();
     ULONGLONG m_lastUpdateCheckTick = 0;
+    static const UINT UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000; // once per day
+    static const wchar_t* REG_VAL_LAST_UPDATE_CHECK;
+    void RegWriteUpdateCheckTick();
     void RenderUpdateBanner(const D2D1_RECT_F& rect);
     void CheckForUpdates(bool isUserInitiated);
     void CheckUpdateOnPreviewOpen();
+    bool ShouldAutoCheckForUpdates();
+
+    // Update-engine results are marshaled to the UI thread with these messages.
+    // The engine's callbacks run on its worker thread and must never touch UI state.
+    static const UINT WM_UPDATE_UI_RESULT  = WM_USER + 556;
+    static const UINT WM_UPDATE_DL_PROGRESS = WM_USER + 557;
+    static const UINT WM_UPDATE_DL_DONE    = WM_USER + 558;
+    struct PendingUpdateResult {
+        bool userInitiated = false;
+        bool available = false;
+        bool failed = false;
+        std::wstring message;
+    };
 
     // PDF document
     int m_currentPage = 0;
@@ -202,6 +225,31 @@ private:
     ID2D1Bitmap* m_pdfPageBitmap = nullptr;
     float m_pdfPageWidth = 0.0f;
     float m_pdfPageHeight = 0.0f;
+
+    // Background rasterization: pdfium renders into CPU memory on a worker
+    // thread; only the cheap CreateBitmap hop happens on the UI thread, so page
+    // flips and zoom re-rasterization never block input.
+    static const UINT TIMER_PDF_RASTER    = 7003;
+    static const UINT WM_PDF_RASTER_DONE  = WM_USER + 559;
+    struct PdfRasterPayload {
+        unsigned int gen = 0;
+        int page = -1;
+        float sampleScale = 1.0f;  // device-pixel scale this bitmap was rendered at
+        float pageWidth = 0.0f;
+        float pageHeight = 0.0f;
+        int width = 0;
+        int height = 0;
+        int stride = 0;
+        bool ok = false;
+        std::vector<unsigned char> pixels;
+    };
+    float m_pdfRasterScale = 0.0f;       // sample scale of the bitmap currently on-screen
+    unsigned int m_pdfRasterGen = 0;     // bump to cancel stale renders
+    int m_pdfRasterPendingPage = -1;     // debounced request
+    float m_pdfRasterPendingScale = 1.0f;
+    void RequestPdfRaster(int page, float sampleScale, UINT delayMs = 0);
+    void RenderPdfPageAsync(int page, float sampleScale);
+    void EnsurePdfSharpness();
 
     // Viewport transform
     float m_zoom = 1.0f;
@@ -404,6 +452,7 @@ private:
     D2D1_RECT_F m_hudBtnSkipForward = {};
     D2D1_RECT_F m_hudScrubber = {};
     D2D1_RECT_F m_hudBtnLoop = {};
+    D2D1_RECT_F m_hudBtnLog = {};
     D2D1_RECT_F m_hudBtnMute = {};
     D2D1_RECT_F m_hudVolSlider = {};
     D2D1_RECT_F m_hudBtnFullscreen = {};
@@ -513,6 +562,13 @@ private:
 
     // System Tray & Background Residency
     UINT m_timerInterval = 30;
+
+    // Idle animation timer management: the 30ms render-pump timer is parked (killed)
+    // whenever nothing is animating, and re-armed by any input that can start an
+    // animation. Zero wakeups while a static document sits on screen.
+    bool m_animTimerRunning = false;
+    void EnsureAnimTimer();
+    void MaybeSleepAnimTimer(bool animationsActive);
     static const UINT TIMER_EXPLORER_NAV = 7001;
     static const UINT TIMER_PERIODIC_UPDATE = 7002;
     static const UINT WM_TRAYICON = WM_USER + 200;

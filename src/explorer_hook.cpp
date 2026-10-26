@@ -492,8 +492,35 @@ static LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lP
         if (pkb->vkCode != curCfg.vkCode) {
             if (g_hTargetHwnd && IsWindow(g_hTargetHwnd) && IsWindowVisible(g_hTargetHwnd)) {
                 if (pkb->vkCode == VK_ESCAPE) {
-                    PostMessageW(g_hTargetHwnd, ExplorerHook::WM_WINPREVIEW_CLOSE, 0, 0);
-                    return 1;
+                    // Close the preview only when the user is interacting with it
+                    // (or with the Explorer session it overlays). If focus has
+                    // moved to another app, let Escape pass through untouched so
+                    // that app's dialogs, menus and in-place edits keep working.
+                    HWND fgHwnd = GetForegroundWindow();
+                    HWND topHwnd = fgHwnd ? GetAncestor(fgHwnd, GA_ROOT) : NULL;
+                    if (!fgHwnd) topHwnd = NULL;
+
+                    bool previewFocused = (fgHwnd == g_hTargetHwnd) || (topHwnd == g_hTargetHwnd);
+                    bool explorerFocused = false;
+                    if (!previewFocused && fgHwnd) {
+                        WCHAR clsTop[64] = {}, clsFg[64] = {};
+                        if (topHwnd) GetClassNameW(topHwnd, clsTop, 64);
+                        GetClassNameW(fgHwnd, clsFg, 64);
+                        explorerFocused =
+                            wcscmp(clsTop, L"CabinetWClass") == 0 ||
+                            wcscmp(clsTop, L"ExploreWClass") == 0 ||
+                            wcscmp(clsTop, L"ShellTabWindowClass") == 0 ||
+                            wcscmp(clsFg, L"ShellTabWindowClass") == 0 ||
+                            wcscmp(clsTop, L"Progman") == 0 ||
+                            wcscmp(clsTop, L"WorkerW") == 0 ||
+                            wcscmp(clsFg, L"WorkerW") == 0;
+                    }
+
+                    if (previewFocused || explorerFocused) {
+                        PostMessageW(g_hTargetHwnd, ExplorerHook::WM_WINPREVIEW_CLOSE, 0, 0);
+                        return 1;
+                    }
+                    return CallNextHookEx(g_hKeyboardHook, nCode, wParam, lParam);
                 }
                 else if (pkb->vkCode == VK_UP || pkb->vkCode == VK_DOWN || pkb->vkCode == VK_LEFT || pkb->vkCode == VK_RIGHT) {
                     HWND fgHwnd = GetForegroundWindow();

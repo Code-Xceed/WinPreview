@@ -5,6 +5,14 @@
 
 namespace WinPreview {
 
+// Render flags used by both rasterizer backends:
+// 0x01 = FPDF_ANNOT (render annotations, forms, signatures)
+// 0x02 = FPDF_LCD_TEXT (subpixel LCD text anti-aliasing for maximum sharpness)
+// NOTE: 0x10 was FPDF_REVERSE_BYTE_ORDER, which erroneously swapped R and B
+// bytes. Omitting it preserves native BGRA byte order for B8G8R8A8_UNORM.
+static constexpr int kPdfiumRenderFlags = 0x01 | 0x02;
+
+
 struct NativePdfConfig {
     int version = 2;
     const char** m_pUserFontPaths = nullptr;
@@ -105,8 +113,9 @@ bool PdfEngine::Initialize() {
 
 bool PdfEngine::OpenDocument(const std::wstring& filePath) {
     if (!m_hPdfium) return false;
-    CloseTextPage();
-    CloseDocument();
+
+    std::lock_guard<std::mutex> lock(m_apiMutex);
+    CloseDocumentLocked();
 
     // Convert to UTF-8
     int utf8Len = WideCharToMultiByte(CP_UTF8, 0, filePath.c_str(), -1, NULL, 0, NULL, NULL);
@@ -124,6 +133,18 @@ bool PdfEngine::OpenDocument(const std::wstring& filePath) {
 }
 
 void PdfEngine::CloseDocument() {
+    std::lock_guard<std::mutex> lock(m_apiMutex);
+    CloseTextPage();
+    if (m_document && fn_FPDF_CloseDocument) {
+        fn_FPDF_CloseDocument(m_document);
+        m_document = nullptr;
+    }
+    m_pageCount = 0;
+    m_currentFilePath.clear();
+}
+
+// Internal variant for callers that already hold m_apiMutex.
+void PdfEngine::CloseDocumentLocked() {
     CloseTextPage();
     if (m_document && fn_FPDF_CloseDocument) {
         fn_FPDF_CloseDocument(m_document);
@@ -136,6 +157,9 @@ void PdfEngine::CloseDocument() {
 bool PdfEngine::GetPageSize(int pageIndex, float* outWidth, float* outHeight) {
     if (!m_document || pageIndex < 0 || pageIndex >= m_pageCount) return false;
 
+    std::lock_guard<std::mutex> lock(m_apiMutex);
+    if (!m_document || pageIndex < 0 || pageIndex >= m_pageCount) return false;
+
     FPDF_PAGE page = fn_FPDF_LoadPage(m_document, pageIndex);
     if (!page) return false;
 
@@ -144,6 +168,69 @@ bool PdfEngine::GetPageSize(int pageIndex, float* outWidth, float* outHeight) {
 
     fn_FPDF_ClosePage(page);
     return true;
+}
+
+bool PdfEngine::RasterizePageLocked(int pageIndex, int w, int h,
+                                   std::vector<unsigned char>& pixels, int& stride) {
+    pixels.clear();
+    stride = 0;
+    if (!m_document || w <= 0 || h <= 0) return false;
+
+    FPDF_PAGE page = fn_FPDF_LoadPage(m_document, pageIndex);
+    if (!page) return false;
+
+    // 4 = FPDFBitmap_BGRA
+    FPDF_BITMAP bitmap = fn_FPDFBitmap_CreateEx(w, h, 4, NULL, 0);
+    if (!bitmap) {
+        fn_FPDF_ClosePage(page);
+        return false;
+    }
+
+    // Fill white (ARGB: 0xFFFFFFFF)
+    fn_FPDFBitmap_FillRect(bitmap, 0, 0, w, h, 0xFFFFFFFF);
+    fn_FPDF_RenderPageBitmap(bitmap, page, 0, 0, w, h, 0, kPdfiumRenderFlags);
+
+    void* buffer = fn_FPDFBitmap_GetBuffer(bitmap);
+    stride = fn_FPDFBitmap_GetStride(bitmap);
+
+    bool ok = false;
+    if (buffer && stride > 0) {
+        // Copy: pdfium may over-allocate/render into memory we don't own, and
+        // the caller needs a buffer that outlives the FPDF_BITMAP.
+        pixels.resize((size_t)stride * (size_t)h);
+        if (stride == w * 4) {
+            memcpy(pixels.data(), buffer, (size_t)stride * (size_t)h);
+            ok = true;
+        } else {
+            // Tightly pack row padding out so D2D can consume stride == w*4.
+            for (int row = 0; row < h; ++row) {
+                memcpy(pixels.data() + (size_t)row * (size_t)w * 4,
+                       (const unsigned char*)buffer + (size_t)row * (size_t)stride,
+                       (size_t)w * 4);
+            }
+            stride = w * 4;
+            ok = true;
+        }
+    }
+
+    fn_FPDFBitmap_Destroy(bitmap);
+    fn_FPDF_ClosePage(page);
+    return ok;
+}
+
+bool PdfEngine::RenderPageToMemory(
+    int pageIndex,
+    int width,
+    int height,
+    std::vector<unsigned char>& pixels,
+    int& stride
+) {
+    pixels.clear();
+    stride = 0;
+    if (pageIndex < 0 || pageIndex >= m_pageCount) return false;
+
+    std::lock_guard<std::mutex> lock(m_apiMutex);
+    return RasterizePageLocked(pageIndex, width, height, pixels, stride);
 }
 
 bool PdfEngine::RenderPageToBitmap(
@@ -160,39 +247,18 @@ bool PdfEngine::RenderPageToBitmap(
     int h = (int)targetHeight;
     if (w <= 0 || h <= 0) return false;
 
-    FPDF_PAGE page = fn_FPDF_LoadPage(m_document, pageIndex);
-    if (!page) return false;
+    std::lock_guard<std::mutex> lock(m_apiMutex);
 
-    // 4 = FPDFBitmap_BGRA
-    FPDF_BITMAP bitmap = fn_FPDFBitmap_CreateEx(w, h, 4, NULL, 0);
-    if (!bitmap) {
-        fn_FPDF_ClosePage(page);
-        return false;
-    }
-
-    // Fill white (ARGB: 0xFFFFFFFF)
-    fn_FPDFBitmap_FillRect(bitmap, 0, 0, w, h, 0xFFFFFFFF);
-
-    // PDFium render flags:
-    // 0x01 = FPDF_ANNOT (Render annotations, forms, and signatures)
-    // 0x02 = FPDF_LCD_TEXT (Subpixel LCD text anti-aliasing for maximum sharpness)
-    // NOTE: 0x10 was FPDF_REVERSE_BYTE_ORDER which erroneously swapped R and B bytes.
-    // Omitting 0x10 preserves true native BGRA byte order matching DXGI_FORMAT_B8G8R8A8_UNORM.
-    fn_FPDF_RenderPageBitmap(bitmap, page, 0, 0, w, h, 0, 0x01 | 0x02);
-
-    void* buffer = fn_FPDFBitmap_GetBuffer(bitmap);
-    int stride = fn_FPDFBitmap_GetStride(bitmap);
+    std::vector<unsigned char> pixels;
+    int stride = 0;
+    if (!RasterizePageLocked(pageIndex, w, h, pixels, stride)) return false;
 
     D2D1_BITMAP_PROPERTIES props = D2D1::BitmapProperties(
         D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_IGNORE),
         96.0f, 96.0f
     );
 
-    HRESULT hr = renderTarget->CreateBitmap(D2D1::SizeU(w, h), buffer, stride, props, outBitmap);
-
-    fn_FPDFBitmap_Destroy(bitmap);
-    fn_FPDF_ClosePage(page);
-
+    HRESULT hr = renderTarget->CreateBitmap(D2D1::SizeU(w, h), pixels.data(), stride, props, outBitmap);
     return SUCCEEDED(hr);
 }
 
@@ -223,6 +289,7 @@ bool PdfEngine::RenderThumbnail(
 // =========================================================================
 
 bool PdfEngine::LoadTextPage(int pageIndex) {
+    std::lock_guard<std::mutex> lock(m_apiMutex);
     if (!m_document || pageIndex < 0 || pageIndex >= m_pageCount) return false;
     if (m_textPageIndex == pageIndex && m_activeTextPage) return true;
 
@@ -244,6 +311,7 @@ bool PdfEngine::LoadTextPage(int pageIndex) {
     return true;
 }
 
+// Note: caller must hold m_apiMutex (CloseDocument/LoadTextPage lock it).
 void PdfEngine::CloseTextPage() {
     if (m_activeTextPage && fn_FPDFText_ClosePage) {
         fn_FPDFText_ClosePage(m_activeTextPage);
@@ -321,6 +389,9 @@ std::wstring PdfEngine::GetSelectedText(int startIndex, int endIndex) {
 std::vector<PdfSearchMatch> PdfEngine::Search(const std::wstring& query, bool matchCase, bool wholeWord) {
     std::vector<PdfSearchMatch> matches;
     if (!m_document || query.empty() || !fn_FPDFText_FindStart) return matches;
+
+    std::lock_guard<std::mutex> lock(m_apiMutex);
+    if (!m_document) return matches;
 
     unsigned long flags = 0;
     if (matchCase) flags |= 0x01; // FPDF_MATCHCASE

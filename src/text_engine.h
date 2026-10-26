@@ -44,6 +44,9 @@ struct UndoSnapshot {
     std::vector<std::wstring> lines;
     TextPos cursor;
     TextPos anchor;
+    // Approximate heap cost of this snapshot, used to keep the stack's total
+    // memory bounded instead of just its entry count.
+    size_t approxBytes = 0;
 };
 
 class TextEngine {
@@ -53,6 +56,8 @@ public:
 
     bool LoadFile(const std::wstring& filePath, IDWriteFactory* dwriteFactory);
     void Close();
+    // Marks the max-line-width cache dirty after any line-affecting edit.
+    void InvalidateLayoutCache() { m_maxLineWidthDirty = true; }
 
     bool IsLoaded() const { return m_isLoaded; }
     TextFileType GetFileType() const { return m_fileType; }
@@ -182,6 +187,10 @@ private:
     // Text Lines
     std::vector<std::wstring> m_lines;
     float m_maxLineWidth = 0.0f;
+    // Cache of the widest line (by approximate char count) - recomputed only when the
+    // document changes, never per rendered frame.
+    bool m_maxLineWidthDirty = true;
+    void RecomputeMaxLineWidth();
 
     // Spreadsheet Rows & Columns
     std::vector<std::vector<std::wstring>> m_rows;
@@ -215,6 +224,14 @@ private:
     // Undo / Redo Stacks
     std::vector<UndoSnapshot> m_undoStack;
     std::vector<UndoSnapshot> m_redoStack;
+
+    // Contiguous typing/backspace runs coalesce into a single snapshot so a
+    // burst of 100 keystrokes costs one undo step, not one hundred.
+    unsigned long long m_lastEditTick = 0; // GetTickCount64() of last coalescable edit
+    int m_lastEditKind = 0;                // 0 none, 1 typed char, 2 backspace, 3 delete
+    TextPos m_lastEditCursorAfter;         // cursor right after that edit
+    bool ShouldCoalesceUndo(int kind) const;
+    void NoteUndoEdit(int kind);
 
     // Scrollbar Dragging
     bool m_isDraggingVScroll = false;

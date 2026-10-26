@@ -136,6 +136,10 @@ bool MediaEngine::Initialize(HWND parentHwnd) {
     fn_libvlc_audio_toggle_mute = (int(*)(libvlc_media_player_t*))GetProcAddress(m_hLibVlc, "libvlc_audio_toggle_mute");
     fn_libvlc_audio_get_mute = (int(*)(libvlc_media_player_t*))GetProcAddress(m_hLibVlc, "libvlc_audio_get_mute");
     fn_libvlc_video_get_size = (int(*)(libvlc_media_player_t*, unsigned, unsigned*, unsigned*))GetProcAddress(m_hLibVlc, "libvlc_video_get_size");
+    fn_libvlc_video_set_adjust_int = (void(*)(libvlc_media_player_t*, unsigned, int))GetProcAddress(m_hLibVlc, "libvlc_video_set_adjust_int");
+    fn_libvlc_video_set_adjust_float = (void(*)(libvlc_media_player_t*, unsigned, float))GetProcAddress(m_hLibVlc, "libvlc_video_set_adjust_float");
+    fn_libvlc_video_get_adjust_int = (int(*)(libvlc_media_player_t*, unsigned))GetProcAddress(m_hLibVlc, "libvlc_video_get_adjust_int");
+    fn_libvlc_video_get_adjust_float = (float(*)(libvlc_media_player_t*, unsigned))GetProcAddress(m_hLibVlc, "libvlc_video_get_adjust_float");
 
     if (!fn_libvlc_new || !fn_libvlc_media_player_play || !fn_libvlc_media_player_set_hwnd) {
         FreeLibrary(m_hLibVlc);
@@ -202,6 +206,27 @@ bool MediaEngine::OpenMedia(const std::wstring& filePath) {
     fn_libvlc_audio_set_volume(m_mp, m_lastVolume);
     m_hasStarted = false;
     m_pendingSeek = -1.0f;
+
+    // Detect if the file is a camera log profile from filename
+    std::wstring lowerPath = filePath;
+    for (auto& c : lowerPath) c = towlower(c);
+    if (m_logProfile == LogTransformProfile::None) {
+        if (lowerPath.find(L"apple") != std::wstring::npos && lowerPath.find(L"log") != std::wstring::npos) {
+            m_logProfile = LogTransformProfile::AppleLog;
+        } else if (lowerPath.find(L"slog") != std::wstring::npos || lowerPath.find(L"s-log") != std::wstring::npos) {
+            m_logProfile = LogTransformProfile::SonySLog3;
+        } else if (lowerPath.find(L"clog") != std::wstring::npos || lowerPath.find(L"c-log") != std::wstring::npos) {
+            m_logProfile = LogTransformProfile::CanonCLog3;
+        } else if (lowerPath.find(L"dlog") != std::wstring::npos || lowerPath.find(L"d-log") != std::wstring::npos) {
+            m_logProfile = LogTransformProfile::DjiDLogM;
+        } else if (lowerPath.find(L"vlog") != std::wstring::npos || lowerPath.find(L"v-log") != std::wstring::npos) {
+            m_logProfile = LogTransformProfile::PanasonicVLog;
+        } else if (lowerPath.find(L"log") != std::wstring::npos) {
+            m_logProfile = LogTransformProfile::Rec709_Auto;
+        }
+    }
+    ApplyLogTransform();
+
     fn_libvlc_media_player_play(m_mp);
 
     ShowVideoWindow(true);
@@ -439,6 +464,87 @@ std::wstring MediaEngine::FormatTime(libvlc_time_t ms) const {
         swprintf_s(buf, L"%02d:%02d", min, sec);
     }
     return std::wstring(buf);
+}
+
+void MediaEngine::ApplyLogTransform() {
+    if (!m_mp || !fn_libvlc_video_set_adjust_int) return;
+
+    if (m_logProfile == LogTransformProfile::None) {
+        fn_libvlc_video_set_adjust_int(m_mp, 0 /* libvlc_adjust_Enable */, 0);
+        return;
+    }
+
+    fn_libvlc_video_set_adjust_int(m_mp, 0 /* Enable */, 1);
+    if (!fn_libvlc_video_set_adjust_float) return;
+
+    switch (m_logProfile) {
+        case LogTransformProfile::Rec709_Auto:
+            fn_libvlc_video_set_adjust_float(m_mp, 1 /* Contrast */, 1.52f);
+            fn_libvlc_video_set_adjust_float(m_mp, 2 /* Brightness */, 1.02f);
+            fn_libvlc_video_set_adjust_float(m_mp, 4 /* Saturation */, 1.65f);
+            fn_libvlc_video_set_adjust_float(m_mp, 5 /* Gamma */, 0.86f);
+            break;
+        case LogTransformProfile::AppleLog:
+            fn_libvlc_video_set_adjust_float(m_mp, 1 /* Contrast */, 1.58f);
+            fn_libvlc_video_set_adjust_float(m_mp, 2 /* Brightness */, 1.00f);
+            fn_libvlc_video_set_adjust_float(m_mp, 4 /* Saturation */, 1.72f);
+            fn_libvlc_video_set_adjust_float(m_mp, 5 /* Gamma */, 0.82f);
+            break;
+        case LogTransformProfile::SonySLog3:
+            fn_libvlc_video_set_adjust_float(m_mp, 1 /* Contrast */, 1.68f);
+            fn_libvlc_video_set_adjust_float(m_mp, 2 /* Brightness */, 0.96f);
+            fn_libvlc_video_set_adjust_float(m_mp, 4 /* Saturation */, 1.82f);
+            fn_libvlc_video_set_adjust_float(m_mp, 5 /* Gamma */, 0.78f);
+            break;
+        case LogTransformProfile::CanonCLog3:
+            fn_libvlc_video_set_adjust_float(m_mp, 1 /* Contrast */, 1.48f);
+            fn_libvlc_video_set_adjust_float(m_mp, 2 /* Brightness */, 1.04f);
+            fn_libvlc_video_set_adjust_float(m_mp, 4 /* Saturation */, 1.58f);
+            fn_libvlc_video_set_adjust_float(m_mp, 5 /* Gamma */, 0.88f);
+            break;
+        case LogTransformProfile::PanasonicVLog:
+            fn_libvlc_video_set_adjust_float(m_mp, 1 /* Contrast */, 1.54f);
+            fn_libvlc_video_set_adjust_float(m_mp, 2 /* Brightness */, 1.01f);
+            fn_libvlc_video_set_adjust_float(m_mp, 4 /* Saturation */, 1.70f);
+            fn_libvlc_video_set_adjust_float(m_mp, 5 /* Gamma */, 0.84f);
+            break;
+        case LogTransformProfile::DjiDLogM:
+            fn_libvlc_video_set_adjust_float(m_mp, 1 /* Contrast */, 1.50f);
+            fn_libvlc_video_set_adjust_float(m_mp, 2 /* Brightness */, 1.03f);
+            fn_libvlc_video_set_adjust_float(m_mp, 4 /* Saturation */, 1.62f);
+            fn_libvlc_video_set_adjust_float(m_mp, 5 /* Gamma */, 0.85f);
+            break;
+        default: break;
+    }
+}
+
+void MediaEngine::SetLogTransform(LogTransformProfile profile) {
+    m_logProfile = profile;
+    ApplyLogTransform();
+}
+
+void MediaEngine::CycleLogTransform() {
+    int next = ((int)m_logProfile + 1) % 7;
+    SetLogTransform((LogTransformProfile)next);
+}
+
+const wchar_t* MediaEngine::GetLogProfileName(LogTransformProfile profile) const {
+    switch (profile) {
+        case LogTransformProfile::None: return L"Off (Native Log)";
+        case LogTransformProfile::Rec709_Auto: return L"Rec.709 (Auto)";
+        case LogTransformProfile::AppleLog: return L"Apple Log → Rec.709";
+        case LogTransformProfile::SonySLog3: return L"Sony S-Log3 → Rec.709";
+        case LogTransformProfile::CanonCLog3: return L"Canon C-Log3 → Rec.709";
+        case LogTransformProfile::PanasonicVLog: return L"Panasonic V-Log → Rec.709";
+        case LogTransformProfile::DjiDLogM: return L"DJI D-Log M → Rec.709";
+        default: return L"None";
+    }
+}
+
+std::wstring MediaEngine::GetLogTransformStatusText() const {
+    std::wstring s = L"Tone Mapping: ";
+    s += GetLogProfileName(m_logProfile);
+    return s;
 }
 
 } // namespace WinPreview

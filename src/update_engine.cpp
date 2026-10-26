@@ -3,8 +3,11 @@
 #include <urlmon.h>
 #include <shellapi.h>
 #include <shlobj.h>
+#include <softpub.h>
+#include <wincrypt.h>
 #include <vector>
 #include <sstream>
+#include <mutex>
 
 #pragma comment(lib, "wininet.lib")
 #pragma comment(lib, "urlmon.lib")
@@ -13,6 +16,10 @@ namespace WinPreview {
 
 static const wchar_t* UPDATE_META_URL = L"https://raw.githubusercontent.com/Code-Xceed/WinPreview/main/version.json";
 static const wchar_t* USER_AGENT = L"WinPreview-AutoUpdater/1.0 (Windows NT; x64)";
+
+// Bounded network waits so a worker joins quickly when the app shuts down.
+static const DWORD NET_CONNECT_TIMEOUT_MS = 15000;
+static const DWORD NET_RECV_TIMEOUT_MS = 20000;
 
 static std::wstring Utf8ToWide(const std::string& str) {
     if (str.empty()) return L"";
@@ -28,9 +35,9 @@ static std::wstring ExtractJsonString(const std::string& json, const std::string
     if (pos == std::string::npos) return L"";
     pos = json.find(':', pos + needle.length());
     if (pos == std::string::npos) return L"";
-    pos = json.find('\"', pos + 1);
+    pos = json.find('"', pos + 1);
     if (pos == std::string::npos) return L"";
-    size_t endQuote = json.find('\"', pos + 1);
+    size_t endQuote = json.find('"', pos + 1);
     if (endQuote == std::string::npos) return L"";
     std::string value = json.substr(pos + 1, endQuote - (pos + 1));
     return Utf8ToWide(value);
@@ -39,7 +46,7 @@ static std::wstring ExtractJsonString(const std::string& json, const std::string
 static bool IsVersionGreater(const std::wstring& remote, const std::wstring& current) {
     int rMaj = 0, rMin = 0, rPatch = 0, rBuild = 0;
     int cMaj = 0, cMin = 0, cPatch = 0, cBuild = 0;
-    
+
     // Parse remote version, handle optional 'v' prefix
     const wchar_t* rPtr = remote.c_str();
     while (*rPtr == L'v' || *rPtr == L'V' || *rPtr == L' ') rPtr++;
@@ -91,15 +98,60 @@ static std::wstring QueryModuleFileVersion() {
     return WINPREVIEW_VERSION_WSTR;
 }
 
+static void ApplyWinInetTimeouts(HINTERNET hInternet) {
+    if (!hInternet) return;
+    DWORD connectTimeout = NET_CONNECT_TIMEOUT_MS;
+    DWORD recvTimeout = NET_RECV_TIMEOUT_MS;
+    InternetSetOptionW(hInternet, INTERNET_OPTION_CONNECT_TIMEOUT, &connectTimeout, sizeof(connectTimeout));
+    InternetSetOptionW(hInternet, INTERNET_OPTION_RECEIVE_TIMEOUT, &recvTimeout, sizeof(recvTimeout));
+}
+
 UpdateEngine::UpdateEngine() {
+    std::lock_guard<std::mutex> lock(m_infoMutex);
     m_info.currentVersion = QueryModuleFileVersion();
 }
 
 UpdateEngine::~UpdateEngine() {
+    // Politely ask any running job to stop, then wait for it. Downloads abort at the
+    // next network chunk (bounded by NET_RECV_TIMEOUT_MS), so shutdown stays responsive.
+    m_cancelJob.store(true);
     if (m_workerThread.joinable()) {
-        m_workerThread.detach();
+        m_workerThread.join();
     }
 }
+
+// ---------------------------------------------------------------------------
+// Thread-safe accessors
+// ---------------------------------------------------------------------------
+
+UpdateInfo UpdateEngine::GetUpdateInfo() const {
+    std::lock_guard<std::mutex> lock(m_infoMutex);
+    return m_info;
+}
+
+std::wstring UpdateEngine::GetDownloadedInstallerPath() const {
+    std::lock_guard<std::mutex> lock(m_infoMutex);
+    return m_downloadedInstallerPath;
+}
+
+void UpdateEngine::CommitInfo(UpdateState state, const UpdateInfo& info) {
+    {
+        std::lock_guard<std::mutex> lock(m_infoMutex);
+        m_info = info;
+    }
+    m_state.store(state);
+}
+
+void UpdateEngine::SetDownloadedInstallerPath(const std::wstring& path) {
+    std::lock_guard<std::mutex> lock(m_infoMutex);
+    m_downloadedInstallerPath = path;
+}
+
+// ---------------------------------------------------------------------------
+// Async jobs — a single worker thread, serialized through m_workerThread.
+// Callbacks receive snapshot copies and are invoked on the worker thread;
+// UI side must marshal (AppWindow does via PostMessage).
+// ---------------------------------------------------------------------------
 
 void UpdateEngine::CheckForUpdatesAsync(std::function<void(const UpdateInfo&)> onComplete) {
     if (m_state.load() == UpdateState::Checking || m_state.load() == UpdateState::Downloading) {
@@ -107,49 +159,54 @@ void UpdateEngine::CheckForUpdatesAsync(std::function<void(const UpdateInfo&)> o
     }
 
     m_state.store(UpdateState::Checking);
+    m_cancelJob.store(false);
 
     if (m_workerThread.joinable()) {
-        m_workerThread.detach();
+        m_workerThread.join();
     }
 
     m_workerThread = std::thread([this, onComplete]() {
         m_isSimulated.store(false);
-        FetchUpdateInfoSync();
+        UpdateInfo result;
+        FetchUpdateInfoSync(result);
         if (onComplete) {
-            onComplete(m_info);
+            // Snapshot copy: the callback can never observe m_info mid-commit,
+            // and calling GetUpdateInfo() back on the worker is also safe.
+            onComplete(GetUpdateInfo());
         }
     });
 }
 
 void UpdateEngine::SimulateUpdateForTesting() {
-    m_info.currentVersion = QueryModuleFileVersion();
-    m_info.remoteVersion = L"1.1.0";
-    m_info.changelog = L"Simulation test release with performance optimizations and new features.";
-    m_info.isAvailable = true;
-    m_info.errorMessage.clear();
+    UpdateInfo result;
+    result.currentVersion = QueryModuleFileVersion();
+    result.remoteVersion = L"1.1.0";
+    result.changelog = L"Simulation test release with performance optimizations and new features.";
+    result.isAvailable = true;
+    CommitInfo(UpdateState::UpdateAvailable, result);
     m_isSimulated.store(true);
-    m_state.store(UpdateState::UpdateAvailable);
 }
 
-void UpdateEngine::FetchUpdateInfoSync() {
-    m_info.currentVersion = QueryModuleFileVersion();
-    m_info.isAvailable = false;
-    m_info.errorMessage.clear();
+void UpdateEngine::FetchUpdateInfoSync(UpdateInfo& result) {
+    result.currentVersion = QueryModuleFileVersion();
+    result.isAvailable = false;
+    result.errorMessage.clear();
 
     HINTERNET hInternet = InternetOpenW(USER_AGENT, INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
     if (!hInternet) {
-        m_info.errorMessage = L"Failed to initialize Internet connection.";
-        m_state.store(UpdateState::Failed);
+        result.errorMessage = L"Failed to initialize Internet connection.";
+        CommitInfo(UpdateState::Failed, result);
         return;
     }
+    ApplyWinInetTimeouts(hInternet);
 
-    std::wstring metaUrl = std::wstring(UPDATE_META_URL) + L"?t=" + std::to_wstring(GetTickCount64());
-    DWORD flags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_SECURE | INTERNET_FLAG_IGNORE_REDIRECT_TO_HTTPS;
-    HINTERNET hUrl = InternetOpenUrlW(hInternet, metaUrl.c_str(), NULL, 0, flags, 0);
+    HINTERNET hUrl = InternetOpenUrlW(hInternet, UPDATE_META_URL, NULL, 0,
+        INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_SECURE |
+        INTERNET_FLAG_IGNORE_REDIRECT_TO_HTTPS, 0);
     if (!hUrl) {
         InternetCloseHandle(hInternet);
-        m_info.errorMessage = L"Unable to contact update server.";
-        m_state.store(UpdateState::Failed);
+        result.errorMessage = L"Unable to contact update server.";
+        CommitInfo(UpdateState::Failed, result);
         return;
     }
 
@@ -161,8 +218,8 @@ void UpdateEngine::FetchUpdateInfoSync() {
         if (statusCode < 200 || statusCode >= 300) {
             InternetCloseHandle(hUrl);
             InternetCloseHandle(hInternet);
-            m_info.errorMessage = L"Update server returned status " + std::to_wstring(statusCode);
-            m_state.store(UpdateState::Failed);
+            result.errorMessage = L"Update server returned status " + std::to_wstring(statusCode);
+            CommitInfo(UpdateState::Failed, result);
             return;
         }
     }
@@ -178,32 +235,32 @@ void UpdateEngine::FetchUpdateInfoSync() {
     InternetCloseHandle(hInternet);
 
     if (responseBody.empty()) {
-        m_info.errorMessage = L"Empty update manifest.";
-        m_state.store(UpdateState::Failed);
+        result.errorMessage = L"Empty update manifest.";
+        CommitInfo(UpdateState::Failed, result);
         return;
     }
 
-    m_info.remoteVersion = ExtractJsonString(responseBody, "version");
-    m_info.downloadUrl = ExtractJsonString(responseBody, "download_url");
-    m_info.changelog = ExtractJsonString(responseBody, "changelog");
-    m_info.releaseDate = ExtractJsonString(responseBody, "release_date");
+    result.remoteVersion = ExtractJsonString(responseBody, "version");
+    result.downloadUrl = ExtractJsonString(responseBody, "download_url");
+    result.changelog = ExtractJsonString(responseBody, "changelog");
+    result.releaseDate = ExtractJsonString(responseBody, "release_date");
 
-    if (m_info.remoteVersion.empty()) {
-        m_info.errorMessage = L"Invalid update metadata format.";
-        m_state.store(UpdateState::Failed);
+    if (result.remoteVersion.empty()) {
+        result.errorMessage = L"Invalid update metadata format.";
+        CommitInfo(UpdateState::Failed, result);
         return;
     }
 
-    if (m_info.downloadUrl.empty()) {
-        m_info.downloadUrl = L"https://github.com/Code-Xceed/WinPreview/releases/latest/download/WinPreview-Setup-x64.exe";
+    if (result.downloadUrl.empty()) {
+        result.downloadUrl = L"https://github.com/Code-Xceed/WinPreview/releases/latest/download/WinPreview-Setup-x64.exe";
     }
 
-    if (IsVersionGreater(m_info.remoteVersion, m_info.currentVersion)) {
-        m_info.isAvailable = true;
-        m_state.store(UpdateState::UpdateAvailable);
+    if (IsVersionGreater(result.remoteVersion, result.currentVersion)) {
+        result.isAvailable = true;
+        CommitInfo(UpdateState::UpdateAvailable, result);
     } else {
-        m_info.isAvailable = false;
-        m_state.store(UpdateState::UpToDate);
+        result.isAvailable = false;
+        CommitInfo(UpdateState::UpToDate, result);
     }
 }
 
@@ -215,14 +272,16 @@ void UpdateEngine::DownloadUpdateAsync(std::function<void(int percent)> onProgre
 
     m_state.store(UpdateState::Downloading);
     m_downloadProgress.store(0);
+    m_cancelJob.store(false);
 
     if (m_workerThread.joinable()) {
-        m_workerThread.detach();
+        m_workerThread.join();
     }
 
     if (m_isSimulated.load()) {
         m_workerThread = std::thread([this, onProgress, onComplete]() {
             for (int p = 5; p <= 100; p += 10) {
+                if (m_cancelJob.load()) return;
                 std::this_thread::sleep_for(std::chrono::milliseconds(180));
                 m_downloadProgress.store(p);
                 if (onProgress) onProgress(p);
@@ -234,6 +293,9 @@ void UpdateEngine::DownloadUpdateAsync(std::function<void(int percent)> onProgre
     }
 
     m_workerThread = std::thread([this, onProgress, onComplete]() {
+        // Work against a snapshot: other threads may mutate m_info while we run.
+        UpdateInfo info = GetUpdateInfo();
+
         WCHAR tempPath[MAX_PATH];
         GetTempPathW(MAX_PATH, tempPath);
 
@@ -242,10 +304,10 @@ void UpdateEngine::DownloadUpdateAsync(std::function<void(int percent)> onProgre
         DeleteFileW(defaultPath.c_str());
 
         // Always target a safe unique path to prevent sharing violations or AV locks
-        std::wstring targetPath = std::wstring(tempPath) + L"WinPreview-Setup-v" + 
-                                  (m_info.remoteVersion.empty() ? L"latest" : m_info.remoteVersion) + 
+        std::wstring targetPath = std::wstring(tempPath) + L"WinPreview-Setup-v" +
+                                  (info.remoteVersion.empty() ? L"latest" : info.remoteVersion) +
                                   L"-" + std::to_wstring(GetTickCount64()) + L".exe";
-        m_downloadedInstallerPath = targetPath;
+        SetDownloadedInstallerPath(targetPath);
 
         bool downloadSuccess = false;
 
@@ -254,8 +316,10 @@ void UpdateEngine::DownloadUpdateAsync(std::function<void(int percent)> onProgre
         // =====================================================================
         HINTERNET hInternet = InternetOpenW(USER_AGENT, INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
         if (hInternet) {
-            DWORD flags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_SECURE | INTERNET_FLAG_IGNORE_REDIRECT_TO_HTTPS;
-            HINTERNET hUrl = InternetOpenUrlW(hInternet, m_info.downloadUrl.c_str(), NULL, 0, flags, 0);
+            ApplyWinInetTimeouts(hInternet);
+            HINTERNET hUrl = InternetOpenUrlW(hInternet, info.downloadUrl.c_str(), NULL, 0,
+                INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_SECURE |
+                INTERNET_FLAG_IGNORE_REDIRECT_TO_HTTPS, 0);
             if (hUrl) {
                 DWORD statusCode = 0;
                 DWORD statusSize = sizeof(statusCode);
@@ -277,12 +341,13 @@ void UpdateEngine::DownloadUpdateAsync(std::function<void(int percent)> onProgre
                                                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                                                NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
                     if (hFile != INVALID_HANDLE_VALUE) {
-                        char buffer[16384];
+                        char buffer[65536];
                         DWORD bytesRead = 0;
                         DWORD totalBytesRead = 0;
                         bool writeFailed = false;
 
-                        while (InternetReadFile(hUrl, buffer, sizeof(buffer), &bytesRead) && bytesRead > 0) {
+                        while (!m_cancelJob.load() &&
+                               InternetReadFile(hUrl, buffer, sizeof(buffer), &bytesRead) && bytesRead > 0) {
                             DWORD bytesWritten = 0;
                             if (!WriteFile(hFile, buffer, bytesRead, &bytesWritten, NULL) || bytesWritten != bytesRead) {
                                 writeFailed = true;
@@ -313,11 +378,11 @@ void UpdateEngine::DownloadUpdateAsync(std::function<void(int percent)> onProgre
         // =====================================================================
         // TIER 2: URLDownloadToFileW Fallback (if WinINet failed for any reason)
         // =====================================================================
-        if (!downloadSuccess) {
+        if (!downloadSuccess && !m_cancelJob.load()) {
             DeleteFileW(targetPath.c_str());
             if (onProgress) onProgress(35);
 
-            HRESULT hr = URLDownloadToFileW(NULL, m_info.downloadUrl.c_str(), targetPath.c_str(), 0, NULL);
+            HRESULT hr = URLDownloadToFileW(NULL, info.downloadUrl.c_str(), targetPath.c_str(), 0, NULL);
             if (SUCCEEDED(hr)) {
                 HANDLE hCheck = CreateFileW(targetPath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
                 if (hCheck != INVALID_HANDLE_VALUE) {
@@ -336,6 +401,12 @@ void UpdateEngine::DownloadUpdateAsync(std::function<void(int percent)> onProgre
         // =====================================================================
         // Final Completion
         // =====================================================================
+        if (m_cancelJob.load()) {
+            DeleteFileW(targetPath.c_str());
+            m_state.store(UpdateState::Idle);
+            if (onComplete) onComplete(false, L"");
+            return;
+        }
         if (downloadSuccess) {
             m_downloadProgress.store(100);
             m_state.store(UpdateState::Downloaded);
@@ -349,6 +420,36 @@ void UpdateEngine::DownloadUpdateAsync(std::function<void(int percent)> onProgre
     });
 }
 
+// ---------------------------------------------------------------------------
+// Installer integrity & launch
+// ---------------------------------------------------------------------------
+
+// Verifies the Authenticode signature chain of the downloaded installer against
+// trusted root CAs. Never launches an unverified, unsigned or size-only-validated binary.
+static bool VerifyInstallerSignature(const std::wstring& filePath) {
+    WINTRUST_FILE_INFO fileInfo = {};
+    fileInfo.cbStruct = sizeof(fileInfo);
+    fileInfo.pcwszFilePath = filePath.c_str();
+
+    GUID policyGuid = WINTRUST_ACTION_GENERIC_VERIFY_V2;
+
+    WINTRUST_DATA trustData = {};
+    trustData.cbStruct = sizeof(trustData);
+    trustData.dwUIChoice = WTD_UI_NONE;
+    trustData.fdwRevocationChecks = WTD_REVOKE_NONE;
+    trustData.dwUnionChoice = WTD_CHOICE_FILE;
+    trustData.dwStateAction = WTD_STATEACTION_VERIFY;
+    trustData.pFile = &fileInfo;
+
+    LONG status = WinVerifyTrust((HWND)INVALID_HANDLE_VALUE, &policyGuid, &trustData);
+
+    // Release the verification state added by WTD_STATEACTION_VERIFY.
+    trustData.dwStateAction = WTD_STATEACTION_CLOSE;
+    WinVerifyTrust((HWND)INVALID_HANDLE_VALUE, &policyGuid, &trustData);
+
+    return status == ERROR_SUCCESS;
+}
+
 bool UpdateEngine::LaunchInstallerAndExit(HWND parentHwnd) {
     if (m_isSimulated.load()) {
         m_state.store(UpdateState::Idle);
@@ -356,10 +457,18 @@ bool UpdateEngine::LaunchInstallerAndExit(HWND parentHwnd) {
         return true;
     }
 
-    if (m_downloadedInstallerPath.empty()) return false;
+    std::wstring installerPath = GetDownloadedInstallerPath();
+    if (installerPath.empty()) return false;
+
+    if (!VerifyInstallerSignature(installerPath)) {
+        DeleteFileW(installerPath.c_str());
+        SetDownloadedInstallerPath(L"");
+        m_state.store(UpdateState::Failed);
+        return false;
+    }
 
     // Launch the installer independently without parent window dependency
-    HINSTANCE hInst = ShellExecuteW(NULL, L"open", m_downloadedInstallerPath.c_str(),
+    HINSTANCE hInst = ShellExecuteW(NULL, L"open", installerPath.c_str(),
                                     L"", NULL, SW_SHOWNORMAL);
     if ((INT_PTR)hInst > 32) {
         // Terminate current process immediately to release all file locks on WinPreview.exe and pdfium.dll

@@ -2,6 +2,7 @@
 #include "d2d_engine.h"
 #include <string>
 #include <vector>
+#include <mutex>
 
 namespace WinPreview {
 
@@ -48,6 +49,17 @@ public:
         ID2D1Bitmap** outBitmap
     );
 
+    // Rasterizes a page into CPU memory (top-down BGRA). The caller creates the
+    // D2D1 bitmap from it later on the UI thread, so rendering can run off-thread.
+    // Returns false for out-of-bounds pages or when no document is open.
+    bool RenderPageToMemory(
+        int pageIndex,
+        int width,
+        int height,
+        std::vector<unsigned char>& pixels,
+        int& stride
+    );
+
     bool RenderThumbnail(
         int pageIndex,
         float maxDimension,
@@ -73,6 +85,15 @@ public:
 
 private:
     void TraverseBookmarks(FPDF_BOOKMARK parent, int level, std::vector<PdfOutlineItem>& outList);
+
+    // Must be called while holding m_apiMutex.
+    void CloseDocumentLocked();
+    bool RasterizePageLocked(int pageIndex, int w, int h,
+                             std::vector<unsigned char>& pixels, int& stride);
+
+    // PDFium is not thread-safe; every entry point into its API takes this
+    // mutex so background rasterization cannot interleave with UI-thread calls.
+    std::mutex m_apiMutex;
 
     HMODULE m_hPdfium = nullptr;
     FPDF_DOCUMENT m_document = nullptr;

@@ -31,6 +31,9 @@ void TextEngine::Close() {
     m_caretVisible = true;
     m_caretBlinkTimer = 0.0f;
     m_isSelectingText = false;
+    m_lastEditKind = 0;
+    m_lastEditTick = 0;
+    m_lastEditCursorAfter = { 0, 0 };
 }
 
 void TextEngine::ReleaseBrushes() {
@@ -904,11 +907,38 @@ void TextEngine::PushUndo() {
     snap.lines = m_lines;
     snap.cursor = m_cursor;
     snap.anchor = m_anchor;
+    size_t approxBytes = 0;
+    for (const std::wstring& l : snap.lines) {
+        approxBytes += l.size() * sizeof(wchar_t) + sizeof(std::wstring);
+    }
+    snap.approxBytes = approxBytes;
     m_undoStack.push_back(std::move(snap));
-    if (m_undoStack.size() > 100) {
+
+    // Bound total undo memory (32 MB) by evicting the oldest snapshots, and
+    // keep the entry count capped as a floor for tiny documents.
+    constexpr size_t kUndoMemoryCap = 32ull * 1024 * 1024;
+    size_t totalBytes = 0;
+    for (const UndoSnapshot& s : m_undoStack) totalBytes += s.approxBytes;
+    while ((totalBytes > kUndoMemoryCap || m_undoStack.size() > 100) && m_undoStack.size() > 1) {
+        totalBytes -= m_undoStack.front().approxBytes;
         m_undoStack.erase(m_undoStack.begin());
     }
+
     m_redoStack.clear();
+    m_lastEditKind = 0;
+}
+
+bool TextEngine::ShouldCoalesceUndo(int kind) const {
+    return m_lastEditKind == kind &&
+           m_lastEditTick != 0 &&
+           (GetTickCount64() - m_lastEditTick) < 600 &&
+           m_cursor == m_lastEditCursorAfter;
+}
+
+void TextEngine::NoteUndoEdit(int kind) {
+    m_lastEditKind = kind;
+    m_lastEditTick = GetTickCount64();
+    m_lastEditCursorAfter = m_cursor;
 }
 
 bool TextEngine::Undo() {
@@ -977,10 +1007,14 @@ bool TextEngine::DeleteSelection() {
 }
 
 bool TextEngine::InsertChar(wchar_t ch) {
-    if (HasSelection()) {
-        DeleteSelection();
+    const bool hadSelection = HasSelection();
+    if (hadSelection) {
+        DeleteSelection(); // already records its own snapshot
+    } else if (ShouldCoalesceUndo(1)) {
+        m_redoStack.clear();
+    } else {
+        PushUndo();
     }
-    PushUndo();
 
     if (m_lines.empty()) m_lines.push_back(L"");
     m_cursor.line = std::clamp(m_cursor.line, 0, (int)m_lines.size() - 1);
@@ -990,6 +1024,7 @@ bool TextEngine::InsertChar(wchar_t ch) {
     m_cursor.col++;
     m_anchor = m_cursor;
     m_isModified = true;
+    NoteUndoEdit(1);
     ResetCaretBlink();
     return true;
 }
@@ -1036,11 +1071,16 @@ bool TextEngine::DeleteChar(bool backspace) {
 
     if (backspace) {
         if (m_cursor.col > 0) {
-            PushUndo();
+            if (ShouldCoalesceUndo(2)) {
+                m_redoStack.clear();
+            } else {
+                PushUndo();
+            }
             m_lines[m_cursor.line].erase(m_cursor.col - 1, 1);
             m_cursor.col--;
             m_anchor = m_cursor;
             m_isModified = true;
+            NoteUndoEdit(2);
             ResetCaretBlink();
             return true;
         } else if (m_cursor.line > 0) {
@@ -1057,10 +1097,15 @@ bool TextEngine::DeleteChar(bool backspace) {
         }
     } else { // Delete
         if (m_cursor.col < (int)m_lines[m_cursor.line].length()) {
-            PushUndo();
+            if (ShouldCoalesceUndo(3)) {
+                m_redoStack.clear();
+            } else {
+                PushUndo();
+            }
             m_lines[m_cursor.line].erase(m_cursor.col, 1);
             m_anchor = m_cursor;
             m_isModified = true;
+            NoteUndoEdit(3);
             ResetCaretBlink();
             return true;
         } else if (m_cursor.line + 1 < (int)m_lines.size()) {
@@ -1314,6 +1359,17 @@ bool TextEngine::HandleStatusBarClick(float x, float y, const D2D1_RECT_F& viewp
     return false;
 }
 
+void TextEngine::RecomputeMaxLineWidth() {
+    if (!m_maxLineWidthDirty) return;
+    float maxLineWidth = 0.0f;
+    for (const auto& line : m_lines) {
+        float lw = (float)line.length() * m_charWidth;
+        if (lw > maxLineWidth) maxLineWidth = lw;
+    }
+    m_maxLineWidth = maxLineWidth;
+    m_maxLineWidthDirty = false;
+}
+
 void TextEngine::RenderText(
     ID2D1RenderTarget* rt,
     D2DEngine& d2d,
@@ -1356,11 +1412,8 @@ void TextEngine::RenderText(
     m_scrollY = std::clamp(m_scrollY, 0.0f, maxScrollY);
 
     float textVisibleW = (codeViewport.right - textOriginX) - 32.0f * dpiScale;
-    float maxLineWidth = 0.0f;
-    for (const auto& line : m_lines) {
-        float lw = (float)line.length() * m_charWidth;
-        if (lw > maxLineWidth) maxLineWidth = lw;
-    }
+    RecomputeMaxLineWidth();
+    float maxLineWidth = m_maxLineWidth;
     float maxScrollX = std::max(0.0f, maxLineWidth - textVisibleW + 60.0f * dpiScale);
     m_targetScrollX = std::clamp(m_targetScrollX, 0.0f, maxScrollX);
     m_scrollX = std::clamp(m_scrollX, 0.0f, maxScrollX);

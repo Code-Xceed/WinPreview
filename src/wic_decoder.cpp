@@ -1,10 +1,73 @@
 #include "wic_decoder.h"
+#include "heif_decoder.h"
 #include <propvarutil.h>
 #include <shobjidl.h>
 #include <algorithm>
+#include <cmath>
 #include <vector>
 
 namespace WinPreview {
+
+static bool LoadRawPreview(
+    IWICImagingFactory* factory,
+    ID2D1RenderTarget* renderTarget,
+    const std::wstring& filePath,
+    ID2D1Bitmap** outBitmap,
+    UINT* outWidth,
+    UINT* outHeight,
+    D2D1_RECT_F* outContentBounds
+) {
+    HANDLE hFile = CreateFileW(filePath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    if (hFile == INVALID_HANDLE_VALUE) return false;
+
+    LARGE_INTEGER liSize;
+    if (!GetFileSizeEx(hFile, &liSize) || liSize.QuadPart < 65536) {
+        CloseHandle(hFile);
+        return false;
+    }
+
+    DWORD readSize = (DWORD)(std::min)(liSize.QuadPart, (LONGLONG)(32 * 1024 * 1024));
+    std::vector<BYTE> buf(readSize);
+    DWORD bytesRead = 0;
+    if (!ReadFile(hFile, buf.data(), readSize, &bytesRead, NULL) || bytesRead < 65536) {
+        CloseHandle(hFile);
+        return false;
+    }
+    CloseHandle(hFile);
+
+    size_t bestOffset = 0;
+    size_t bestLen = 0;
+
+    for (size_t i = 0; i + 3 < bytesRead; ++i) {
+        if (buf[i] == 0xFF && buf[i + 1] == 0xD8 && buf[i + 2] == 0xFF) {
+            for (size_t j = i + 1024; j + 1 < bytesRead; ++j) {
+                if (buf[j] == 0xFF && buf[j + 1] == 0xD9) {
+                    size_t len = (j + 2) - i;
+                    if (len > bestLen && len >= 65536) {
+                        bestOffset = i;
+                        bestLen = len;
+                    }
+                    i = j + 1;
+                    break;
+                }
+            }
+        }
+    }
+
+    if (bestLen >= 65536) {
+        if (WicDecoder::LoadImageFromMemory(factory, renderTarget, buf.data() + bestOffset, (DWORD)bestLen, outBitmap)) {
+            if (*outBitmap) {
+                D2D1_SIZE_F sz = (*outBitmap)->GetSize();
+                if (outWidth) *outWidth = (UINT)sz.width;
+                if (outHeight) *outHeight = (UINT)sz.height;
+                if (outContentBounds) *outContentBounds = D2D1::RectF(0.0f, 0.0f, sz.width, sz.height);
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
 
 bool WicDecoder::LoadImageFromFile(
     IWICImagingFactory* factory,
@@ -29,7 +92,46 @@ bool WicDecoder::LoadImageFromFile(
         WICDecodeMetadataCacheOnDemand,
         &decoder
     );
-    if (FAILED(hr) || !decoder) return false;
+    if (FAILED(hr) || !decoder) {
+        std::wstring ext;
+        size_t dotPos = filePath.find_last_of(L'.');
+        if (dotPos != std::wstring::npos) {
+            ext = filePath.substr(dotPos);
+            for (auto& c : ext) c = towlower(c);
+        }
+
+        // Tier 2: HEIC / HEIF / AVIF via HeifDecoder
+        if (ext == L".heic" || ext == L".heif" || ext == L".avif") {
+            ImageMetadata meta;
+            if (HeifDecoder::LoadImageFromFile(renderTarget, filePath, outBitmap, outWidth, outHeight, &meta)) {
+                if (outContentBounds && outWidth && outHeight) {
+                    *outContentBounds = D2D1::RectF(0.0f, 0.0f, (float)*outWidth, (float)*outHeight);
+                }
+                return true;
+            }
+        }
+
+        // Tier 3: Camera RAW embedded high-res preview
+        if (ext == L".cr2" || ext == L".nef" || ext == L".arw" || ext == L".dng" ||
+            ext == L".raw" || ext == L".orf" || ext == L".rw2" || ext == L".pef") {
+            if (LoadRawPreview(factory, renderTarget, filePath, outBitmap, outWidth, outHeight, outContentBounds)) {
+                return true;
+            }
+        }
+
+        // Tier 4: Shell Image Factory (large preview)
+        if (LoadShellThumbnail(factory, renderTarget, filePath, 3840, outBitmap)) {
+            if (outBitmap && *outBitmap) {
+                D2D1_SIZE_F sz = (*outBitmap)->GetSize();
+                if (outWidth) *outWidth = (UINT)sz.width;
+                if (outHeight) *outHeight = (UINT)sz.height;
+                if (outContentBounds) *outContentBounds = D2D1::RectF(0.0f, 0.0f, sz.width, sz.height);
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     IWICBitmapFrameDecode* frame = nullptr;
     hr = decoder->GetFrame(0, &frame);
@@ -78,12 +180,36 @@ bool WicDecoder::LoadImageFromFile(
         }
     }
 
-    // Convert to 32bpp PBGRA
+    // Convert to 32bpp PBGRA. For very large images (RAW exports, panoramas,
+    // 100 MP photos) decoding at full resolution costs hundreds of MB of RAM
+    // and a long UI-thread stall for pixels the previewer can never show at
+    // native size. Cap the decode at ~8 MP (4K-class with zoom headroom) via
+    // WIC's on-the-fly scaler; reported dimensions stay original so zoom
+    // math and metadata are unaffected, and content bounds are mapped back.
+    constexpr float kMaxDecodePixels = 8.0f * 1024.0f * 1024.0f;
+    const UINT origWidth = width, origHeight = height;
+    float boundsScale = 1.0f;
+
+    IWICBitmapScaler* scaler = nullptr;
+    if ((float)width * (float)height > kMaxDecodePixels) {
+        const float s = sqrtf(kMaxDecodePixels / ((float)width * (float)height));
+        const UINT scaledW = (std::max)(1u, (UINT)(width * s + 0.5f));
+        const UINT scaledH = (std::max)(1u, (UINT)(height * s + 0.5f));
+        if (SUCCEEDED(factory->CreateBitmapScaler(&scaler)) &&
+            SUCCEEDED(scaler->Initialize(source, scaledW, scaledH, WICBitmapInterpolationModeFant))) {
+            width = scaledW;
+            height = scaledH;
+            boundsScale = (float)origWidth / (float)width;
+        } else {
+            SafeRelease(scaler); // fall back to full-res decode
+        }
+    }
+
     IWICFormatConverter* converter = nullptr;
     hr = factory->CreateFormatConverter(&converter);
     if (SUCCEEDED(hr)) {
         hr = converter->Initialize(
-            source,
+            scaler ? (IWICBitmapSource*)scaler : source,
             GUID_WICPixelFormat32bppPBGRA,
             WICBitmapDitherTypeNone,
             NULL,
@@ -202,12 +328,20 @@ bool WicDecoder::LoadImageFromFile(
     }
 
     if (SUCCEEDED(hr) && *outBitmap) {
-        if (outWidth) *outWidth = width;
-        if (outHeight) *outHeight = height;
-        if (outContentBounds) *outContentBounds = contentBounds;
+        if (outWidth) *outWidth = origWidth;
+        if (outHeight) *outHeight = origHeight;
+        if (outContentBounds) {
+            *outContentBounds = D2D1::RectF(
+                contentBounds.left * boundsScale,
+                contentBounds.top * boundsScale,
+                contentBounds.right * boundsScale,
+                contentBounds.bottom * boundsScale
+            );
+        }
     }
 
     SafeRelease(converter);
+    SafeRelease(scaler);
     SafeRelease(source);
     SafeRelease(frame);
     SafeRelease(decoder);
@@ -228,7 +362,9 @@ bool WicDecoder::CreateThumbnail(
     IWICBitmapDecoder* decoder = nullptr;
     HRESULT hr = factory->CreateDecoderFromFilename(
         filePath.c_str(), NULL, GENERIC_READ, WICDecodeMetadataCacheOnDemand, &decoder);
-    if (FAILED(hr) || !decoder) return false;
+    if (FAILED(hr) || !decoder) {
+        return LoadImageFromFile(factory, renderTarget, filePath, outBitmap, nullptr, nullptr, nullptr);
+    }
 
     IWICBitmapFrameDecode* frame = nullptr;
     hr = decoder->GetFrame(0, &frame);
@@ -319,7 +455,19 @@ bool WicDecoder::GetImageMetadata(
     IWICBitmapDecoder* decoder = nullptr;
     HRESULT hr = factory->CreateDecoderFromFilename(
         filePath.c_str(), NULL, GENERIC_READ, WICDecodeMetadataCacheOnDemand, &decoder);
-    if (FAILED(hr) || !decoder) return false;
+    if (FAILED(hr) || !decoder) {
+        std::wstring ext;
+        size_t dotPos = filePath.find_last_of(L'.');
+        if (dotPos != std::wstring::npos) {
+            ext = filePath.substr(dotPos);
+            for (auto& c : ext) c = towlower(c);
+        }
+        if (ext == L".heic" || ext == L".heif" || ext == L".avif") {
+            outMeta->formatName = (ext == L".avif") ? L"AVIF Image" : L"HEIF / HEIC Image";
+            return HeifDecoder::GetMetadata(filePath, outMeta);
+        }
+        return false;
+    }
 
     // Format Name
     GUID containerFormat = {};
@@ -552,7 +700,13 @@ bool WicDecoder::LoadShellThumbnail(
 
     SIZE sz = { (LONG)targetDimension, (LONG)targetDimension };
     HBITMAP hBmp = nullptr;
-    hr = pFactory->GetImage(sz, SIIGBF_THUMBNAILONLY, &hBmp);
+    hr = pFactory->GetImage(sz, SIIGBF_BIGGERSIZEOK | SIIGBF_SCALEUP, &hBmp);
+    if (FAILED(hr) || !hBmp) {
+        hr = pFactory->GetImage(sz, SIIGBF_RESIZETOFIT, &hBmp);
+    }
+    if (FAILED(hr) || !hBmp) {
+        hr = pFactory->GetImage(sz, SIIGBF_THUMBNAILONLY, &hBmp);
+    }
 
     pFactory->Release();
     pItem->Release();

@@ -4,6 +4,16 @@
 
 namespace WinPreview {
 
+enum class LogTransformProfile {
+    None = 0,
+    Rec709_Auto = 1,     // Universal Cinema Rec.709 Tone-Map
+    AppleLog = 2,        // Apple Log (iPhone 15/16 Pro ProRes)
+    SonySLog3 = 3,       // Sony S-Log3 / S-Gamut3.Cine
+    CanonCLog3 = 4,      // Canon C-Log2 / C-Log3
+    PanasonicVLog = 5,   // Panasonic V-Log
+    DjiDLogM = 6         // DJI D-Log M
+};
+
 typedef void libvlc_instance_t;
 typedef void libvlc_media_player_t;
 typedef void libvlc_media_t;
@@ -49,6 +59,14 @@ public:
 
     std::wstring FormatTime(libvlc_time_t ms) const;
 
+    // Log-to-Rec.709 Cinema Color Tone-Mapping
+    void SetLogTransform(LogTransformProfile profile);
+    LogTransformProfile GetLogTransform() const { return m_logProfile; }
+    void CycleLogTransform();
+    const wchar_t* GetLogProfileName(LogTransformProfile profile) const;
+    std::wstring GetLogTransformStatusText() const;
+    bool IsLogTransformActive() const { return m_logProfile != LogTransformProfile::None; }
+
 private:
     HMODULE m_hLibVlc = nullptr;
     libvlc_instance_t* m_vlc = nullptr;
@@ -59,7 +77,9 @@ private:
     int m_lastVolume = 80;
     mutable bool m_hasStarted = false;
     mutable float m_pendingSeek = -1.0f;
+    LogTransformProfile m_logProfile = LogTransformProfile::None;
 
+    void ApplyLogTransform();
     void CheckPendingSeek() const;
 
     // VLC function pointers
@@ -85,6 +105,10 @@ private:
     int (*fn_libvlc_audio_toggle_mute)(libvlc_media_player_t* p_mi) = nullptr;
     int (*fn_libvlc_audio_get_mute)(libvlc_media_player_t* p_mi) = nullptr;
     int (*fn_libvlc_video_get_size)(libvlc_media_player_t* p_mi, unsigned num, unsigned* px, unsigned* py) = nullptr;
+    void (*fn_libvlc_video_set_adjust_int)(libvlc_media_player_t* p_mi, unsigned option, int value) = nullptr;
+    void (*fn_libvlc_video_set_adjust_float)(libvlc_media_player_t* p_mi, unsigned option, float value) = nullptr;
+    int (*fn_libvlc_video_get_adjust_int)(libvlc_media_player_t* p_mi, unsigned option) = nullptr;
+    float (*fn_libvlc_video_get_adjust_float)(libvlc_media_player_t* p_mi, unsigned option) = nullptr;
 
     static LRESULT CALLBACK VideoWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 };

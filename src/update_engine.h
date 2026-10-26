@@ -3,6 +3,7 @@
 #include <string>
 #include <atomic>
 #include <functional>
+#include <mutex>
 #include <thread>
 #include "version.h"
 
@@ -47,15 +48,16 @@ public:
     void SimulateUpdateForTesting();
     bool IsSimulated() const { return m_isSimulated.load(); }
 
-    // State getters
+    // State getters (thread-safe)
     UpdateState GetState() const { return m_state.load(); }
     int GetDownloadProgress() const { return m_downloadProgress.load(); }
-    const UpdateInfo& GetUpdateInfo() const { return m_info; }
-    const std::wstring& GetDownloadedInstallerPath() const { return m_downloadedInstallerPath; }
+    // Returns a copy so callers never race with worker-thread mutations.
+    UpdateInfo GetUpdateInfo() const;
+    std::wstring GetDownloadedInstallerPath() const;
 
     void Dismiss() { m_state.store(UpdateState::Idle); }
     void ResetToAvailable() {
-        if (m_info.isAvailable && m_state.load() == UpdateState::Idle) {
+        if (GetUpdateInfo().isAvailable && m_state.load() == UpdateState::Idle) {
             m_state.store(UpdateState::UpdateAvailable);
         }
     }
@@ -64,12 +66,19 @@ private:
     std::atomic<UpdateState> m_state{ UpdateState::Idle };
     std::atomic<int> m_downloadProgress{ 0 };
     std::atomic<bool> m_isSimulated{ false };
+
+    // Guards the mutable data touched by worker threads alongside the UI thread.
+    mutable std::mutex m_infoMutex;
     UpdateInfo m_info;
     std::wstring m_downloadedInstallerPath;
 
     std::thread m_workerThread;
-    void FetchUpdateInfoSync();
-    void DownloadInstallerSync();
+    std::atomic<bool> m_cancelJob{ false };
+    void FetchUpdateInfoSync(UpdateInfo& result);
+
+    // Atomically publishes a freshly computed result and its terminal state.
+    void CommitInfo(UpdateState state, const UpdateInfo& info);
+    void SetDownloadedInstallerPath(const std::wstring& path);
 };
 
 } // namespace WinPreview

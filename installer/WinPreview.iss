@@ -1,10 +1,10 @@
-; =====================================================================
+﻿; =====================================================================
 ; WinPreview - Professional Windows Installer Script
 ; Apple Preview for Windows (Native, Ultra-Fast & Lightweight)
 ; =====================================================================
 
 #define MyAppName "WinPreview"
-#define MyAppVersion "1.0.7"
+#define MyAppVersion "1.0.9"
 #define MyAppPublisher "Code-Xceed"
 #define MyAppURL "https://github.com/Code-Xceed/WinPreview"
 #define MyAppExeName "WinPreview.exe"
@@ -168,3 +168,6 @@ begin
   Sleep(150);
   Result := '';
 end;
+
+
+

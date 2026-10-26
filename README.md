@@ -28,7 +28,7 @@
 - **Pure Native Win32 + Direct2D / D3D11**: No .NET runtimes, no Electron, no WebView2 overhead. Zero GC pauses, instant cold launch, and silky 120Hz/144Hz high-refresh rendering.
 - **Chromium PDFium Engine**: Vector-crisp multi-page PDF rendering with thumbnail navigation sidebar.
 - **Hardware-Accelerated Media & Images**: Instant WIC image decoding (PNG, JPG, WEBP, GIF, HEIC, RAW) and LibVLC media streaming with floating acrylic playback HUD.
-- **DirectWrite Code & Text Studio**: Syntax-highlighted preview and in-place editing for 50+ languages with line numbers, find bar (`Ctrl+F`), and save (`Ctrl+S`).
+- **DirectWrite Code & Text Studio**: Syntax-tinted preview and in-place editing for 50+ languages (fast keyword / string / comment coloring, not a full parser) with line numbers, find bar (`Ctrl+F`), and save (`Ctrl+S`).
 - **Tabular Data Grid**: Auto-aligned column grids for CSV, TSV, TAB, and PSV pipe-delimited data.
 - **In-App Auto-Updater**: Built-in native Windows background update checking and one-click in-app downloader & installer (`Ctrl+U`).
 - **Deep Windows 11 Polish**: Per-Monitor V2 DPI awareness, Windows 11 dark mode, rounded acrylic aesthetics, and Emil Kowalski `:active` tactile micro-interactions.
@@ -56,9 +56,9 @@ Tested on Windows 11 Pro 64-bit (Intel Core i7 / 16GB RAM / NVMe SSD):
 | Category | Supported Extensions | Engine / Capabilities |
 | :--- | :--- | :--- |
 | **Documents & PDFs** | `.pdf` | Chromium PDFium vector rendering, multi-page sidebar, smooth zoom |
-| **Images** | `.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, `.tiff`, `.bmp`, `.heic`, `.ico`, `.cr2`, `.nef`, `.arw`, `.dng`, `.raw` | Hardware-accelerated Windows Imaging Component (WIC), lossless 90° rotation, fit to window |
-| **Audio & Video** | `.mp4`, `.mkv`, `.mov`, `.m4v`, `.webm`, `.avi`, `.wmv`, `.flv`, `.ts`, `.mp3`, `.wav`, `.flac`, `.m4a` | LibVLC multi-threaded decoding, acrylic transport pill, timeline scrub, volume slider |
-| **Programming Languages** | `.cpp`, `.c`, `.h`, `.hpp`, `.cs`, `.py`, `.rs`, `.go`, `.js`, `.ts`, `.tsx`, `.jsx`, `.swift`, `.kt`, `.zig`, `.lua`, `.php`, `.rb`, `.java`, `.r`, `.sql`, `.dart` | DirectWrite hardware text rendering, multi-color syntax tokenization, line numbers, caret navigation, editing & save (`Ctrl+S`) |
+| **Images & RAW Photos** | `.heic`, `.heif`, `.avif`, `.webp`, `.png`, `.jpg`, `.jpeg`, `.tiff`, `.bmp`, `.ico`, `.cr2`, `.cr3`, `.nef`, `.arw`, `.dng`, `.raw`, `.orf`, `.rw2`, `.pef`, `.raf` | Multi-tier LibHEIF + WIC hardware decoding, embedded Camera RAW preview extraction, Display P3 wide-gamut, EXIF inspector metadata |
+| **Cinema Video & Audio** | `.mov`, `.mp4`, `.mxf`, `.prores`, `.braw`, `.r3d`, `.mkv`, `.m4v`, `.webm`, `.avi`, `.wmv`, `.flv`, `.ts`, `.mts`, `.m2ts`, `.mp3`, `.wav`, `.flac`, `.m4a`, `.aac` | LibVLC multi-threaded decoding, real-time Log-to-Rec.709 Cinema Tone-Mapping (Apple Log, Sony S-Log3, Canon C-Log3, DJI D-Log M, V-Log), acrylic transport HUD |
+| **Programming Languages** | `.cpp`, `.c`, `.h`, `.hpp`, `.cs`, `.py`, `.rs`, `.go`, `.js`, `.ts`, `.tsx`, `.jsx`, `.swift`, `.kt`, `.zig`, `.lua`, `.php`, `.rb`, `.java`, `.r`, `.sql`, `.dart` | DirectWrite hardware text rendering, fast keyword/string/comment tinting, line numbers, caret navigation, editing & save (`Ctrl+S`) |
 | **Scripts & Shells** | `.ps1`, `.bat`, `.cmd`, `.sh`, `.bash`, `.zsh` | Shell syntax highlighting, line wrapping toggle |
 | **Web & Stylesheets** | `.html`, `.htm`, `.css`, `.scss`, `.less` | Semantic tag & property coloring |
 | **Data & Configs** | `.json`, `.yaml`, `.yml`, `.toml`, `.xml`, `.ini`, `.env`, `.conf`, `.properties` | Key-value formatting, bracket matching |
