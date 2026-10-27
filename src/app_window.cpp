@@ -3801,7 +3801,7 @@ void AppWindow::RenderEmptyState(const D2D1_RECT_F& rect) {
     float startY = rect.top + (height - totalStackH) / 2.0f - 14.0f;
     if (startY < rect.top + 24.0f) startY = rect.top + 24.0f;
 
-    // 1. Sleek Frosted Logo Squircle with Precision Corner Crosshairs
+    // 1. Sleek Frosted Logo Squircle
     float iconTileSize = 64.0f;
     D2D1_RECT_F iconBox = D2D1::RectF(cx - iconTileSize / 2.0f, startY, cx + iconTileSize / 2.0f, startY + iconTileSize);
     D2D1_ROUNDED_RECT rIconBox = D2D1::RoundedRect(iconBox, 16.0f, 16.0f);
@@ -3810,7 +3810,6 @@ void AppWindow::RenderEmptyState(const D2D1_RECT_F& rect) {
     if (m_d2d.BrushBorderHighlight) {
         rt->DrawLine(D2D1::Point2F(iconBox.left + 14.0f, iconBox.top), D2D1::Point2F(iconBox.right - 14.0f, iconBox.top), m_d2d.BrushBorderHighlight, 1.0f);
     }
-    m_d2d.DrawCornerCrosshairs(iconBox, 4.0f, 1.0f, rt);
 
     if (m_appLogoBitmap) {
         float logoSize = 46.0f;
@@ -3834,7 +3833,7 @@ void AppWindow::RenderEmptyState(const D2D1_RECT_F& rect) {
     ID2D1Brush* subBrush = m_d2d.BrushGinkgo ? (ID2D1Brush*)m_d2d.BrushGinkgo : (ID2D1Brush*)m_d2d.BrushTextMuted;
     rt->DrawText(subtitle, (UINT32)wcslen(subtitle), m_d2d.FontUtilityMonoCenter ? m_d2d.FontUtilityMonoCenter : m_d2d.FontCaptionCenter, subRect, subBrush);
 
-    // 4. Central Framed Tech Container (Editorial Tech Card with Corner Crosshairs)
+    // 4. Central Framed Tech Container (Editorial Tech Card)
     float cardY = subY + 18.0f + 16.0f;
     float cardW = (std::min)(500.0f, width - 40.0f);
     float cardH = 114.0f;
@@ -3847,7 +3846,6 @@ void AppWindow::RenderEmptyState(const D2D1_RECT_F& rect) {
     if (m_d2d.BrushBorderHighlight) {
         rt->DrawLine(D2D1::Point2F(centerCard.left + 16.0f, centerCard.top), D2D1::Point2F(centerCard.right - 16.0f, centerCard.top), m_d2d.BrushBorderHighlight, 1.0f);
     }
-    m_d2d.DrawCornerCrosshairs(centerCard, 5.0f, 1.0f, rt);
 
     // Card Header Row: Section Label + Crimson Status Dot
     float metaY = cardY + 12.0f;
@@ -5546,7 +5544,6 @@ void AppWindow::RenderInspector(const D2D1_RECT_F& canvasRect) {
     if (m_d2d.BrushBorderHighlight) {
         rt->DrawLine(D2D1::Point2F(cardX + 14.0f, cardY), D2D1::Point2F(cardX + cardW - 14.0f, cardY), m_d2d.BrushBorderHighlight, 1.0f);
     }
-    m_d2d.DrawCornerCrosshairs(m_inspectorRect, 4.0f, 1.0f, rt);
 
     // Header bar (Zen Editorial Tech title with Amber accent dot)
     D2D1_RECT_F headerR = D2D1::RectF(cardX + 16.0f, cardY + 12.0f, cardX + cardW - 44.0f, cardY + 36.0f);
@@ -6113,7 +6110,7 @@ void AppWindow::RenderSettingsModal(const D2D1_RECT_F& canvasRect) {
     );
     rt->FillRoundedRectangle(shadowR, m_d2d.BrushShadowSoft);
 
-    // 3. Card Surface & Border (Obsidian & Zen Editorial Tech with Corner Crosshairs)
+    // 3. Card Surface & Border (Obsidian Minimalist Surface)
     D2D1_ROUNDED_RECT cardR = D2D1::RoundedRect(m_settingsModalRect, 16.0f, 16.0f);
     m_d2d.BrushCard->SetOpacity(0.98f);
     rt->FillRoundedRectangle(cardR, m_d2d.BrushCard);
@@ -6122,7 +6119,6 @@ void AppWindow::RenderSettingsModal(const D2D1_RECT_F& canvasRect) {
     if (m_d2d.BrushBorderHighlight) {
         rt->DrawLine(D2D1::Point2F(m_settingsModalRect.left + 16.0f, m_settingsModalRect.top), D2D1::Point2F(m_settingsModalRect.right - 16.0f, m_settingsModalRect.top), m_d2d.BrushBorderHighlight, 1.0f);
     }
-    m_d2d.DrawCornerCrosshairs(m_settingsModalRect, 5.0f, 1.0f, rt);
 
     // 4. Header Bar
     float curY = m_settingsModalRect.top + 18.0f;
@@ -6221,7 +6217,6 @@ void AppWindow::RenderSettingsModal(const D2D1_RECT_F& canvasRect) {
         D2D1_RECT_F groupCard = D2D1::RectF(contentX, curY, contentX + contentW, curY + cardH);
         rt->FillRoundedRectangle(D2D1::RoundedRect(groupCard, 8.0f, 8.0f), m_d2d.BrushSidebar);
         rt->DrawRoundedRectangle(D2D1::RoundedRect(groupCard, 8.0f, 8.0f), m_d2d.BrushBorderSubtle, 1.0f);
-        m_d2d.DrawCornerCrosshairs(groupCard, 4.0f, 1.0f, rt);
 
         float rH = 62.0f;
         drawSettingRow(contentX, curY + 0 * rH, contentW, rH,
@@ -6250,7 +6245,6 @@ void AppWindow::RenderSettingsModal(const D2D1_RECT_F& canvasRect) {
         } else {
             rt->DrawRoundedRectangle(D2D1::RoundedRect(keyCardRect, 8.0f, 8.0f), m_d2d.BrushBorderSubtle, 1.0f);
         }
-        m_d2d.DrawCornerCrosshairs(keyCardRect, 3.5f, 1.0f, rt);
 
         HotkeyConfig curCfg = ExplorerHook::GetHotkeyConfig();
 
@@ -6352,7 +6346,6 @@ void AppWindow::RenderSettingsModal(const D2D1_RECT_F& canvasRect) {
         D2D1_RECT_F navCard = D2D1::RectF(contentX, navCardY, contentX + contentW, navCardY + navCardH);
         rt->FillRoundedRectangle(D2D1::RoundedRect(navCard, 8.0f, 8.0f), m_d2d.BrushSidebar);
         rt->DrawRoundedRectangle(D2D1::RoundedRect(navCard, 8.0f, 8.0f), m_d2d.BrushBorderSubtle, 1.0f);
-        m_d2d.DrawCornerCrosshairs(navCard, 4.0f, 1.0f, rt);
 
         float rH = 62.0f;
         drawSettingRow(contentX, navCardY + 0 * rH, contentW, rH,
@@ -6369,7 +6362,6 @@ void AppWindow::RenderSettingsModal(const D2D1_RECT_F& canvasRect) {
         D2D1_RECT_F groupCard = D2D1::RectF(contentX, curY, contentX + contentW, curY + cardH);
         rt->FillRoundedRectangle(D2D1::RoundedRect(groupCard, 8.0f, 8.0f), m_d2d.BrushSidebar);
         rt->DrawRoundedRectangle(D2D1::RoundedRect(groupCard, 8.0f, 8.0f), m_d2d.BrushBorderSubtle, 1.0f);
-        m_d2d.DrawCornerCrosshairs(groupCard, 4.0f, 1.0f, rt);
 
         float rH = 58.0f;
         drawSettingRow(contentX, curY + 0 * rH, contentW, rH,
@@ -6398,7 +6390,6 @@ void AppWindow::RenderSettingsModal(const D2D1_RECT_F& canvasRect) {
         D2D1_RECT_F groupCard = D2D1::RectF(contentX, curY, contentX + contentW, curY + cardH);
         rt->FillRoundedRectangle(D2D1::RoundedRect(groupCard, 8.0f, 8.0f), m_d2d.BrushSidebar);
         rt->DrawRoundedRectangle(D2D1::RoundedRect(groupCard, 8.0f, 8.0f), m_d2d.BrushBorderSubtle, 1.0f);
-        m_d2d.DrawCornerCrosshairs(groupCard, 4.0f, 1.0f, rt);
 
         // App Branding Header
         float brandY = curY + 18.0f;

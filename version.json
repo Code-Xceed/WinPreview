@@ -1,6 +1,6 @@
 {
-  "version": "1.2.2",
+  "version": "1.2.3",
   "release_date": "2026-10-27",
   "download_url": "https://github.com/Code-Xceed/WinPreview/releases/latest/download/WinPreview-Setup-x64.exe",
-  "changelog": "WinPreview v1.2.2 - Ultra-Smooth Audio Experience & Vinyl Transition: Restored buttery-smooth 60 FPS vinyl turntable animation and album sleeve closing transition with continuous frame lerping, fixed timer park state machine during audio playback transitions, persistent frame delivery, and zero idle CPU usage."
+  "changelog": "WinPreview v1.2.3 - Clean Minimalist Surface Polish: Complete elimination of all decorative corner crosshair symbols (+ / X marks) across all cards, modals, empty state surfaces, settings panels, and inspector windows for a clean, distraction-free modern interface."
 }

@@ -15,7 +15,7 @@ D2DEngine::D2DEngine()
       BrushCropOverlay(nullptr), BrushAudioWavePlayed(nullptr), BrushAudioWaveUnplayed(nullptr),
       BrushAudioWavePlayhead(nullptr), BrushAudioSubtitle(nullptr),
       BrushGreen(nullptr), BrushAmber(nullptr), BrushRed(nullptr),
-      BrushCrosshair(nullptr), BrushBorderHighlight(nullptr), BrushTextDim(nullptr),
+      BrushBorderHighlight(nullptr), BrushTextDim(nullptr),
       BrushChipBg(nullptr), BrushChipBorder(nullptr), BrushCrimson(nullptr), BrushGinkgo(nullptr),
       FontDisplay(nullptr), FontDisplayCenter(nullptr),
       FontHero(nullptr), FontHeroCenter(nullptr), FontTitle(nullptr), FontTitleCenter(nullptr),
@@ -410,7 +410,6 @@ void D2DEngine::CreateBrushes() {
     m_renderTarget->CreateSolidColorBrush(D2D1::ColorF(1.000f, 0.271f, 0.227f, 1.00f), &BrushRed);               // Red (#FF453A)
 
     // Zen Editorial Tech Accents
-    m_renderTarget->CreateSolidColorBrush(D2D1::ColorF(1.000f, 1.000f, 1.000f, 0.22f), &BrushCrosshair);       // Corner crosshair marks (+)
     m_renderTarget->CreateSolidColorBrush(D2D1::ColorF(1.000f, 1.000f, 1.000f, 0.08f), &BrushBorderHighlight);  // Top-edge light bevel
     m_renderTarget->CreateSolidColorBrush(D2D1::ColorF(0.078f, 0.078f, 0.094f, 1.0f), &BrushChipBg);           // Tech pill surface (#141418)
     m_renderTarget->CreateSolidColorBrush(D2D1::ColorF(0.149f, 0.149f, 0.184f, 1.0f), &BrushChipBorder);       // Tech pill border (#26262F)
@@ -447,7 +446,6 @@ void D2DEngine::DiscardDeviceResources() {
     SafeRelease(BrushGreen);
     SafeRelease(BrushAmber);
     SafeRelease(BrushRed);
-    SafeRelease(BrushCrosshair);
     SafeRelease(BrushBorderHighlight);
     SafeRelease(BrushChipBg);
     SafeRelease(BrushChipBorder);
@@ -1420,32 +1418,6 @@ void D2DEngine::DrawIconHamburger(float cx, float cy, float size, ID2D1Brush* br
 // =========================================================================
 // ZEN EDITORIAL TECH DRAWING HELPERS
 // =========================================================================
-
-void D2DEngine::DrawCornerCrosshairs(const D2D1_RECT_F& rect, float armLength, float strokeWidth, ID2D1RenderTarget* rt) {
-    ID2D1RenderTarget* target = rt ? rt : m_renderTarget;
-    if (!target) return;
-    ID2D1Brush* brush = BrushCrosshair ? BrushCrosshair : BrushBorder;
-    if (!brush) return;
-
-    float s = m_dpiScale;
-    float len = armLength * s;
-    float sw = strokeWidth * s;
-
-    // 4 Corner registration crosshairs (+)
-    D2D1_POINT_2F corners[4] = {
-        D2D1::Point2F(rect.left, rect.top),       // Top-Left
-        D2D1::Point2F(rect.right, rect.top),      // Top-Right
-        D2D1::Point2F(rect.left, rect.bottom),    // Bottom-Left
-        D2D1::Point2F(rect.right, rect.bottom)    // Bottom-Right
-    };
-
-    for (int i = 0; i < 4; ++i) {
-        float cx = corners[i].x;
-        float cy = corners[i].y;
-        target->DrawLine(D2D1::Point2F(cx - len, cy), D2D1::Point2F(cx + len, cy), brush, sw);
-        target->DrawLine(D2D1::Point2F(cx, cy - len), D2D1::Point2F(cx, cy + len), brush, sw);
-    }
-}
 
 void D2DEngine::DrawTechChip(const D2D1_RECT_F& rect, const wchar_t* label, const wchar_t* countOrTag, bool active, ID2D1RenderTarget* rt) {
     ID2D1RenderTarget* target = rt ? rt : m_renderTarget;

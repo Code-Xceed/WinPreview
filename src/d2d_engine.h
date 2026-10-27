@@ -74,7 +74,6 @@ public:
     ID2D1SolidColorBrush* BrushGreen = nullptr;
     ID2D1SolidColorBrush* BrushAmber = nullptr;
     ID2D1SolidColorBrush* BrushRed = nullptr;
-    ID2D1SolidColorBrush* BrushCrosshair = nullptr;
     ID2D1SolidColorBrush* BrushBorderHighlight = nullptr;
     ID2D1SolidColorBrush* BrushTextDim = nullptr;
     ID2D1SolidColorBrush* BrushChipBg = nullptr;
@@ -147,7 +146,6 @@ public:
     void DrawMicroTooltip(float centerX, float topY, const WCHAR* text, float alpha, bool above = false);
 
     // Zen Editorial Tech Drawing Helpers
-    void DrawCornerCrosshairs(const D2D1_RECT_F& rect, float armLength = 5.0f, float strokeWidth = 1.0f, ID2D1RenderTarget* rt = nullptr);
     void DrawTechChip(const D2D1_RECT_F& rect, const wchar_t* label, const wchar_t* countOrTag = nullptr, bool active = false, ID2D1RenderTarget* rt = nullptr);
 
     float GetDpiScale() const { return m_dpiScale; }
