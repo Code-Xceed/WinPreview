@@ -1,6 +1,6 @@
 {
-  "version": "1.2.4",
+  "version": "1.2.5",
   "release_date": "2026-10-27",
   "download_url": "https://github.com/Code-Xceed/WinPreview/releases/latest/download/WinPreview-Setup-x64.exe",
-  "changelog": "WinPreview v1.2.4 - Unified Lucide Vector Icon System: Pixel-perfect, consistent vector stroke iconography (Save, Undo, Redo, Cut, Copy, Paste, Zoom, Wrap, Info, External Link, Settings, Fullscreen, Folder, Media HUD) on a strict 24x24 normalized grid with uniform optical weights across the entire application."
+  "changelog": "WinPreview v1.2.5 - Universal File & Folder Navigation: Seamless Next/Previous arrow navigation across all file types (images, videos, audio, PDFs, text/code, spreadsheets, markdown, fonts, archives, folders, and binaries) with unified Explorer natural sorting, auto-saving text edits, and responsive media HUD skip controls."
 }

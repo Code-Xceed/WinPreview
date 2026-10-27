@@ -425,6 +425,9 @@ bool AppWindow::OpenFile(const std::wstring& filePath) {
     m_dragVelX = 0.0f;
     m_dragVelY = 0.0f;
     m_isMomentumActive = false;
+    m_rotation = 0;
+    m_flipH = false;
+    m_flipV = false;
     m_imageMeta = {};
 
     m_currentFilePath = filePath;
@@ -1100,19 +1103,28 @@ void AppWindow::OpenCurrentFileInDefaultApp() {
 // reuse the (logically sorted) list until the preview moves to another folder.
 // ---------------------------------------------------------------------------
 static std::wstring  s_peerCacheDir;
-static bool          s_peerCacheDirsOnly = false;
 static std::vector<std::wstring> s_peerCache;
 
 static bool BuildFolderPeerList(
     const std::wstring& folder,
-    bool dirsOnly,
     std::vector<std::wstring>& outPeers)
 {
-    std::wstring searchPattern = folder + L"\\*.*";
+    std::wstring searchPattern = folder;
+    if (searchPattern.empty() || (searchPattern.back() != L'\\' && searchPattern.back() != L'/')) {
+        searchPattern += L'\\';
+    }
+    std::wstring prefix = searchPattern;
+    searchPattern += L"*.*";
 
     WIN32_FIND_DATAW ffd;
     HANDLE hFind = FindFirstFileW(searchPattern.c_str(), &ffd);
     if (hFind == INVALID_HANDLE_VALUE) return false;
+
+    struct PeerEntry {
+        std::wstring path;
+        bool isDirectory;
+    };
+    std::vector<PeerEntry> entries;
 
     do {
         // Skip hidden and system files
@@ -1122,31 +1134,36 @@ static bool BuildFolderPeerList(
         if (filename == L"." || filename == L"..") continue;
         if (!filename.empty() && filename[0] == L'.') continue;
 
-        if (dirsOnly) {
-            // Navigating between peer directories
-            if (ffd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-                outPeers.push_back(folder + L"\\" + filename);
-            }
-        } else {
-            // For all files, navigate peer non-directory files
-            if (!(ffd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
-                outPeers.push_back(folder + L"\\" + filename);
-            }
-        }
+        bool isDir = (ffd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+        entries.push_back({ prefix + filename, isDir });
     } while (FindNextFileW(hFind, &ffd) != 0);
 
     FindClose(hFind);
 
-    // Windows Explorer natural numeric/logical sort
-    std::sort(outPeers.begin(), outPeers.end(), [](const std::wstring& a, const std::wstring& b) {
-        return StrCmpLogicalW(a.c_str(), b.c_str()) < 0;
+    // Windows Explorer natural numeric/logical sort: directories first, then files
+    std::sort(entries.begin(), entries.end(), [](const PeerEntry& a, const PeerEntry& b) {
+        if (a.isDirectory != b.isDirectory) {
+            return a.isDirectory; // Directories come before files
+        }
+        return StrCmpLogicalW(a.path.c_str(), b.path.c_str()) < 0;
     });
+
+    outPeers.clear();
+    outPeers.reserve(entries.size());
+    for (const auto& e : entries) {
+        outPeers.push_back(e.path);
+    }
     return true;
 }
 
 void AppWindow::NavigateFolder(int delta) {
     if (!m_arrowKeyNavEnabled && delta != 0) return;
     if (m_currentFilePath.empty() || m_docType == DocumentType::None) return;
+
+    // Auto-save modified text or spreadsheet files before navigating away so edits are never lost
+    if ((m_docType == DocumentType::Text || m_docType == DocumentType::Spreadsheet) && m_text.IsModified()) {
+        m_text.SaveFile();
+    }
 
     std::wstring current = m_currentFilePath;
     while (!current.empty() && (current.back() == L'\\' || current.back() == L'/')) {
@@ -1156,15 +1173,13 @@ void AppWindow::NavigateFolder(int delta) {
     if (lastSlash == std::wstring::npos) return;
 
     std::wstring folder = current.substr(0, lastSlash);
-    bool dirsOnly = (m_docType == DocumentType::Folder);
 
-    // Rebuild the peer list only when the directory or navigation mode changed.
+    // Rebuild the peer list only when the directory changed or cache is empty
     bool sameDir = (s_peerCacheDir.size() == folder.size() && _wcsicmp(s_peerCacheDir.c_str(), folder.c_str()) == 0);
-    if (!sameDir || s_peerCacheDirsOnly != dirsOnly || s_peerCache.empty()) {
+    if (!sameDir || s_peerCache.empty()) {
         s_peerCache.clear();
-        if (!BuildFolderPeerList(folder, dirsOnly, s_peerCache)) return;
+        if (!BuildFolderPeerList(folder, s_peerCache)) return;
         s_peerCacheDir = folder;
-        s_peerCacheDirsOnly = dirsOnly;
     }
 
     const std::vector<std::wstring>& peerFiles = s_peerCache;
@@ -1179,7 +1194,25 @@ void AppWindow::NavigateFolder(int delta) {
         }
     }
 
-    if (curIdx >= 0) {
+    // Fallback if not found in cache (e.g. file was newly added or path casing differed)
+    if (curIdx < 0) {
+        s_peerCache.clear();
+        if (BuildFolderPeerList(folder, s_peerCache)) {
+            s_peerCacheDir = folder;
+            for (size_t i = 0; i < s_peerCache.size(); i++) {
+                if (_wcsicmp(s_peerCache[i].c_str(), m_currentFilePath.c_str()) == 0 ||
+                    _wcsicmp(s_peerCache[i].c_str(), current.c_str()) == 0) {
+                    curIdx = (int)i;
+                    break;
+                }
+            }
+        }
+        if (curIdx < 0 && !s_peerCache.empty()) {
+            curIdx = 0;
+        }
+    }
+
+    if (curIdx >= 0 && !peerFiles.empty()) {
         int nextIdx = curIdx + delta;
         if (m_loopFolderNav) {
             nextIdx = (nextIdx + (int)peerFiles.size()) % (int)peerFiles.size();
@@ -1667,8 +1700,8 @@ const WCHAR* AppWindow::GetButtonTooltip(int buttonId) const {
         case BTN_TOOLBAR_FS: return m_isFullscreen ? L"Exit Fullscreen (Esc)" : L"Fullscreen (F)";
         case BTN_LOOP:
         case BTN_HUD_LOOP: return m_isLooping ? L"Loop: On" : L"Loop: Off";
-        case BTN_SKIP_BACK: return L"Rewind 5s (←)";
-        case BTN_SKIP_FORWARD: return L"Forward 5s (→)";
+        case BTN_SKIP_BACK: return L"Previous File (←)";
+        case BTN_SKIP_FORWARD: return L"Next File (→)";
         case BTN_SEARCH: return L"Search Document (Ctrl+F)";
         case BTN_CROP:
             if (m_hasDetectedContentBounds) {
@@ -6995,8 +7028,8 @@ void AppWindow::RenderHud() {
         D2D1_RECT_F tipBtnRect = {};
         switch (m_hudHoveredButtonId) {
             case BTN_PLAY_PAUSE: hudTipText = m_media.IsPlaying() ? L"Pause (Space)" : L"Play (Space)"; tipBtnRect = m_hudBtnPlayPause; break;
-            case BTN_SKIP_BACK: hudTipText = L"Rewind 5s (←)"; tipBtnRect = m_hudBtnSkipBack; break;
-            case BTN_SKIP_FORWARD: hudTipText = L"Forward 5s (→)"; tipBtnRect = m_hudBtnSkipForward; break;
+            case BTN_SKIP_BACK: hudTipText = L"Previous File (←)"; tipBtnRect = m_hudBtnSkipBack; break;
+            case BTN_SKIP_FORWARD: hudTipText = L"Next File (→)"; tipBtnRect = m_hudBtnSkipForward; break;
             case BTN_HUD_LOOP: hudTipText = m_isLooping ? L"Loop: On" : L"Loop: Off"; tipBtnRect = m_hudBtnLoop; break;
             case BTN_LOG_LUT: hudTipText = m_media.IsLogTransformActive() ? L"Rec.709 Active (C)" : L"Convert Log to Rec.709 (C)"; tipBtnRect = m_hudBtnLog; break;
             case BTN_MUTE: hudTipText = m_media.IsMuted() ? L"Unmute (M)" : L"Mute (M)"; tipBtnRect = m_hudBtnMute; break;
@@ -7138,10 +7171,10 @@ LRESULT AppWindow::HandleHudMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 InvalidateRect(m_hwnd, NULL, FALSE);
             } else if (hit(m_hudBtnSkipBack)) {
                 m_hudPressedButtonId = BTN_SKIP_BACK;
-                m_media.SeekSeconds(-5);
+                NavigateFolder(-1);
             } else if (hit(m_hudBtnSkipForward)) {
                 m_hudPressedButtonId = BTN_SKIP_FORWARD;
-                m_media.SeekSeconds(5);
+                NavigateFolder(1);
             } else if (hit(m_hudBtnLoop)) {
                 m_hudPressedButtonId = BTN_HUD_LOOP;
                 m_isLooping = !m_isLooping;
@@ -9965,15 +9998,31 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                     }
                     return 0;
                 } else if (wParam == VK_LEFT) {
-                    if (isCtrl) m_text.MoveWord(-1, isShift);
-                    else m_text.MoveCursor(0, -1, isShift);
-                    InvalidateRect(m_hwnd, NULL, FALSE);
-                    return 0;
+                    if (isCtrl) {
+                        m_text.MoveWord(-1, isShift);
+                        InvalidateRect(m_hwnd, NULL, FALSE);
+                        return 0;
+                    } else if (isShift) {
+                        m_text.MoveCursor(0, -1, true);
+                        InvalidateRect(m_hwnd, NULL, FALSE);
+                        return 0;
+                    } else {
+                        NavigateFolder(-1);
+                        return 0;
+                    }
                 } else if (wParam == VK_RIGHT) {
-                    if (isCtrl) m_text.MoveWord(1, isShift);
-                    else m_text.MoveCursor(0, 1, isShift);
-                    InvalidateRect(m_hwnd, NULL, FALSE);
-                    return 0;
+                    if (isCtrl) {
+                        m_text.MoveWord(1, isShift);
+                        InvalidateRect(m_hwnd, NULL, FALSE);
+                        return 0;
+                    } else if (isShift) {
+                        m_text.MoveCursor(0, 1, true);
+                        InvalidateRect(m_hwnd, NULL, FALSE);
+                        return 0;
+                    } else {
+                        NavigateFolder(1);
+                        return 0;
+                    }
                 } else if (wParam == VK_UP) {
                     m_text.MoveCursor(-1, 0, isShift);
                     InvalidateRect(m_hwnd, NULL, FALSE);
@@ -10095,31 +10144,23 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                     }
                     break;
                 case VK_LEFT:
-                    if (isAlt) {
-                        NavigateFolder(-1);
-                        return 0;
-                    }
-                    if (m_docType == DocumentType::Media) {
+                    if (isCtrl && m_docType == DocumentType::Media) {
                         m_media.SeekSeconds(-5);
-                    } else if (m_docType == DocumentType::Text || m_docType == DocumentType::Spreadsheet) {
-                        m_text.Scroll(0.0f, -48.0f);
-                    } else {
-                        PrevPage();
-                    }
-                    break;
-                case VK_RIGHT:
-                    if (isAlt) {
-                        NavigateFolder(1);
+                        InvalidateRect(m_hwnd, NULL, FALSE);
+                        if (m_hudHwnd) InvalidateRect(m_hudHwnd, NULL, FALSE);
                         return 0;
                     }
-                    if (m_docType == DocumentType::Media) {
+                    NavigateFolder(-1);
+                    return 0;
+                case VK_RIGHT:
+                    if (isCtrl && m_docType == DocumentType::Media) {
                         m_media.SeekSeconds(5);
-                    } else if (m_docType == DocumentType::Text || m_docType == DocumentType::Spreadsheet) {
-                        m_text.Scroll(0.0f, 48.0f);
-                    } else {
-                        NextPage();
+                        InvalidateRect(m_hwnd, NULL, FALSE);
+                        if (m_hudHwnd) InvalidateRect(m_hudHwnd, NULL, FALSE);
+                        return 0;
                     }
-                    break;
+                    NavigateFolder(1);
+                    return 0;
                 case VK_PRIOR: // Page Up
                     if (m_docType == DocumentType::Text || m_docType == DocumentType::Spreadsheet) {
                         m_text.PageUp(600.0f);
