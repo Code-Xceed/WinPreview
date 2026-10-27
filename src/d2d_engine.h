@@ -141,6 +141,8 @@ public:
     void DrawIconFileDocument(float cx, float cy, float size, ID2D1Brush* brush, ID2D1RenderTarget* rt = nullptr);
     void DrawIconExternalLink(float cx, float cy, float size, ID2D1Brush* brush, ID2D1RenderTarget* rt = nullptr);
     void DrawIconHamburger(float cx, float cy, float size, ID2D1Brush* brush, ID2D1RenderTarget* rt = nullptr);
+    void DrawIconFolder(float cx, float cy, float size, ID2D1Brush* brush, ID2D1RenderTarget* rt = nullptr);
+    void DrawIconSun(float cx, float cy, float size, ID2D1Brush* brush, ID2D1RenderTarget* rt = nullptr);
 
     // Micro-Tooltip Renderer (Smooth Alpha, Direct2D Anti-aliased)
     void DrawMicroTooltip(float centerX, float topY, const WCHAR* text, float alpha, bool above = false);

@@ -363,12 +363,11 @@ void FolderEngine::Render(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D1_RECT
         float iconX = marginX + 2.0f;
         float iconY = curY + 2.0f;
 
-        // Folder back plate
-        D2D1_ROUNDED_RECT backPlate = D2D1::RoundedRect(D2D1::RectF(iconX, iconY + 6.0f, iconX + iconSize, iconY + iconSize), 5.0f, 5.0f);
-        rt->FillRoundedRectangle(backPlate, d2d.BrushAccent);
-        // Folder tab
-        D2D1_ROUNDED_RECT folderTab = D2D1::RoundedRect(D2D1::RectF(iconX, iconY, iconX + iconSize * 0.45f, iconY + 12.0f), 3.0f, 3.0f);
-        rt->FillRoundedRectangle(folderTab, d2d.BrushAccent);
+        // Elevated Folder Icon Box
+        D2D1_ROUNDED_RECT iconBox = D2D1::RoundedRect(D2D1::RectF(iconX, iconY, iconX + iconSize, iconY + iconSize), 10.0f, 10.0f);
+        rt->FillRoundedRectangle(iconBox, d2d.BrushCard);
+        rt->DrawRoundedRectangle(iconBox, d2d.BrushBorder, 1.0f);
+        d2d.DrawIconFolder(iconX + iconSize * 0.5f, iconY + iconSize * 0.5f, 24.0f, d2d.BrushAccent, rt);
 
         // Title and path
         float textX = iconX + iconSize + 18.0f;
@@ -500,10 +499,9 @@ void FolderEngine::Render(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D1_RECT
         // Icon
         float glyphCenterY = curY + rowH / 2.0f;
         if (item.isDirectory) {
-            D2D1_ROUNDED_RECT bp = D2D1::RoundedRect(D2D1::RectF(colX + 6.0f, glyphCenterY - 6.0f, colX + 22.0f, glyphCenterY + 6.0f), 2.0f, 2.0f);
-            rt->FillRoundedRectangle(bp, d2d.BrushAccent);
+            d2d.DrawIconFolder(colX + 14.0f, glyphCenterY, 15.0f, d2d.BrushAccent, rt);
         } else {
-            d2d.DrawIconFileDocument(colX + 14.0f, glyphCenterY, 14.0f, d2d.BrushTextMuted);
+            d2d.DrawIconFileDocument(colX + 14.0f, glyphCenterY, 15.0f, d2d.BrushTextMuted, rt);
         }
 
         // Name

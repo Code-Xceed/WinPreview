@@ -1618,6 +1618,7 @@ void AppWindow::DrawIconButton(const D2D1_RECT_F& rect, IconType icon, int butto
         case ICON_PASTE:          m_d2d.DrawIconPaste(cx, cy, iconSize, brush); break;
         case ICON_OPEN_WITH:      m_d2d.DrawIconExternalLink(cx, cy, iconSize, brush); break;
         case ICON_MORE:           m_d2d.DrawIconHamburger(cx, cy, iconSize, brush); break;
+        case ICON_FOLDER:         m_d2d.DrawIconFolder(cx, cy, iconSize, brush); break;
     }
 }
 
@@ -2164,7 +2165,7 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
             }
             float minusCx = m_btnZoomOutRect.left + zoomBtnW / 2.0f;
             float minusCy = capY + capH / 2.0f + (m_pressedButtonId == BTN_ZOOM_OUT ? 0.5f : 0.0f);
-            m_d2d.DrawIconZoomOut(minusCx, minusCy, 13.0f, m_d2d.BrushText);
+            m_d2d.DrawIconZoomOut(minusCx, minusCy, 14.0f, m_d2d.BrushText);
 
             float div1X = curX + zoomBtnW;
             rt->DrawLine(D2D1::Point2F(div1X, capY + 4.0f), D2D1::Point2F(div1X, capY + capH - 4.0f), m_d2d.BrushBorder, 1.0f);
@@ -2193,7 +2194,7 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
             }
             float plusCx = m_btnZoomInRect.left + zoomBtnW / 2.0f;
             float plusCy = capY + capH / 2.0f + (m_pressedButtonId == BTN_ZOOM_IN ? 0.5f : 0.0f);
-            m_d2d.DrawIconZoomIn(plusCx, plusCy, 13.0f, m_d2d.BrushText);
+            m_d2d.DrawIconZoomIn(plusCx, plusCy, 14.0f, m_d2d.BrushText);
 
             curX += totalCapW;
             drawDivider(curX + 8.0f);
@@ -2319,7 +2320,7 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
                 }
                 float prevCx = m_btnPrevPageRect.left + navBtnW / 2.0f;
                 float prevCy = navY + navH / 2.0f + (m_pressedButtonId == BTN_PREV_PAGE ? 0.5f : 0.0f);
-                m_d2d.DrawIconChevronLeft(prevCx, prevCy, 13.0f, (m_currentPage > 0) ? (ID2D1Brush*)m_d2d.BrushText : (ID2D1Brush*)m_d2d.BrushTextMuted);
+                m_d2d.DrawIconChevronLeft(prevCx, prevCy, 14.0f, (m_currentPage > 0) ? (ID2D1Brush*)m_d2d.BrushText : (ID2D1Brush*)m_d2d.BrushTextMuted);
 
                 // Divider 1
                 float div1X = curX + navBtnW;
@@ -2345,7 +2346,7 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
                 }
                 float nextCx = m_btnNextPageRect.left + navBtnW / 2.0f;
                 float nextCy = navY + navH / 2.0f + (m_pressedButtonId == BTN_NEXT_PAGE ? 0.5f : 0.0f);
-                m_d2d.DrawIconChevronRight(nextCx, nextCy, 13.0f, (m_currentPage + 1 < m_totalPages) ? (ID2D1Brush*)m_d2d.BrushText : (ID2D1Brush*)m_d2d.BrushTextMuted);
+                m_d2d.DrawIconChevronRight(nextCx, nextCy, 14.0f, (m_currentPage + 1 < m_totalPages) ? (ID2D1Brush*)m_d2d.BrushText : (ID2D1Brush*)m_d2d.BrushTextMuted);
 
                 curX += totalNavW;
                 drawDivider(curX + 8.0f);
@@ -2372,7 +2373,7 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
                 }
                 float minusCx = m_btnZoomOutRect.left + zoomBtnW / 2.0f;
                 float minusCy = capY + capH / 2.0f + (m_pressedButtonId == BTN_ZOOM_OUT ? 0.5f : 0.0f);
-                m_d2d.DrawIconZoomOut(minusCx, minusCy, 13.0f, m_d2d.BrushText);
+                m_d2d.DrawIconZoomOut(minusCx, minusCy, 14.0f, m_d2d.BrushText);
 
                 float div1CapX = curX + zoomBtnW;
                 rt->DrawLine(D2D1::Point2F(div1CapX, capY + 4.0f), D2D1::Point2F(div1CapX, capY + capH - 4.0f), m_d2d.BrushBorder, 1.0f);
@@ -2401,7 +2402,7 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
                 }
                 float plusCx = m_btnZoomInRect.left + zoomBtnW / 2.0f;
                 float plusCy = capY + capH / 2.0f + (m_pressedButtonId == BTN_ZOOM_IN ? 0.5f : 0.0f);
-                m_d2d.DrawIconZoomIn(plusCx, plusCy, 13.0f, m_d2d.BrushText);
+                m_d2d.DrawIconZoomIn(plusCx, plusCy, 14.0f, m_d2d.BrushText);
 
                 curX += totalCapW;
                 drawDivider(curX + 8.0f);
@@ -2472,7 +2473,7 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
                 }
                 float prevCx = m_btnPrevPageRect.left + navBtnW / 2.0f;
                 float prevCy = navY + navH / 2.0f + (m_pressedButtonId == BTN_PREV_PAGE ? 0.5f : 0.0f);
-                m_d2d.DrawIconChevronLeft(prevCx, prevCy, 12.0f, (m_currentPage > 0) ? (ID2D1Brush*)m_d2d.BrushText : (ID2D1Brush*)m_d2d.BrushTextMuted);
+                m_d2d.DrawIconChevronLeft(prevCx, prevCy, 14.0f, (m_currentPage > 0) ? (ID2D1Brush*)m_d2d.BrushText : (ID2D1Brush*)m_d2d.BrushTextMuted);
 
                 float div1X = curX + navBtnW;
                 rt->DrawLine(D2D1::Point2F(div1X, navY + 4.0f), D2D1::Point2F(div1X, navY + navH - 4.0f), m_d2d.BrushBorder, 1.0f);
@@ -2496,7 +2497,7 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
                 }
                 float nextCx = m_btnNextPageRect.left + navBtnW / 2.0f;
                 float nextCy = navY + navH / 2.0f + (m_pressedButtonId == BTN_NEXT_PAGE ? 0.5f : 0.0f);
-                m_d2d.DrawIconChevronRight(nextCx, nextCy, 12.0f, (m_currentPage + 1 < m_totalPages) ? (ID2D1Brush*)m_d2d.BrushText : (ID2D1Brush*)m_d2d.BrushTextMuted);
+                m_d2d.DrawIconChevronRight(nextCx, nextCy, 14.0f, (m_currentPage + 1 < m_totalPages) ? (ID2D1Brush*)m_d2d.BrushText : (ID2D1Brush*)m_d2d.BrushTextMuted);
 
                 curX += totalNavW;
                 drawDivider(curX + 5.5f);
@@ -2560,7 +2561,7 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
                 }
                 float minusCx = m_btnZoomOutRect.left + zoomBtnW / 2.0f;
                 float minusCy = capY + capH / 2.0f + (m_pressedButtonId == BTN_ZOOM_OUT ? 0.5f : 0.0f);
-                m_d2d.DrawIconZoomOut(minusCx, minusCy, 13.0f, m_d2d.BrushText);
+                m_d2d.DrawIconZoomOut(minusCx, minusCy, 14.0f, m_d2d.BrushText);
 
                 float div1X = curX + zoomBtnW;
                 rt->DrawLine(D2D1::Point2F(div1X, capY + 4.0f), D2D1::Point2F(div1X, capY + capH - 4.0f), m_d2d.BrushBorder, 1.0f);
@@ -2587,7 +2588,7 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
                 }
                 float plusCx = m_btnZoomInRect.left + zoomBtnW / 2.0f;
                 float plusCy = capY + capH / 2.0f + (m_pressedButtonId == BTN_ZOOM_IN ? 0.5f : 0.0f);
-                m_d2d.DrawIconZoomIn(plusCx, plusCy, 13.0f, m_d2d.BrushText);
+                m_d2d.DrawIconZoomIn(plusCx, plusCy, 14.0f, m_d2d.BrushText);
 
                 curX += totalCapW;
                 drawDivider(curX + 8.0f);
@@ -2734,7 +2735,7 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
             }
             float minusCx = m_btnZoomOutRect.left + zoomBtnW / 2.0f;
             float minusCy = capY + capH / 2.0f + (m_pressedButtonId == BTN_ZOOM_OUT ? 0.5f : 0.0f);
-            m_d2d.DrawIconZoomOut(minusCx, minusCy, 13.0f, m_d2d.BrushText);
+            m_d2d.DrawIconZoomOut(minusCx, minusCy, 14.0f, m_d2d.BrushText);
 
             float div1X = curX + zoomBtnW;
             rt->DrawLine(D2D1::Point2F(div1X, capY + 4.0f), D2D1::Point2F(div1X, capY + capH - 4.0f), m_d2d.BrushBorder, 1.0f);
@@ -2761,7 +2762,7 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
             }
             float plusCx = m_btnZoomInRect.left + zoomBtnW / 2.0f;
             float plusCy = capY + capH / 2.0f + (m_pressedButtonId == BTN_ZOOM_IN ? 0.5f : 0.0f);
-            m_d2d.DrawIconZoomIn(plusCx, plusCy, 13.0f, m_d2d.BrushText);
+            m_d2d.DrawIconZoomIn(plusCx, plusCy, 14.0f, m_d2d.BrushText);
 
             curX += totalCapW;
 
@@ -2907,7 +2908,7 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
             }
             float minusCx = m_btnZoomOutRect.left + zoomBtnW / 2.0f;
             float minusCy = capY + capH / 2.0f + (m_pressedButtonId == BTN_ZOOM_OUT ? 0.5f : 0.0f);
-            m_d2d.DrawIconZoomOut(minusCx, minusCy, 13.0f, m_d2d.BrushText);
+            m_d2d.DrawIconZoomOut(minusCx, minusCy, 14.0f, m_d2d.BrushText);
 
             float div1X = curX + zoomBtnW;
             rt->DrawLine(D2D1::Point2F(div1X, capY + 4.0f), D2D1::Point2F(div1X, capY + capH - 4.0f), m_d2d.BrushBorder, 1.0f);
@@ -2934,7 +2935,7 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
             }
             float plusCx = m_btnZoomInRect.left + zoomBtnW / 2.0f;
             float plusCy = capY + capH / 2.0f + (m_pressedButtonId == BTN_ZOOM_IN ? 0.5f : 0.0f);
-            m_d2d.DrawIconZoomIn(plusCx, plusCy, 13.0f, m_d2d.BrushText);
+            m_d2d.DrawIconZoomIn(plusCx, plusCy, 14.0f, m_d2d.BrushText);
 
             curX += totalCapW;
 
@@ -3050,7 +3051,7 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
             }
             float minusCx = m_btnZoomOutRect.left + zoomBtnW / 2.0f;
             float minusCy = capY + capH / 2.0f + (m_pressedButtonId == BTN_ZOOM_OUT ? 0.5f : 0.0f);
-            m_d2d.DrawIconZoomOut(minusCx, minusCy, 13.0f, m_d2d.BrushText);
+            m_d2d.DrawIconZoomOut(minusCx, minusCy, 14.0f, m_d2d.BrushText);
 
             float div1X = curX + zoomBtnW;
             rt->DrawLine(D2D1::Point2F(div1X, capY + 4.0f), D2D1::Point2F(div1X, capY + capH - 4.0f), m_d2d.BrushBorder, 1.0f);
@@ -3077,7 +3078,7 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
             }
             float plusCx = m_btnZoomInRect.left + zoomBtnW / 2.0f;
             float plusCy = capY + capH / 2.0f + (m_pressedButtonId == BTN_ZOOM_IN ? 0.5f : 0.0f);
-            m_d2d.DrawIconZoomIn(plusCx, plusCy, 13.0f, m_d2d.BrushText);
+            m_d2d.DrawIconZoomIn(plusCx, plusCy, 14.0f, m_d2d.BrushText);
 
             curX += totalCapW;
             drawDivider(curX + 8.0f);
@@ -3467,6 +3468,7 @@ void AppWindow::DrawMenuIcon(float cx, float cy, float size, IconType icon, ID2D
         case ICON_PASTE:          m_d2d.DrawIconPaste(cx, cy, size, brush); break;
         case ICON_OPEN_WITH:      m_d2d.DrawIconExternalLink(cx, cy, size, brush); break;
         case ICON_MORE:           m_d2d.DrawIconHamburger(cx, cy, size, brush); break;
+        case ICON_FOLDER:         m_d2d.DrawIconFolder(cx, cy, size, brush); break;
         default: break;
     }
 }

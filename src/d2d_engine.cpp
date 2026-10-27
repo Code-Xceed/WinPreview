@@ -479,93 +479,105 @@ HRESULT D2DEngine::EndDraw() {
 
 // =========================================================================
 // VECTOR ICON DRAWING IMPLEMENTATIONS (Resolution-Independent Direct2D)
+// Normalized 24x24 Lucide vector geometry with round stroke styling
 // =========================================================================
 
 void D2DEngine::DrawIconSidebar(float cx, float cy, float size, bool isOpen, ID2D1Brush* brush, ID2D1RenderTarget* rt) {
     ID2D1RenderTarget* target = rt ? rt : m_renderTarget;
     if (!target || !brush) return;
-    float w = 6.8f;
-    float h = 5.2f;
-    D2D1_ROUNDED_RECT rrect = D2D1::RoundedRect(D2D1::RectF(cx - w, cy - h, cx + w, cy + h), 2.0f, 2.0f);
-    target->DrawRoundedRectangle(rrect, brush, 1.5f, RoundStrokeStyle);
-    target->DrawLine(D2D1::Point2F(cx - w + 4.2f, cy - h), D2D1::Point2F(cx - w + 4.2f, cy + h), brush, 1.4f, RoundStrokeStyle);
+    float s = (size > 0.0f ? size : 16.0f) / 24.0f;
+    float strokeW = 1.6f * (size / 16.0f);
+
+    float w = 8.0f * s;
+    float h = 7.5f * s;
+    D2D1_ROUNDED_RECT rrect = D2D1::RoundedRect(D2D1::RectF(cx - w, cy - h, cx + w, cy + h), 2.2f * s, 2.2f * s);
+    target->DrawRoundedRectangle(rrect, brush, strokeW, RoundStrokeStyle);
+
+    // Sidebar divider
+    float divX = cx - w + 5.0f * s;
+    target->DrawLine(D2D1::Point2F(divX, cy - h), D2D1::Point2F(divX, cy + h), brush, strokeW, RoundStrokeStyle);
 
     if (isOpen) {
-        D2D1_ROUNDED_RECT pane = D2D1::RoundedRect(D2D1::RectF(cx - w + 0.8f, cy - h + 0.8f, cx - w + 3.8f, cy + h - 0.8f), 1.2f, 1.2f);
+        D2D1_ROUNDED_RECT pane = D2D1::RoundedRect(D2D1::RectF(cx - w + 1.2f * s, cy - h + 1.2f * s, divX - 1.2f * s, cy + h - 1.2f * s), 1.2f * s, 1.2f * s);
         target->FillRoundedRectangle(pane, BrushCardSelected ? (ID2D1Brush*)BrushCardSelected : brush);
-        target->DrawLine(D2D1::Point2F(cx - 0.5f, cy - 2.0f), D2D1::Point2F(cx + 4.5f, cy - 2.0f), brush, 1.2f, RoundStrokeStyle);
-        target->DrawLine(D2D1::Point2F(cx - 0.5f, cy + 2.0f), D2D1::Point2F(cx + 4.5f, cy + 2.0f), brush, 1.2f, RoundStrokeStyle);
+        target->DrawLine(D2D1::Point2F(divX + 2.5f * s, cy - 2.5f * s), D2D1::Point2F(cx + w - 2.5f * s, cy - 2.5f * s), brush, strokeW * 0.85f, RoundStrokeStyle);
+        target->DrawLine(D2D1::Point2F(divX + 2.5f * s, cy + 2.5f * s), D2D1::Point2F(cx + w - 2.5f * s, cy + 2.5f * s), brush, strokeW * 0.85f, RoundStrokeStyle);
     }
 }
 
 void D2DEngine::DrawIconChevronLeft(float cx, float cy, float size, ID2D1Brush* brush, ID2D1RenderTarget* rt) {
     ID2D1RenderTarget* target = rt ? rt : m_renderTarget;
     if (!target || !brush) return;
-    float s = 4.5f;
-    target->DrawLine(D2D1::Point2F(cx + 1.8f, cy - s), D2D1::Point2F(cx - 2.2f, cy), brush, 1.6f, RoundStrokeStyle);
-    target->DrawLine(D2D1::Point2F(cx - 2.2f, cy), D2D1::Point2F(cx + 1.8f, cy + s), brush, 1.6f, RoundStrokeStyle);
+    float s = (size > 0.0f ? size : 16.0f) / 24.0f;
+    float strokeW = 1.6f * (size / 16.0f);
+    target->DrawLine(D2D1::Point2F(cx + 2.8f * s, cy - 6.5f * s), D2D1::Point2F(cx - 3.2f * s, cy), brush, strokeW, RoundStrokeStyle);
+    target->DrawLine(D2D1::Point2F(cx - 3.2f * s, cy), D2D1::Point2F(cx + 2.8f * s, cy + 6.5f * s), brush, strokeW, RoundStrokeStyle);
 }
 
 void D2DEngine::DrawIconChevronRight(float cx, float cy, float size, ID2D1Brush* brush, ID2D1RenderTarget* rt) {
     ID2D1RenderTarget* target = rt ? rt : m_renderTarget;
     if (!target || !brush) return;
-    float s = 4.5f;
-    target->DrawLine(D2D1::Point2F(cx - 1.8f, cy - s), D2D1::Point2F(cx + 2.2f, cy), brush, 1.6f, RoundStrokeStyle);
-    target->DrawLine(D2D1::Point2F(cx + 2.2f, cy), D2D1::Point2F(cx - 1.8f, cy + s), brush, 1.6f, RoundStrokeStyle);
+    float s = (size > 0.0f ? size : 16.0f) / 24.0f;
+    float strokeW = 1.6f * (size / 16.0f);
+    target->DrawLine(D2D1::Point2F(cx - 2.8f * s, cy - 6.5f * s), D2D1::Point2F(cx + 3.2f * s, cy), brush, strokeW, RoundStrokeStyle);
+    target->DrawLine(D2D1::Point2F(cx + 3.2f * s, cy), D2D1::Point2F(cx - 2.8f * s, cy + 6.5f * s), brush, strokeW, RoundStrokeStyle);
 }
 
 void D2DEngine::DrawIconZoomIn(float cx, float cy, float size, ID2D1Brush* brush, ID2D1RenderTarget* rt) {
     ID2D1RenderTarget* target = rt ? rt : m_renderTarget;
     if (!target || !brush) return;
-    float s = 4.5f;
-    target->DrawLine(D2D1::Point2F(cx - s, cy), D2D1::Point2F(cx + s, cy), brush, 1.6f, RoundStrokeStyle);
-    target->DrawLine(D2D1::Point2F(cx, cy - s), D2D1::Point2F(cx, cy + s), brush, 1.6f, RoundStrokeStyle);
+    float s = (size > 0.0f ? size : 16.0f) / 24.0f;
+    float strokeW = 1.6f * (size / 16.0f);
+    float arm = 7.0f * s;
+    target->DrawLine(D2D1::Point2F(cx - arm, cy), D2D1::Point2F(cx + arm, cy), brush, strokeW, RoundStrokeStyle);
+    target->DrawLine(D2D1::Point2F(cx, cy - arm), D2D1::Point2F(cx, cy + arm), brush, strokeW, RoundStrokeStyle);
 }
 
 void D2DEngine::DrawIconZoomOut(float cx, float cy, float size, ID2D1Brush* brush, ID2D1RenderTarget* rt) {
     ID2D1RenderTarget* target = rt ? rt : m_renderTarget;
     if (!target || !brush) return;
-    float s = 4.5f;
-    target->DrawLine(D2D1::Point2F(cx - s, cy), D2D1::Point2F(cx + s, cy), brush, 1.6f, RoundStrokeStyle);
+    float s = (size > 0.0f ? size : 16.0f) / 24.0f;
+    float strokeW = 1.6f * (size / 16.0f);
+    float arm = 7.0f * s;
+    target->DrawLine(D2D1::Point2F(cx - arm, cy), D2D1::Point2F(cx + arm, cy), brush, strokeW, RoundStrokeStyle);
 }
 
 void D2DEngine::DrawIconFit(float cx, float cy, float size, ID2D1Brush* brush, ID2D1RenderTarget* rt) {
     ID2D1RenderTarget* target = rt ? rt : m_renderTarget;
     if (!target || !brush) return;
-    // Outer frame
-    float w = 6.8f;
-    float h = 5.2f;
-    D2D1_ROUNDED_RECT frame = D2D1::RoundedRect(D2D1::RectF(cx - w, cy - h, cx + w, cy + h), 2.0f, 2.0f);
-    target->DrawRoundedRectangle(frame, brush, 1.5f, RoundStrokeStyle);
+    float s = (size > 0.0f ? size : 16.0f) / 24.0f;
+    float strokeW = 1.6f * (size / 16.0f);
 
-    // Center divider guide
-    target->DrawLine(D2D1::Point2F(cx, cy - 3.2f), D2D1::Point2F(cx, cy + 3.2f), brush, 1.0f, RoundStrokeStyle);
+    float w = 8.0f * s;
+    float h = 6.5f * s;
+    D2D1_ROUNDED_RECT frame = D2D1::RoundedRect(D2D1::RectF(cx - w, cy - h, cx + w, cy + h), 2.0f * s, 2.0f * s);
+    target->DrawRoundedRectangle(frame, brush, strokeW * 0.9f, RoundStrokeStyle);
 
-    // Left fit arrow pointing left
-    target->DrawLine(D2D1::Point2F(cx - 1.0f, cy), D2D1::Point2F(cx - 4.5f, cy), brush, 1.4f, RoundStrokeStyle);
-    target->DrawLine(D2D1::Point2F(cx - 3.0f, cy - 1.8f), D2D1::Point2F(cx - 4.5f, cy), brush, 1.4f, RoundStrokeStyle);
-    target->DrawLine(D2D1::Point2F(cx - 3.0f, cy + 1.8f), D2D1::Point2F(cx - 4.5f, cy), brush, 1.4f, RoundStrokeStyle);
+    // Left arrow
+    target->DrawLine(D2D1::Point2F(cx - 0.8f * s, cy), D2D1::Point2F(cx - 5.5f * s, cy), brush, strokeW, RoundStrokeStyle);
+    target->DrawLine(D2D1::Point2F(cx - 3.2f * s, cy - 2.2f * s), D2D1::Point2F(cx - 5.5f * s, cy), brush, strokeW, RoundStrokeStyle);
+    target->DrawLine(D2D1::Point2F(cx - 3.2f * s, cy + 2.2f * s), D2D1::Point2F(cx - 5.5f * s, cy), brush, strokeW, RoundStrokeStyle);
 
-    // Right fit arrow pointing right
-    target->DrawLine(D2D1::Point2F(cx + 1.0f, cy), D2D1::Point2F(cx + 4.5f, cy), brush, 1.4f, RoundStrokeStyle);
-    target->DrawLine(D2D1::Point2F(cx + 3.0f, cy - 1.8f), D2D1::Point2F(cx + 4.5f, cy), brush, 1.4f, RoundStrokeStyle);
-    target->DrawLine(D2D1::Point2F(cx + 3.0f, cy + 1.8f), D2D1::Point2F(cx + 4.5f, cy), brush, 1.4f, RoundStrokeStyle);
+    // Right arrow
+    target->DrawLine(D2D1::Point2F(cx + 0.8f * s, cy), D2D1::Point2F(cx + 5.5f * s, cy), brush, strokeW, RoundStrokeStyle);
+    target->DrawLine(D2D1::Point2F(cx + 3.2f * s, cy - 2.2f * s), D2D1::Point2F(cx + 5.5f * s, cy), brush, strokeW, RoundStrokeStyle);
+    target->DrawLine(D2D1::Point2F(cx + 3.2f * s, cy + 2.2f * s), D2D1::Point2F(cx + 5.5f * s, cy), brush, strokeW, RoundStrokeStyle);
 }
 
 void D2DEngine::DrawIconRotateLeft(float cx, float cy, float size, ID2D1Brush* brush, ID2D1RenderTarget* rt) {
     ID2D1RenderTarget* target = rt ? rt : m_renderTarget;
     if (!target || !brush) return;
-    float r = 5.2f;
+    float s = (size > 0.0f ? size : 16.0f) / 24.0f;
+    float strokeW = 1.6f * (size / 16.0f);
+    float r = 6.5f * s;
+
     ID2D1PathGeometry* path = nullptr;
-    m_d2dFactory->CreatePathGeometry(&path);
-    if (path) {
+    if (m_d2dFactory && SUCCEEDED(m_d2dFactory->CreatePathGeometry(&path)) && path) {
         ID2D1GeometrySink* sink = nullptr;
-        path->Open(&sink);
-        if (sink) {
-            // Start at bottom-right (about 45 deg)
-            sink->BeginFigure(D2D1::Point2F(cx + 3.8f, cy + 3.8f), D2D1_FIGURE_BEGIN_HOLLOW);
+        if (SUCCEEDED(path->Open(&sink)) && sink) {
+            sink->BeginFigure(D2D1::Point2F(cx + 4.8f * s, cy + 4.8f * s), D2D1_FIGURE_BEGIN_HOLLOW);
             sink->AddArc(D2D1::ArcSegment(
-                D2D1::Point2F(cx - 2.6f, cy - 4.5f),
+                D2D1::Point2F(cx - 3.5f * s, cy - 5.5f * s),
                 D2D1::SizeF(r, r),
                 0.0f,
                 D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE,
@@ -574,31 +586,31 @@ void D2DEngine::DrawIconRotateLeft(float cx, float cy, float size, ID2D1Brush* b
             sink->EndFigure(D2D1_FIGURE_END_OPEN);
             sink->Close();
             sink->Release();
-            target->DrawGeometry(path, brush, 1.6f, RoundStrokeStyle);
+            target->DrawGeometry(path, brush, strokeW, RoundStrokeStyle);
         }
         path->Release();
     }
-    // Arrowhead at (cx - 2.6f, cy - 4.5f) pointing down-left
-    float ax = cx - 2.6f;
-    float ay = cy - 4.5f;
-    target->DrawLine(D2D1::Point2F(ax - 2.8f, ay + 0.5f), D2D1::Point2F(ax, ay), brush, 1.6f, RoundStrokeStyle);
-    target->DrawLine(D2D1::Point2F(ax + 0.5f, ay - 2.8f), D2D1::Point2F(ax, ay), brush, 1.6f, RoundStrokeStyle);
+    // Arrowhead at (cx - 3.5f * s, cy - 5.5f * s) pointing down-left
+    float ax = cx - 3.5f * s;
+    float ay = cy - 5.5f * s;
+    target->DrawLine(D2D1::Point2F(ax - 3.2f * s, ay + 0.6f * s), D2D1::Point2F(ax, ay), brush, strokeW, RoundStrokeStyle);
+    target->DrawLine(D2D1::Point2F(ax + 0.6f * s, ay - 3.2f * s), D2D1::Point2F(ax, ay), brush, strokeW, RoundStrokeStyle);
 }
 
 void D2DEngine::DrawIconRotateRight(float cx, float cy, float size, ID2D1Brush* brush, ID2D1RenderTarget* rt) {
     ID2D1RenderTarget* target = rt ? rt : m_renderTarget;
     if (!target || !brush) return;
-    float r = 5.2f;
+    float s = (size > 0.0f ? size : 16.0f) / 24.0f;
+    float strokeW = 1.6f * (size / 16.0f);
+    float r = 6.5f * s;
+
     ID2D1PathGeometry* path = nullptr;
-    m_d2dFactory->CreatePathGeometry(&path);
-    if (path) {
+    if (m_d2dFactory && SUCCEEDED(m_d2dFactory->CreatePathGeometry(&path)) && path) {
         ID2D1GeometrySink* sink = nullptr;
-        path->Open(&sink);
-        if (sink) {
-            // Start at bottom-left
-            sink->BeginFigure(D2D1::Point2F(cx - 3.8f, cy + 3.8f), D2D1_FIGURE_BEGIN_HOLLOW);
+        if (SUCCEEDED(path->Open(&sink)) && sink) {
+            sink->BeginFigure(D2D1::Point2F(cx - 4.8f * s, cy + 4.8f * s), D2D1_FIGURE_BEGIN_HOLLOW);
             sink->AddArc(D2D1::ArcSegment(
-                D2D1::Point2F(cx + 2.6f, cy - 4.5f),
+                D2D1::Point2F(cx + 3.5f * s, cy - 5.5f * s),
                 D2D1::SizeF(r, r),
                 0.0f,
                 D2D1_SWEEP_DIRECTION_CLOCKWISE,
@@ -607,35 +619,36 @@ void D2DEngine::DrawIconRotateRight(float cx, float cy, float size, ID2D1Brush* 
             sink->EndFigure(D2D1_FIGURE_END_OPEN);
             sink->Close();
             sink->Release();
-            target->DrawGeometry(path, brush, 1.6f, RoundStrokeStyle);
+            target->DrawGeometry(path, brush, strokeW, RoundStrokeStyle);
         }
         path->Release();
     }
-    // Arrowhead at (cx + 2.6f, cy - 4.5f) pointing down-right
-    float ax = cx + 2.6f;
-    float ay = cy - 4.5f;
-    target->DrawLine(D2D1::Point2F(ax + 2.8f, ay + 0.5f), D2D1::Point2F(ax, ay), brush, 1.6f, RoundStrokeStyle);
-    target->DrawLine(D2D1::Point2F(ax - 0.5f, ay - 2.8f), D2D1::Point2F(ax, ay), brush, 1.6f, RoundStrokeStyle);
+    // Arrowhead at (cx + 3.5f * s, cy - 5.5f * s) pointing down-right
+    float ax = cx + 3.5f * s;
+    float ay = cy - 5.5f * s;
+    target->DrawLine(D2D1::Point2F(ax + 3.2f * s, ay + 0.6f * s), D2D1::Point2F(ax, ay), brush, strokeW, RoundStrokeStyle);
+    target->DrawLine(D2D1::Point2F(ax - 0.6f * s, ay - 3.2f * s), D2D1::Point2F(ax, ay), brush, strokeW, RoundStrokeStyle);
 }
 
 void D2DEngine::DrawIconPlay(float cx, float cy, float size, ID2D1Brush* brush, ID2D1RenderTarget* rt) {
     ID2D1RenderTarget* target = rt ? rt : m_renderTarget;
     if (!target || !brush) return;
+    float s = (size > 0.0f ? size : 16.0f) / 24.0f;
+    float strokeW = 1.6f * (size / 16.0f);
+
     ID2D1PathGeometry* path = nullptr;
-    m_d2dFactory->CreatePathGeometry(&path);
-    if (path) {
+    if (m_d2dFactory && SUCCEEDED(m_d2dFactory->CreatePathGeometry(&path)) && path) {
         ID2D1GeometrySink* sink = nullptr;
-        path->Open(&sink);
-        if (sink) {
-            float ox = cx + 0.8f; // Optical center shift
-            sink->BeginFigure(D2D1::Point2F(ox - 3.8f, cy - 5.5f), D2D1_FIGURE_BEGIN_FILLED);
-            sink->AddLine(D2D1::Point2F(ox + 5.2f, cy));
-            sink->AddLine(D2D1::Point2F(ox - 3.8f, cy + 5.5f));
+        if (SUCCEEDED(path->Open(&sink)) && sink) {
+            float ox = cx + 1.0f * s; // Optical center correction
+            sink->BeginFigure(D2D1::Point2F(ox - 5.5f * s, cy - 7.5f * s), D2D1_FIGURE_BEGIN_FILLED);
+            sink->AddLine(D2D1::Point2F(ox + 6.5f * s, cy));
+            sink->AddLine(D2D1::Point2F(ox - 5.5f * s, cy + 7.5f * s));
             sink->EndFigure(D2D1_FIGURE_END_CLOSED);
             sink->Close();
             sink->Release();
             target->FillGeometry(path, brush);
-            target->DrawGeometry(path, brush, 1.4f, RoundStrokeStyle); // Round vertex caps
+            target->DrawGeometry(path, brush, strokeW * 0.8f, RoundStrokeStyle);
         }
         path->Release();
     }
@@ -644,10 +657,12 @@ void D2DEngine::DrawIconPlay(float cx, float cy, float size, ID2D1Brush* brush, 
 void D2DEngine::DrawIconPause(float cx, float cy, float size, ID2D1Brush* brush, ID2D1RenderTarget* rt) {
     ID2D1RenderTarget* target = rt ? rt : m_renderTarget;
     if (!target || !brush) return;
-    float h = 5.5f;
-    float gap = 2.8f;
-    D2D1_ROUNDED_RECT bar1 = D2D1::RoundedRect(D2D1::RectF(cx - gap - 2.0f, cy - h, cx - gap + 0.5f, cy + h), 1.2f, 1.2f);
-    D2D1_ROUNDED_RECT bar2 = D2D1::RoundedRect(D2D1::RectF(cx + gap - 0.5f, cy - h, cx + gap + 2.0f, cy + h), 1.2f, 1.2f);
+    float s = (size > 0.0f ? size : 16.0f) / 24.0f;
+    float h = 7.0f * s;
+    float gap = 3.5f * s;
+    float barW = 3.2f * s;
+    D2D1_ROUNDED_RECT bar1 = D2D1::RoundedRect(D2D1::RectF(cx - gap - barW * 0.5f, cy - h, cx - gap + barW * 0.5f, cy + h), 1.5f * s, 1.5f * s);
+    D2D1_ROUNDED_RECT bar2 = D2D1::RoundedRect(D2D1::RectF(cx + gap - barW * 0.5f, cy - h, cx + gap + barW * 0.5f, cy + h), 1.5f * s, 1.5f * s);
     target->FillRoundedRectangle(bar1, brush);
     target->FillRoundedRectangle(bar2, brush);
 }
@@ -655,46 +670,51 @@ void D2DEngine::DrawIconPause(float cx, float cy, float size, ID2D1Brush* brush,
 void D2DEngine::DrawIconVolume(float cx, float cy, float size, bool isMuted, ID2D1Brush* brush, ID2D1RenderTarget* rt) {
     ID2D1RenderTarget* target = rt ? rt : m_renderTarget;
     if (!target || !brush) return;
+    float s = (size > 0.0f ? size : 16.0f) / 24.0f;
+    float strokeW = 1.6f * (size / 16.0f);
+
+    // Speaker body
     ID2D1PathGeometry* path = nullptr;
-    m_d2dFactory->CreatePathGeometry(&path);
-    if (path) {
+    if (m_d2dFactory && SUCCEEDED(m_d2dFactory->CreatePathGeometry(&path)) && path) {
         ID2D1GeometrySink* sink = nullptr;
-        path->Open(&sink);
-        if (sink) {
-            sink->BeginFigure(D2D1::Point2F(cx - 5.5f, cy - 2.5f), D2D1_FIGURE_BEGIN_FILLED);
-            sink->AddLine(D2D1::Point2F(cx - 2.8f, cy - 2.5f));
-            sink->AddLine(D2D1::Point2F(cx + 0.8f, cy - 5.5f));
-            sink->AddLine(D2D1::Point2F(cx + 0.8f, cy + 5.5f));
-            sink->AddLine(D2D1::Point2F(cx - 2.8f, cy + 2.5f));
-            sink->AddLine(D2D1::Point2F(cx - 5.5f, cy + 2.5f));
+        if (SUCCEEDED(path->Open(&sink)) && sink) {
+            sink->BeginFigure(D2D1::Point2F(cx - 7.5f * s, cy - 3.2f * s), D2D1_FIGURE_BEGIN_FILLED);
+            sink->AddLine(D2D1::Point2F(cx - 4.2f * s, cy - 3.2f * s));
+            sink->AddLine(D2D1::Point2F(cx + 0.5f * s, cy - 7.5f * s));
+            sink->AddLine(D2D1::Point2F(cx + 0.5f * s, cy + 7.5f * s));
+            sink->AddLine(D2D1::Point2F(cx - 4.2f * s, cy + 3.2f * s));
+            sink->AddLine(D2D1::Point2F(cx - 7.5f * s, cy + 3.2f * s));
             sink->EndFigure(D2D1_FIGURE_END_CLOSED);
             sink->Close();
             sink->Release();
             target->FillGeometry(path, brush);
+            target->DrawGeometry(path, brush, strokeW * 0.5f, RoundStrokeStyle);
         }
         path->Release();
     }
+
     if (isMuted) {
-        float x1 = cx + 3.2f, x2 = cx + 7.2f;
-        target->DrawLine(D2D1::Point2F(x1, cy - 2.5f), D2D1::Point2F(x2, cy + 2.5f), brush, 1.6f, RoundStrokeStyle);
-        target->DrawLine(D2D1::Point2F(x2, cy - 2.5f), D2D1::Point2F(x1, cy + 2.5f), brush, 1.6f, RoundStrokeStyle);
+        float x1 = cx + 3.5f * s, x2 = cx + 8.5f * s;
+        target->DrawLine(D2D1::Point2F(x1, cy - 3.2f * s), D2D1::Point2F(x2, cy + 3.2f * s), brush, strokeW, RoundStrokeStyle);
+        target->DrawLine(D2D1::Point2F(x2, cy - 3.2f * s), D2D1::Point2F(x1, cy + 3.2f * s), brush, strokeW, RoundStrokeStyle);
     } else {
         ID2D1PathGeometry* wave = nullptr;
-        m_d2dFactory->CreatePathGeometry(&wave);
-        if (wave) {
+        if (m_d2dFactory && SUCCEEDED(m_d2dFactory->CreatePathGeometry(&wave)) && wave) {
             ID2D1GeometrySink* sink = nullptr;
-            wave->Open(&sink);
-            if (sink) {
-                sink->BeginFigure(D2D1::Point2F(cx + 3.0f, cy - 3.2f), D2D1_FIGURE_BEGIN_HOLLOW);
-                sink->AddArc(D2D1::ArcSegment(D2D1::Point2F(cx + 3.0f, cy + 3.2f), D2D1::SizeF(3.6f, 3.6f), 0.0f, D2D1_SWEEP_DIRECTION_CLOCKWISE, D2D1_ARC_SIZE_SMALL));
+            if (SUCCEEDED(wave->Open(&sink)) && sink) {
+                // Inner arc
+                sink->BeginFigure(D2D1::Point2F(cx + 3.2f * s, cy - 3.8f * s), D2D1_FIGURE_BEGIN_HOLLOW);
+                sink->AddArc(D2D1::ArcSegment(D2D1::Point2F(cx + 3.2f * s, cy + 3.8f * s), D2D1::SizeF(4.2f * s, 4.2f * s), 0.0f, D2D1_SWEEP_DIRECTION_CLOCKWISE, D2D1_ARC_SIZE_SMALL));
                 sink->EndFigure(D2D1_FIGURE_END_OPEN);
 
-                sink->BeginFigure(D2D1::Point2F(cx + 5.2f, cy - 5.0f), D2D1_FIGURE_BEGIN_HOLLOW);
-                sink->AddArc(D2D1::ArcSegment(D2D1::Point2F(cx + 5.2f, cy + 5.0f), D2D1::SizeF(6.0f, 6.0f), 0.0f, D2D1_SWEEP_DIRECTION_CLOCKWISE, D2D1_ARC_SIZE_SMALL));
+                // Outer arc
+                sink->BeginFigure(D2D1::Point2F(cx + 6.0f * s, cy - 6.5f * s), D2D1_FIGURE_BEGIN_HOLLOW);
+                sink->AddArc(D2D1::ArcSegment(D2D1::Point2F(cx + 6.0f * s, cy + 6.5f * s), D2D1::SizeF(7.5f * s, 7.5f * s), 0.0f, D2D1_SWEEP_DIRECTION_CLOCKWISE, D2D1_ARC_SIZE_SMALL));
                 sink->EndFigure(D2D1_FIGURE_END_OPEN);
+
                 sink->Close();
                 sink->Release();
-                target->DrawGeometry(wave, brush, 1.5f, RoundStrokeStyle);
+                target->DrawGeometry(wave, brush, strokeW, RoundStrokeStyle);
             }
             wave->Release();
         }
@@ -704,186 +724,260 @@ void D2DEngine::DrawIconVolume(float cx, float cy, float size, bool isMuted, ID2
 void D2DEngine::DrawIconFullscreen(float cx, float cy, float size, bool isFullscreen, ID2D1Brush* brush, ID2D1RenderTarget* rt) {
     ID2D1RenderTarget* target = rt ? rt : m_renderTarget;
     if (!target || !brush) return;
+    float s = (size > 0.0f ? size : 16.0f) / 24.0f;
+    float strokeW = 1.6f * (size / 16.0f);
 
     if (!isFullscreen) {
-        // Outward expansion corner brackets (Enter Fullscreen)
-        float r = 5.5f;
-        float arm = 3.2f;
+        // Outward expansion corner brackets [ ]
+        float r = 7.5f * s;
+        float arm = 4.5f * s;
         // Top-left
-        target->DrawLine(D2D1::Point2F(cx - r, cy - r + arm), D2D1::Point2F(cx - r, cy - r), brush, 1.6f, RoundStrokeStyle);
-        target->DrawLine(D2D1::Point2F(cx - r, cy - r), D2D1::Point2F(cx - r + arm, cy - r), brush, 1.6f, RoundStrokeStyle);
+        target->DrawLine(D2D1::Point2F(cx - r, cy - r + arm), D2D1::Point2F(cx - r, cy - r), brush, strokeW, RoundStrokeStyle);
+        target->DrawLine(D2D1::Point2F(cx - r, cy - r), D2D1::Point2F(cx - r + arm, cy - r), brush, strokeW, RoundStrokeStyle);
         // Top-right
-        target->DrawLine(D2D1::Point2F(cx + r - arm, cy - r), D2D1::Point2F(cx + r, cy - r), brush, 1.6f, RoundStrokeStyle);
-        target->DrawLine(D2D1::Point2F(cx + r, cy - r), D2D1::Point2F(cx + r, cy - r + arm), brush, 1.6f, RoundStrokeStyle);
+        target->DrawLine(D2D1::Point2F(cx + r - arm, cy - r), D2D1::Point2F(cx + r, cy - r), brush, strokeW, RoundStrokeStyle);
+        target->DrawLine(D2D1::Point2F(cx + r, cy - r), D2D1::Point2F(cx + r, cy - r + arm), brush, strokeW, RoundStrokeStyle);
         // Bottom-left
-        target->DrawLine(D2D1::Point2F(cx - r, cy + r - arm), D2D1::Point2F(cx - r, cy + r), brush, 1.6f, RoundStrokeStyle);
-        target->DrawLine(D2D1::Point2F(cx - r, cy + r), D2D1::Point2F(cx - r + arm, cy + r), brush, 1.6f, RoundStrokeStyle);
+        target->DrawLine(D2D1::Point2F(cx - r, cy + r - arm), D2D1::Point2F(cx - r, cy + r), brush, strokeW, RoundStrokeStyle);
+        target->DrawLine(D2D1::Point2F(cx - r, cy + r), D2D1::Point2F(cx - r + arm, cy + r), brush, strokeW, RoundStrokeStyle);
         // Bottom-right
-        target->DrawLine(D2D1::Point2F(cx + r - arm, cy + r), D2D1::Point2F(cx + r, cy + r), brush, 1.6f, RoundStrokeStyle);
-        target->DrawLine(D2D1::Point2F(cx + r, cy + r), D2D1::Point2F(cx + r, cy + r - arm), brush, 1.6f, RoundStrokeStyle);
+        target->DrawLine(D2D1::Point2F(cx + r - arm, cy + r), D2D1::Point2F(cx + r, cy + r), brush, strokeW, RoundStrokeStyle);
+        target->DrawLine(D2D1::Point2F(cx + r, cy + r), D2D1::Point2F(cx + r, cy + r - arm), brush, strokeW, RoundStrokeStyle);
     } else {
-        // Inward collapse corner brackets (Exit Fullscreen)
-        float inR = 1.6f;
-        float outR = 5.5f;
+        // Inward collapse corner brackets
+        float inR = 2.2f * s;
+        float outR = 7.5f * s;
         // Top-left
-        target->DrawLine(D2D1::Point2F(cx - inR, cy - outR), D2D1::Point2F(cx - inR, cy - inR), brush, 1.6f, RoundStrokeStyle);
-        target->DrawLine(D2D1::Point2F(cx - inR, cy - inR), D2D1::Point2F(cx - outR, cy - inR), brush, 1.6f, RoundStrokeStyle);
+        target->DrawLine(D2D1::Point2F(cx - inR, cy - outR), D2D1::Point2F(cx - inR, cy - inR), brush, strokeW, RoundStrokeStyle);
+        target->DrawLine(D2D1::Point2F(cx - inR, cy - inR), D2D1::Point2F(cx - outR, cy - inR), brush, strokeW, RoundStrokeStyle);
         // Top-right
-        target->DrawLine(D2D1::Point2F(cx + inR, cy - outR), D2D1::Point2F(cx + inR, cy - inR), brush, 1.6f, RoundStrokeStyle);
-        target->DrawLine(D2D1::Point2F(cx + inR, cy - inR), D2D1::Point2F(cx + outR, cy - inR), brush, 1.6f, RoundStrokeStyle);
+        target->DrawLine(D2D1::Point2F(cx + inR, cy - outR), D2D1::Point2F(cx + inR, cy - inR), brush, strokeW, RoundStrokeStyle);
+        target->DrawLine(D2D1::Point2F(cx + inR, cy - inR), D2D1::Point2F(cx + outR, cy - inR), brush, strokeW, RoundStrokeStyle);
         // Bottom-left
-        target->DrawLine(D2D1::Point2F(cx - inR, cy + outR), D2D1::Point2F(cx - inR, cy + inR), brush, 1.6f, RoundStrokeStyle);
-        target->DrawLine(D2D1::Point2F(cx - inR, cy + inR), D2D1::Point2F(cx - outR, cy + inR), brush, 1.6f, RoundStrokeStyle);
+        target->DrawLine(D2D1::Point2F(cx - inR, cy + outR), D2D1::Point2F(cx - inR, cy + inR), brush, strokeW, RoundStrokeStyle);
+        target->DrawLine(D2D1::Point2F(cx - inR, cy + inR), D2D1::Point2F(cx - outR, cy + inR), brush, strokeW, RoundStrokeStyle);
         // Bottom-right
-        target->DrawLine(D2D1::Point2F(cx + inR, cy + outR), D2D1::Point2F(cx + inR, cy + inR), brush, 1.6f, RoundStrokeStyle);
-        target->DrawLine(D2D1::Point2F(cx + inR, cy + inR), D2D1::Point2F(cx + outR, cy + inR), brush, 1.6f, RoundStrokeStyle);
+        target->DrawLine(D2D1::Point2F(cx + inR, cy + outR), D2D1::Point2F(cx + inR, cy + inR), brush, strokeW, RoundStrokeStyle);
+        target->DrawLine(D2D1::Point2F(cx + inR, cy + inR), D2D1::Point2F(cx + outR, cy + inR), brush, strokeW, RoundStrokeStyle);
     }
 }
 
 void D2DEngine::DrawIconSkipBack(float cx, float cy, float size, ID2D1Brush* brush, ID2D1RenderTarget* rt) {
     ID2D1RenderTarget* target = rt ? rt : m_renderTarget;
     if (!target || !brush) return;
-    float s = 4.2f;
-    // Left chevron
-    target->DrawLine(D2D1::Point2F(cx - 0.5f, cy - s), D2D1::Point2F(cx - 4.5f, cy), brush, 1.6f, RoundStrokeStyle);
-    target->DrawLine(D2D1::Point2F(cx - 4.5f, cy), D2D1::Point2F(cx - 0.5f, cy + s), brush, 1.6f, RoundStrokeStyle);
-    // Right chevron
-    target->DrawLine(D2D1::Point2F(cx + 4.5f, cy - s), D2D1::Point2F(cx + 0.5f, cy), brush, 1.6f, RoundStrokeStyle);
-    target->DrawLine(D2D1::Point2F(cx + 0.5f, cy), D2D1::Point2F(cx + 4.5f, cy + s), brush, 1.6f, RoundStrokeStyle);
+    float s = (size > 0.0f ? size : 16.0f) / 24.0f;
+    float strokeW = 1.6f * (size / 16.0f);
+
+    // Left stop line
+    target->DrawLine(D2D1::Point2F(cx - 7.0f * s, cy - 6.5f * s), D2D1::Point2F(cx - 7.0f * s, cy + 6.5f * s), brush, strokeW, RoundStrokeStyle);
+
+    // Triangle pointing left
+    ID2D1PathGeometry* path = nullptr;
+    if (m_d2dFactory && SUCCEEDED(m_d2dFactory->CreatePathGeometry(&path)) && path) {
+        ID2D1GeometrySink* sink = nullptr;
+        if (SUCCEEDED(path->Open(&sink)) && sink) {
+            sink->BeginFigure(D2D1::Point2F(cx + 6.5f * s, cy - 6.5f * s), D2D1_FIGURE_BEGIN_FILLED);
+            sink->AddLine(D2D1::Point2F(cx - 4.5f * s, cy));
+            sink->AddLine(D2D1::Point2F(cx + 6.5f * s, cy + 6.5f * s));
+            sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+            sink->Close();
+            sink->Release();
+            target->FillGeometry(path, brush);
+            target->DrawGeometry(path, brush, strokeW * 0.7f, RoundStrokeStyle);
+        }
+        path->Release();
+    }
 }
 
 void D2DEngine::DrawIconSkipForward(float cx, float cy, float size, ID2D1Brush* brush, ID2D1RenderTarget* rt) {
     ID2D1RenderTarget* target = rt ? rt : m_renderTarget;
     if (!target || !brush) return;
-    float s = 4.2f;
-    // Left chevron
-    target->DrawLine(D2D1::Point2F(cx - 4.5f, cy - s), D2D1::Point2F(cx - 0.5f, cy), brush, 1.6f, RoundStrokeStyle);
-    target->DrawLine(D2D1::Point2F(cx - 0.5f, cy), D2D1::Point2F(cx - 4.5f, cy + s), brush, 1.6f, RoundStrokeStyle);
-    // Right chevron
-    target->DrawLine(D2D1::Point2F(cx + 0.5f, cy - s), D2D1::Point2F(cx + 4.5f, cy), brush, 1.6f, RoundStrokeStyle);
-    target->DrawLine(D2D1::Point2F(cx + 4.5f, cy), D2D1::Point2F(cx + 0.5f, cy + s), brush, 1.6f, RoundStrokeStyle);
+    float s = (size > 0.0f ? size : 16.0f) / 24.0f;
+    float strokeW = 1.6f * (size / 16.0f);
+
+    // Right stop line
+    target->DrawLine(D2D1::Point2F(cx + 7.0f * s, cy - 6.5f * s), D2D1::Point2F(cx + 7.0f * s, cy + 6.5f * s), brush, strokeW, RoundStrokeStyle);
+
+    // Triangle pointing right
+    ID2D1PathGeometry* path = nullptr;
+    if (m_d2dFactory && SUCCEEDED(m_d2dFactory->CreatePathGeometry(&path)) && path) {
+        ID2D1GeometrySink* sink = nullptr;
+        if (SUCCEEDED(path->Open(&sink)) && sink) {
+            sink->BeginFigure(D2D1::Point2F(cx - 6.5f * s, cy - 6.5f * s), D2D1_FIGURE_BEGIN_FILLED);
+            sink->AddLine(D2D1::Point2F(cx + 4.5f * s, cy));
+            sink->AddLine(D2D1::Point2F(cx - 6.5f * s, cy + 6.5f * s));
+            sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+            sink->Close();
+            sink->Release();
+            target->FillGeometry(path, brush);
+            target->DrawGeometry(path, brush, strokeW * 0.7f, RoundStrokeStyle);
+        }
+        path->Release();
+    }
 }
 
 void D2DEngine::DrawIconLoop(float cx, float cy, float size, bool active, ID2D1Brush* brush, ID2D1RenderTarget* rt) {
     ID2D1RenderTarget* target = rt ? rt : m_renderTarget;
     if (!target || !brush) return;
-    float w = 5.5f;
-    float h = 3.2f;
-    float r = 2.4f;
+    float s = (size > 0.0f ? size : 16.0f) / 24.0f;
+    float strokeW = 1.6f * (size / 16.0f);
+    float w = 7.5f * s;
+    float h = 4.2f * s;
+    float r = 3.0f * s;
+
     ID2D1PathGeometry* path = nullptr;
-    m_d2dFactory->CreatePathGeometry(&path);
-    if (path) {
+    if (m_d2dFactory && SUCCEEDED(m_d2dFactory->CreatePathGeometry(&path)) && path) {
         ID2D1GeometrySink* sink = nullptr;
-        path->Open(&sink);
-        if (sink) {
+        if (SUCCEEDED(path->Open(&sink)) && sink) {
             // Top arrow arc (left side curves up, then goes right)
-            sink->BeginFigure(D2D1::Point2F(cx - w, cy + h - r), D2D1_FIGURE_BEGIN_HOLLOW);
+            sink->BeginFigure(D2D1::Point2F(cx - w, cy + 1.2f * s), D2D1_FIGURE_BEGIN_HOLLOW);
+            sink->AddLine(D2D1::Point2F(cx - w, cy - h + r));
             sink->AddArc(D2D1::ArcSegment(D2D1::Point2F(cx - w + r, cy - h), D2D1::SizeF(r, r), 0.0f, D2D1_SWEEP_DIRECTION_CLOCKWISE, D2D1_ARC_SIZE_SMALL));
             sink->AddLine(D2D1::Point2F(cx + w, cy - h));
             sink->EndFigure(D2D1_FIGURE_END_OPEN);
 
             // Bottom arrow arc (right side curves down, then goes left)
-            sink->BeginFigure(D2D1::Point2F(cx + w, cy - h + r), D2D1_FIGURE_BEGIN_HOLLOW);
+            sink->BeginFigure(D2D1::Point2F(cx + w, cy - 1.2f * s), D2D1_FIGURE_BEGIN_HOLLOW);
+            sink->AddLine(D2D1::Point2F(cx + w, cy + h - r));
             sink->AddArc(D2D1::ArcSegment(D2D1::Point2F(cx + w - r, cy + h), D2D1::SizeF(r, r), 0.0f, D2D1_SWEEP_DIRECTION_CLOCKWISE, D2D1_ARC_SIZE_SMALL));
             sink->AddLine(D2D1::Point2F(cx - w, cy + h));
             sink->EndFigure(D2D1_FIGURE_END_OPEN);
 
             sink->Close();
             sink->Release();
-            target->DrawGeometry(path, brush, active ? 1.8f : 1.5f, RoundStrokeStyle);
+            target->DrawGeometry(path, brush, active ? strokeW * 1.15f : strokeW, RoundStrokeStyle);
         }
         path->Release();
     }
-    // Arrowheads:
     // Top arrow points right at (cx + w, cy - h)
-    target->DrawLine(D2D1::Point2F(cx + w - 2.6f, cy - h - 2.4f), D2D1::Point2F(cx + w, cy - h), brush, 1.6f, RoundStrokeStyle);
-    target->DrawLine(D2D1::Point2F(cx + w - 2.6f, cy - h + 2.4f), D2D1::Point2F(cx + w, cy - h), brush, 1.6f, RoundStrokeStyle);
+    target->DrawLine(D2D1::Point2F(cx + w - 3.2f * s, cy - h - 3.0f * s), D2D1::Point2F(cx + w, cy - h), brush, strokeW, RoundStrokeStyle);
+    target->DrawLine(D2D1::Point2F(cx + w - 3.2f * s, cy - h + 3.0f * s), D2D1::Point2F(cx + w, cy - h), brush, strokeW, RoundStrokeStyle);
+
     // Bottom arrow points left at (cx - w, cy + h)
-    target->DrawLine(D2D1::Point2F(cx - w + 2.6f, cy + h - 2.4f), D2D1::Point2F(cx - w, cy + h), brush, 1.6f, RoundStrokeStyle);
-    target->DrawLine(D2D1::Point2F(cx - w + 2.6f, cy + h + 2.4f), D2D1::Point2F(cx - w, cy + h), brush, 1.6f, RoundStrokeStyle);
+    target->DrawLine(D2D1::Point2F(cx - w + 3.2f * s, cy + h - 3.0f * s), D2D1::Point2F(cx - w, cy + h), brush, strokeW, RoundStrokeStyle);
+    target->DrawLine(D2D1::Point2F(cx - w + 3.2f * s, cy + h + 3.0f * s), D2D1::Point2F(cx - w, cy + h), brush, strokeW, RoundStrokeStyle);
 }
 
 void D2DEngine::DrawIconFilePdf(float cx, float cy, float size, ID2D1Brush* brush, ID2D1RenderTarget* rt) {
     ID2D1RenderTarget* target = rt ? rt : m_renderTarget;
     if (!target || !brush) return;
-    float w = size * 0.35f;
-    float h = size * 0.48f;
-    float fold = w * 0.45f;
-    D2D1_ROUNDED_RECT doc = D2D1::RoundedRect(D2D1::RectF(cx - w, cy - h, cx + w, cy + h), 2.0f, 2.0f);
-    target->DrawRoundedRectangle(doc, brush, 1.4f);
-    target->DrawLine(D2D1::Point2F(cx + w - fold, cy - h), D2D1::Point2F(cx + w, cy - h + fold), brush, 1.4f);
+    float s = (size > 0.0f ? size : 16.0f) / 24.0f;
+    float strokeW = 1.6f * (size / 16.0f);
+
+    float w = 6.5f * s;
+    float h = 8.5f * s;
+    float fold = 4.0f * s;
+
+    ID2D1PathGeometry* doc = nullptr;
+    if (m_d2dFactory && SUCCEEDED(m_d2dFactory->CreatePathGeometry(&doc)) && doc) {
+        ID2D1GeometrySink* sink = nullptr;
+        if (SUCCEEDED(doc->Open(&sink)) && sink) {
+            sink->BeginFigure(D2D1::Point2F(cx - w, cy - h), D2D1_FIGURE_BEGIN_HOLLOW);
+            sink->AddLine(D2D1::Point2F(cx + w - fold, cy - h));
+            sink->AddLine(D2D1::Point2F(cx + w, cy - h + fold));
+            sink->AddLine(D2D1::Point2F(cx + w, cy + h));
+            sink->AddLine(D2D1::Point2F(cx - w, cy + h));
+            sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+            sink->Close();
+            sink->Release();
+            target->DrawGeometry(doc, brush, strokeW, RoundStrokeStyle);
+        }
+        doc->Release();
+    }
+    // Dog-ear fold
+    target->DrawLine(D2D1::Point2F(cx + w - fold, cy - h), D2D1::Point2F(cx + w - fold, cy - h + fold), brush, strokeW, RoundStrokeStyle);
+    target->DrawLine(D2D1::Point2F(cx + w - fold, cy - h + fold), D2D1::Point2F(cx + w, cy - h + fold), brush, strokeW, RoundStrokeStyle);
+
+    // PDF indicator lines
+    target->DrawLine(D2D1::Point2F(cx - w + 3.0f * s, cy + 1.5f * s), D2D1::Point2F(cx + w - 3.0f * s, cy + 1.5f * s), brush, strokeW * 0.9f, RoundStrokeStyle);
+    target->DrawLine(D2D1::Point2F(cx - w + 3.0f * s, cy + 5.0f * s), D2D1::Point2F(cx + 1.5f * s, cy + 5.0f * s), brush, strokeW * 0.9f, RoundStrokeStyle);
 }
 
 void D2DEngine::DrawIconFileImage(float cx, float cy, float size, ID2D1Brush* brush, ID2D1RenderTarget* rt) {
     ID2D1RenderTarget* target = rt ? rt : m_renderTarget;
     if (!target || !brush) return;
-    float s = size * 0.42f;
-    D2D1_ROUNDED_RECT frame = D2D1::RoundedRect(D2D1::RectF(cx - s, cy - s * 0.8f, cx + s, cy + s * 0.8f), 2.5f, 2.5f);
-    target->DrawRoundedRectangle(frame, brush, 1.4f);
-    // Sun
-    target->FillEllipse(D2D1::Ellipse(D2D1::Point2F(cx - s * 0.4f, cy - s * 0.25f), 2.0f, 2.0f), brush);
-    // Mountain
-    target->DrawLine(D2D1::Point2F(cx - s * 0.7f, cy + s * 0.5f), D2D1::Point2F(cx - s * 0.1f, cy - s * 0.1f), brush, 1.4f);
-    target->DrawLine(D2D1::Point2F(cx - s * 0.1f, cy - s * 0.1f), D2D1::Point2F(cx + s * 0.3f, cy + s * 0.3f), brush, 1.4f);
-    target->DrawLine(D2D1::Point2F(cx + s * 0.3f, cy + s * 0.3f), D2D1::Point2F(cx + s * 0.7f, cy - s * 0.0f), brush, 1.4f);
+    float s = (size > 0.0f ? size : 16.0f) / 24.0f;
+    float strokeW = 1.6f * (size / 16.0f);
+
+    float w = 8.0f * s;
+    float h = 6.5f * s;
+    D2D1_ROUNDED_RECT frame = D2D1::RoundedRect(D2D1::RectF(cx - w, cy - h, cx + w, cy + h), 2.2f * s, 2.2f * s);
+    target->DrawRoundedRectangle(frame, brush, strokeW, RoundStrokeStyle);
+
+    // Sun circle
+    target->FillEllipse(D2D1::Ellipse(D2D1::Point2F(cx - 3.5f * s, cy - 2.2f * s), 1.6f * s, 1.6f * s), brush);
+
+    // Mountain peaks
+    ID2D1PathGeometry* mtn = nullptr;
+    if (m_d2dFactory && SUCCEEDED(m_d2dFactory->CreatePathGeometry(&mtn)) && mtn) {
+        ID2D1GeometrySink* sink = nullptr;
+        if (SUCCEEDED(mtn->Open(&sink)) && sink) {
+            sink->BeginFigure(D2D1::Point2F(cx - w + 1.0f * s, cy + h - 1.2f * s), D2D1_FIGURE_BEGIN_HOLLOW);
+            sink->AddLine(D2D1::Point2F(cx - 2.0f * s, cy - 0.5f * s));
+            sink->AddLine(D2D1::Point2F(cx + 2.0f * s, cy + 3.5f * s));
+            sink->AddLine(D2D1::Point2F(cx + 5.0f * s, cy + 0.5f * s));
+            sink->AddLine(D2D1::Point2F(cx + w - 1.0f * s, cy + h - 1.2f * s));
+            sink->EndFigure(D2D1_FIGURE_END_OPEN);
+            sink->Close();
+            sink->Release();
+            target->DrawGeometry(mtn, brush, strokeW, RoundStrokeStyle);
+        }
+        mtn->Release();
+    }
 }
 
 void D2DEngine::DrawIconFileVideo(float cx, float cy, float size, ID2D1Brush* brush, ID2D1RenderTarget* rt) {
     ID2D1RenderTarget* target = rt ? rt : m_renderTarget;
     if (!target || !brush) return;
-    float s = size * 0.42f;
-    D2D1_ROUNDED_RECT frame = D2D1::RoundedRect(D2D1::RectF(cx - s, cy - s * 0.7f, cx + s, cy + s * 0.7f), 3.0f, 3.0f);
-    target->DrawRoundedRectangle(frame, brush, 1.4f);
+    float s = (size > 0.0f ? size : 16.0f) / 24.0f;
+    float strokeW = 1.6f * (size / 16.0f);
+
+    float w = 8.0f * s;
+    float h = 6.2f * s;
+    D2D1_ROUNDED_RECT frame = D2D1::RoundedRect(D2D1::RectF(cx - w, cy - h, cx + w, cy + h), 2.2f * s, 2.2f * s);
+    target->DrawRoundedRectangle(frame, brush, strokeW, RoundStrokeStyle);
+
     // Inner play triangle
-    DrawIconPlay(cx + 0.5f, cy, size * 0.55f, brush, target);
+    DrawIconPlay(cx + 0.5f * s, cy, size * 0.55f, brush, target);
 }
 
 void D2DEngine::DrawIconMusic(float cx, float cy, float size, ID2D1Brush* brush, ID2D1RenderTarget* rt) {
     ID2D1RenderTarget* target = rt ? rt : m_renderTarget;
     if (!target || !brush) return;
-
-    float s = size / 18.0f;
-    float x_off = 0.9675f * s;
-    float y_off = 1.108f * s;
+    float s = (size > 0.0f ? size : 16.0f) / 24.0f;
+    float strokeW = 1.6f * (size / 16.0f);
 
     D2D1_MATRIX_3X2_F baseTransform;
     target->GetTransform(&baseTransform);
 
     // Note heads: angled ovals at -22 deg (standard musical notation)
-    D2D1_POINT_2F leftCenter = D2D1::Point2F(cx + x_off - 5.28f * s, cy + y_off + 3.84f * s);
-    D2D1_POINT_2F rightCenter = D2D1::Point2F(cx + x_off + 3.36f * s, cy + y_off + 1.80f * s);
+    D2D1_POINT_2F leftCenter = D2D1::Point2F(cx - 4.5f * s, cy + 4.5f * s);
+    D2D1_POINT_2F rightCenter = D2D1::Point2F(cx + 4.5f * s, cy + 2.5f * s);
 
-    // Draw left note head
     target->SetTransform(D2D1::Matrix3x2F::Rotation(-22.0f, leftCenter) * baseTransform);
-    target->FillEllipse(D2D1::Ellipse(leftCenter, 3.36f * s, 2.30f * s), brush);
+    target->FillEllipse(D2D1::Ellipse(leftCenter, 3.2f * s, 2.2f * s), brush);
 
-    // Draw right note head
     target->SetTransform(D2D1::Matrix3x2F::Rotation(-22.0f, rightCenter) * baseTransform);
-    target->FillEllipse(D2D1::Ellipse(rightCenter, 3.36f * s, 2.30f * s), brush);
+    target->FillEllipse(D2D1::Ellipse(rightCenter, 3.2f * s, 2.2f * s), brush);
 
-    // Restore base transform for stems and connecting beam
     target->SetTransform(baseTransform);
 
-    // Vertical stems connecting flush to note head tangents
-    float stemW = 1.35f * s;
-    float stem1X = cx + x_off - 2.83f * s;
-    float stem2X = cx + x_off + 5.81f * s;
-    float topY1 = cy + y_off - 6.00f * s;
-    float topY2 = cy + y_off - 8.52f * s;
-    float beamH = 2.20f * s;
+    // Vertical stems
+    float stem1X = cx - 2.2f * s;
+    float stem2X = cx + 6.8f * s;
+    float topY1 = cy - 5.5f * s;
+    float topY2 = cy - 7.5f * s;
+    float beamH = 2.4f * s;
 
-    // Draw vertical stems
-    target->DrawLine(D2D1::Point2F(stem1X, leftCenter.y), D2D1::Point2F(stem1X, topY1 + 0.5f * s), brush, stemW);
-    target->DrawLine(D2D1::Point2F(stem2X, rightCenter.y), D2D1::Point2F(stem2X, topY2 + 0.5f * s), brush, stemW);
+    target->DrawLine(D2D1::Point2F(stem1X, leftCenter.y), D2D1::Point2F(stem1X, topY1), brush, strokeW, RoundStrokeStyle);
+    target->DrawLine(D2D1::Point2F(stem2X, rightCenter.y), D2D1::Point2F(stem2X, topY2), brush, strokeW, RoundStrokeStyle);
 
-    // Parallelogram connecting beam: authentic musical notation with vertical cut ends
+    // Beam connecting stems
     ID2D1PathGeometry* beamPath = nullptr;
-    m_d2dFactory->CreatePathGeometry(&beamPath);
-    if (beamPath) {
+    if (m_d2dFactory && SUCCEEDED(m_d2dFactory->CreatePathGeometry(&beamPath)) && beamPath) {
         ID2D1GeometrySink* sink = nullptr;
-        beamPath->Open(&sink);
-        if (sink) {
-            float halfW = stemW * 0.5f;
+        if (SUCCEEDED(beamPath->Open(&sink)) && sink) {
+            float halfW = strokeW * 0.5f;
             sink->BeginFigure(D2D1::Point2F(stem1X - halfW, topY1), D2D1_FIGURE_BEGIN_FILLED);
             sink->AddLine(D2D1::Point2F(stem2X + halfW, topY2));
             sink->AddLine(D2D1::Point2F(stem2X + halfW, topY2 + beamH));
@@ -900,92 +994,91 @@ void D2DEngine::DrawIconMusic(float cx, float cy, float size, ID2D1Brush* brush,
 void D2DEngine::DrawIconCopy(float cx, float cy, float size, ID2D1Brush* brush, ID2D1RenderTarget* rt) {
     ID2D1RenderTarget* target = rt ? rt : m_renderTarget;
     if (!target || !brush) return;
+    float s = (size > 0.0f ? size : 16.0f) / 24.0f;
+    float strokeW = 1.6f * (size / 16.0f);
 
-    float s = size / 24.0f;
-    // Back document sheet (top-left bracket with folded corner)
+    // Back document sheet (top-left bracket with rounded corner)
     ID2D1PathGeometry* path = nullptr;
-    m_d2dFactory->CreatePathGeometry(&path);
-    if (path) {
+    if (m_d2dFactory && SUCCEEDED(m_d2dFactory->CreatePathGeometry(&path)) && path) {
         ID2D1GeometrySink* sink = nullptr;
-        path->Open(&sink);
-        if (sink) {
-            sink->BeginFigure(D2D1::Point2F(cx + 2.2f * s, cy - 5.5f * s), D2D1_FIGURE_BEGIN_HOLLOW);
-            sink->AddLine(D2D1::Point2F(cx - 4.2f * s, cy - 5.5f * s));
-            sink->AddLine(D2D1::Point2F(cx - 5.5f * s, cy - 4.2f * s));
-            sink->AddLine(D2D1::Point2F(cx - 5.5f * s, cy + 2.5f * s));
+        if (SUCCEEDED(path->Open(&sink)) && sink) {
+            sink->BeginFigure(D2D1::Point2F(cx + 3.0f * s, cy - 7.5f * s), D2D1_FIGURE_BEGIN_HOLLOW);
+            sink->AddLine(D2D1::Point2F(cx - 5.5f * s, cy - 7.5f * s));
+            sink->AddArc(D2D1::ArcSegment(D2D1::Point2F(cx - 7.5f * s, cy - 5.5f * s), D2D1::SizeF(2.0f * s, 2.0f * s), 0.0f, D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE, D2D1_ARC_SIZE_SMALL));
+            sink->AddLine(D2D1::Point2F(cx - 7.5f * s, cy + 3.0f * s));
             sink->EndFigure(D2D1_FIGURE_END_OPEN);
             sink->Close();
             sink->Release();
-            target->DrawGeometry(path, brush, 1.4f * s, RoundStrokeStyle);
+            target->DrawGeometry(path, brush, strokeW, RoundStrokeStyle);
         }
         path->Release();
     }
 
     // Front document sheet
     D2D1_ROUNDED_RECT front = D2D1::RoundedRect(
-        D2D1::RectF(cx - 2.8f * s, cy - 2.8f * s, cx + 5.5f * s, cy + 5.8f * s),
-        1.6f * s, 1.6f * s
+        D2D1::RectF(cx - 3.8f * s, cy - 3.8f * s, cx + 7.5f * s, cy + 7.5f * s),
+        2.0f * s, 2.0f * s
     );
-    target->DrawRoundedRectangle(front, brush, 1.4f * s, RoundStrokeStyle);
+    target->DrawRoundedRectangle(front, brush, strokeW, RoundStrokeStyle);
 }
 
 void D2DEngine::DrawIconWrap(float cx, float cy, float size, bool isWrapped, ID2D1Brush* brush, ID2D1RenderTarget* rt) {
     ID2D1RenderTarget* target = rt ? rt : m_renderTarget;
     if (!target || !brush) return;
+    float s = (size > 0.0f ? size : 16.0f) / 24.0f;
+    float strokeW = 1.6f * (size / 16.0f);
 
-    float s = size / 24.0f;
     // Top text guide line
-    target->DrawLine(D2D1::Point2F(cx - 5.5f * s, cy - 4.5f * s), D2D1::Point2F(cx + 5.5f * s, cy - 4.5f * s), brush, 1.4f * s, RoundStrokeStyle);
+    target->DrawLine(D2D1::Point2F(cx - 7.5f * s, cy - 5.5f * s), D2D1::Point2F(cx + 7.5f * s, cy - 5.5f * s), brush, strokeW, RoundStrokeStyle);
 
-    // Return arrow: straight, 180° curve, straight return, arrowhead
+    // Middle text guide line into return loop
     ID2D1PathGeometry* path = nullptr;
-    m_d2dFactory->CreatePathGeometry(&path);
-    if (path) {
+    if (m_d2dFactory && SUCCEEDED(m_d2dFactory->CreatePathGeometry(&path)) && path) {
         ID2D1GeometrySink* sink = nullptr;
-        path->Open(&sink);
-        if (sink) {
-            sink->BeginFigure(D2D1::Point2F(cx - 5.5f * s, cy), D2D1_FIGURE_BEGIN_HOLLOW);
-            sink->AddLine(D2D1::Point2F(cx + 2.5f * s, cy));
+        if (SUCCEEDED(path->Open(&sink)) && sink) {
+            sink->BeginFigure(D2D1::Point2F(cx - 7.5f * s, cy), D2D1_FIGURE_BEGIN_HOLLOW);
+            sink->AddLine(D2D1::Point2F(cx + 3.5f * s, cy));
             sink->AddArc(D2D1::ArcSegment(
-                D2D1::Point2F(cx + 2.5f * s, cy + 4.5f * s),
-                D2D1::SizeF(2.25f * s, 2.25f * s),
+                D2D1::Point2F(cx + 3.5f * s, cy + 5.5f * s),
+                D2D1::SizeF(2.75f * s, 2.75f * s),
                 0.0f,
                 D2D1_SWEEP_DIRECTION_CLOCKWISE,
                 D2D1_ARC_SIZE_SMALL
             ));
-            sink->AddLine(D2D1::Point2F(cx - 2.5f * s, cy + 4.5f * s));
+            sink->AddLine(D2D1::Point2F(cx - 3.5f * s, cy + 5.5f * s));
             sink->EndFigure(D2D1_FIGURE_END_OPEN);
             sink->Close();
             sink->Release();
-            target->DrawGeometry(path, brush, 1.4f * s, RoundStrokeStyle);
+            target->DrawGeometry(path, brush, strokeW, RoundStrokeStyle);
         }
         path->Release();
     }
 
-    // Arrowhead pointing left at (cx - 2.5f * s, cy + 4.5f * s)
-    float ax = cx - 2.5f * s;
-    float ay = cy + 4.5f * s;
-    target->DrawLine(D2D1::Point2F(ax + 2.4f * s, ay - 2.2f * s), D2D1::Point2F(ax, ay), brush, 1.4f * s, RoundStrokeStyle);
-    target->DrawLine(D2D1::Point2F(ax + 2.4f * s, ay + 2.2f * s), D2D1::Point2F(ax, ay), brush, 1.4f * s, RoundStrokeStyle);
+    // Arrowhead pointing left at (cx - 3.5f * s, cy + 5.5f * s)
+    float ax = cx - 3.5f * s;
+    float ay = cy + 5.5f * s;
+    target->DrawLine(D2D1::Point2F(ax + 3.0f * s, ay - 2.8f * s), D2D1::Point2F(ax, ay), brush, strokeW, RoundStrokeStyle);
+    target->DrawLine(D2D1::Point2F(ax + 3.0f * s, ay + 2.8f * s), D2D1::Point2F(ax, ay), brush, strokeW, RoundStrokeStyle);
 }
 
 void D2DEngine::DrawIconTable(float cx, float cy, float size, bool isTable, ID2D1Brush* brush, ID2D1RenderTarget* rt) {
     ID2D1RenderTarget* target = rt ? rt : m_renderTarget;
     if (!target || !brush) return;
+    float s = (size > 0.0f ? size : 16.0f) / 24.0f;
+    float strokeW = 1.6f * (size / 16.0f);
 
-    float s = size / 24.0f;
-    float w = 5.8f * s;
-    float h = 5.0f * s;
+    float w = 7.5f * s;
+    float h = 6.5f * s;
 
     // Outer grid container
-    D2D1_ROUNDED_RECT outer = D2D1::RoundedRect(D2D1::RectF(cx - w, cy - h, cx + w, cy + h), 1.8f * s, 1.8f * s);
-    target->DrawRoundedRectangle(outer, brush, 1.4f * s, RoundStrokeStyle);
+    D2D1_ROUNDED_RECT outer = D2D1::RoundedRect(D2D1::RectF(cx - w, cy - h, cx + w, cy + h), 2.0f * s, 2.0f * s);
+    target->DrawRoundedRectangle(outer, brush, strokeW, RoundStrokeStyle);
 
     // Header divider line
-    target->DrawLine(D2D1::Point2F(cx - w, cy - 1.5f * s), D2D1::Point2F(cx + w, cy - 1.5f * s), brush, 1.3f * s, RoundStrokeStyle);
+    target->DrawLine(D2D1::Point2F(cx - w, cy - 2.0f * s), D2D1::Point2F(cx + w, cy - 2.0f * s), brush, strokeW, RoundStrokeStyle);
 
     // Column divider line
-    target->DrawLine(D2D1::Point2F(cx - 1.0f * s, cy - h), D2D1::Point2F(cx - 1.0f * s, cy + h), brush, 1.3f * s, RoundStrokeStyle);
+    target->DrawLine(D2D1::Point2F(cx - 1.5f * s, cy - h), D2D1::Point2F(cx - 1.5f * s, cy + h), brush, strokeW, RoundStrokeStyle);
 }
 
 void D2DEngine::DrawMicroTooltip(float centerX, float topY, const WCHAR* text, float alpha, bool above) {
@@ -1043,76 +1136,79 @@ void D2DEngine::DrawMicroTooltip(float centerX, float topY, const WCHAR* text, f
 void D2DEngine::DrawIconSearch(float cx, float cy, float size, ID2D1Brush* brush, ID2D1RenderTarget* rt) {
     ID2D1RenderTarget* target = rt ? rt : m_renderTarget;
     if (!target || !brush) return;
+    float s = (size > 0.0f ? size : 16.0f) / 24.0f;
+    float strokeW = 1.6f * (size / 16.0f);
 
-    float scale = size / 24.0f;
-    float r = 4.2f * scale;
-    float circleX = cx - 1.5f * scale;
-    float circleY = cy - 1.5f * scale;
+    float r = 5.2f * s;
+    float circleX = cx - 1.8f * s;
+    float circleY = cy - 1.8f * s;
 
-    target->DrawEllipse(D2D1::Ellipse(D2D1::Point2F(circleX, circleY), r, r), brush, 1.5f * scale);
+    target->DrawEllipse(D2D1::Ellipse(D2D1::Point2F(circleX, circleY), r, r), brush, strokeW);
     target->DrawLine(
-        D2D1::Point2F(circleX + 3.0f * scale, circleY + 3.0f * scale),
-        D2D1::Point2F(cx + 6.0f * scale, cy + 6.0f * scale),
-        brush, 1.6f * scale, RoundStrokeStyle
+        D2D1::Point2F(circleX + 3.8f * s, circleY + 3.8f * s),
+        D2D1::Point2F(cx + 7.5f * s, cy + 7.5f * s),
+        brush, strokeW, RoundStrokeStyle
     );
 }
 
 void D2DEngine::DrawIconCrop(float cx, float cy, float size, ID2D1Brush* brush, ID2D1RenderTarget* rt) {
     ID2D1RenderTarget* target = rt ? rt : m_renderTarget;
     if (!target || !brush) return;
+    float s = (size > 0.0f ? size : 16.0f) / 24.0f;
+    float strokeW = 1.6f * (size / 16.0f);
 
-    float scale = size / 24.0f;
-    float arm = 5.0f * scale;
-    float stem = 2.0f * scale;
+    float arm = 5.5f * s;
+    float stem = 2.5f * s;
 
     // Top-left crop mark
-    target->DrawLine(D2D1::Point2F(cx - arm - stem, cy - arm), D2D1::Point2F(cx + arm, cy - arm), brush, 1.4f * scale, RoundStrokeStyle);
-    target->DrawLine(D2D1::Point2F(cx - arm, cy - arm - stem), D2D1::Point2F(cx - arm, cy + arm), brush, 1.4f * scale, RoundStrokeStyle);
+    target->DrawLine(D2D1::Point2F(cx - arm - stem, cy - arm), D2D1::Point2F(cx + arm, cy - arm), brush, strokeW, RoundStrokeStyle);
+    target->DrawLine(D2D1::Point2F(cx - arm, cy - arm - stem), D2D1::Point2F(cx - arm, cy + arm), brush, strokeW, RoundStrokeStyle);
 
     // Bottom-right crop mark
-    target->DrawLine(D2D1::Point2F(cx + arm + stem, cy + arm), D2D1::Point2F(cx - arm, cy + arm), brush, 1.4f * scale, RoundStrokeStyle);
-    target->DrawLine(D2D1::Point2F(cx + arm, cy + arm + stem), D2D1::Point2F(cx + arm, cy - arm), brush, 1.4f * scale, RoundStrokeStyle);
+    target->DrawLine(D2D1::Point2F(cx + arm + stem, cy + arm), D2D1::Point2F(cx - arm, cy + arm), brush, strokeW, RoundStrokeStyle);
+    target->DrawLine(D2D1::Point2F(cx + arm, cy + arm + stem), D2D1::Point2F(cx + arm, cy - arm), brush, strokeW, RoundStrokeStyle);
 }
 
 void D2DEngine::DrawIconInfo(float cx, float cy, float size, ID2D1Brush* brush, ID2D1RenderTarget* rt) {
     ID2D1RenderTarget* target = rt ? rt : m_renderTarget;
     if (!target || !brush) return;
+    float s = (size > 0.0f ? size : 16.0f) / 24.0f;
+    float strokeW = 1.6f * (size / 16.0f);
 
-    float scale = size / 24.0f;
-    float r = 6.0f * scale;
+    float r = 8.0f * s;
 
     // Outer circle
-    target->DrawEllipse(D2D1::Ellipse(D2D1::Point2F(cx, cy), r, r), brush, 1.4f * scale);
+    target->DrawEllipse(D2D1::Ellipse(D2D1::Point2F(cx, cy), r, r), brush, strokeW);
 
     // Dot
-    target->FillEllipse(D2D1::Ellipse(D2D1::Point2F(cx, cy - 2.8f * scale), 1.0f * scale, 1.0f * scale), brush);
+    target->FillEllipse(D2D1::Ellipse(D2D1::Point2F(cx, cy - 3.6f * s), 1.2f * s, 1.2f * s), brush);
 
     // Vertical stem
     target->DrawLine(
-        D2D1::Point2F(cx, cy - 0.5f * scale),
-        D2D1::Point2F(cx, cy + 3.2f * scale),
-        brush, 1.4f * scale, RoundStrokeStyle
+        D2D1::Point2F(cx, cy - 0.5f * s),
+        D2D1::Point2F(cx, cy + 4.5f * s),
+        brush, strokeW, RoundStrokeStyle
     );
 }
 
 void D2DEngine::DrawIconOutline(float cx, float cy, float size, ID2D1Brush* brush, ID2D1RenderTarget* rt) {
     ID2D1RenderTarget* target = rt ? rt : m_renderTarget;
     if (!target || !brush) return;
+    float s = (size > 0.0f ? size : 16.0f) / 24.0f;
+    float strokeW = 1.6f * (size / 16.0f);
 
-    float scale = size / 24.0f;
-    float leftDotX = cx - 5.5f * scale;
-    float lineStartX = cx - 2.2f * scale;
-    float lineEndX = cx + 6.0f * scale;
-
-    float yPositions[3] = { cy - 4.2f * scale, cy, cy + 4.2f * scale };
+    float leftDotX = cx - 6.5f * s;
+    float lineStartX = cx - 2.8f * s;
+    float lineEndX = cx + 7.5f * s;
+    float yPositions[3] = { cy - 5.0f * s, cy, cy + 5.0f * s };
 
     for (int i = 0; i < 3; ++i) {
         float y = yPositions[i];
-        target->FillEllipse(D2D1::Ellipse(D2D1::Point2F(leftDotX, y), 1.1f * scale, 1.1f * scale), brush);
+        target->FillEllipse(D2D1::Ellipse(D2D1::Point2F(leftDotX, y), 1.2f * s, 1.2f * s), brush);
         target->DrawLine(
             D2D1::Point2F(lineStartX, y),
             D2D1::Point2F(lineEndX, y),
-            brush, 1.4f * scale, RoundStrokeStyle
+            brush, strokeW, RoundStrokeStyle
         );
     }
 }
@@ -1120,40 +1216,39 @@ void D2DEngine::DrawIconOutline(float cx, float cy, float size, ID2D1Brush* brus
 void D2DEngine::DrawIconSave(float cx, float cy, float size, bool isDirty, ID2D1Brush* brush, ID2D1RenderTarget* rt) {
     ID2D1RenderTarget* target = rt ? rt : m_renderTarget;
     if (!target || !brush) return;
+    float s = (size > 0.0f ? size : 16.0f) / 24.0f;
+    float strokeW = 1.6f * (size / 16.0f);
 
-    float s = size / 24.0f;
-    float w = 5.8f * s;
-    float h = 6.2f * s;
+    float w = 7.5f * s;
+    float h = 8.0f * s;
 
-    // Floppy disk body with chamfered top-right bevel
+    // Floppy disk body with chamfered top-right notch
     ID2D1PathGeometry* path = nullptr;
-    m_d2dFactory->CreatePathGeometry(&path);
-    if (path) {
+    if (m_d2dFactory && SUCCEEDED(m_d2dFactory->CreatePathGeometry(&path)) && path) {
         ID2D1GeometrySink* sink = nullptr;
-        path->Open(&sink);
-        if (sink) {
+        if (SUCCEEDED(path->Open(&sink)) && sink) {
             sink->BeginFigure(D2D1::Point2F(cx - w, cy - h), D2D1_FIGURE_BEGIN_HOLLOW);
-            sink->AddLine(D2D1::Point2F(cx + w - 2.5f * s, cy - h));
-            sink->AddLine(D2D1::Point2F(cx + w, cy - h + 2.5f * s));
+            sink->AddLine(D2D1::Point2F(cx + w - 3.5f * s, cy - h));
+            sink->AddLine(D2D1::Point2F(cx + w, cy - h + 3.5f * s));
             sink->AddLine(D2D1::Point2F(cx + w, cy + h));
             sink->AddLine(D2D1::Point2F(cx - w, cy + h));
             sink->EndFigure(D2D1_FIGURE_END_CLOSED);
             sink->Close();
             sink->Release();
-            target->DrawGeometry(path, brush, 1.4f * s, RoundStrokeStyle);
+            target->DrawGeometry(path, brush, strokeW, RoundStrokeStyle);
         }
         path->Release();
     }
 
     // Top shutter slider
     D2D1_RECT_F shutter = D2D1::RectF(cx - w * 0.45f, cy - h, cx + w * 0.35f, cy - h * 0.30f);
-    target->DrawRectangle(shutter, brush, 1.2f * s);
+    target->DrawRectangle(shutter, brush, strokeW * 0.85f);
 
     // Bottom paper label
     D2D1_RECT_F label = D2D1::RectF(cx - w * 0.65f, cy + h * 0.15f, cx + w * 0.65f, cy + h * 0.85f);
-    target->DrawRectangle(label, brush, 1.2f * s);
+    target->DrawRectangle(label, brush, strokeW * 0.85f);
 
-    // Modified dot indicator if dirty
+    // Accent dot if dirty
     if (isDirty) {
         ID2D1Brush* dotBrush = BrushAccent ? (ID2D1Brush*)BrushAccent : brush;
         target->FillEllipse(D2D1::Ellipse(D2D1::Point2F(cx + w + 1.2f * s, cy - h - 1.2f * s), 2.2f * s, 2.2f * s), dotBrush);
@@ -1163,133 +1258,132 @@ void D2DEngine::DrawIconSave(float cx, float cy, float size, bool isDirty, ID2D1
 void D2DEngine::DrawIconUndo(float cx, float cy, float size, ID2D1Brush* brush, ID2D1RenderTarget* rt) {
     ID2D1RenderTarget* target = rt ? rt : m_renderTarget;
     if (!target || !brush) return;
-
-    float s = size / 24.0f;
-    float r = 4.8f * s;
+    float s = (size > 0.0f ? size : 16.0f) / 24.0f;
+    float strokeW = 1.6f * (size / 16.0f);
+    float r = 6.0f * s;
 
     // Smooth circular return arc
     ID2D1PathGeometry* path = nullptr;
-    m_d2dFactory->CreatePathGeometry(&path);
-    if (path) {
+    if (m_d2dFactory && SUCCEEDED(m_d2dFactory->CreatePathGeometry(&path)) && path) {
         ID2D1GeometrySink* sink = nullptr;
-        path->Open(&sink);
-        if (sink) {
-            sink->BeginFigure(D2D1::Point2F(cx + 4.8f * s, cy + 4.5f * s), D2D1_FIGURE_BEGIN_HOLLOW);
+        if (SUCCEEDED(path->Open(&sink)) && sink) {
+            sink->BeginFigure(D2D1::Point2F(cx + 6.0f * s, cy + 5.5f * s), D2D1_FIGURE_BEGIN_HOLLOW);
             sink->AddArc(D2D1::ArcSegment(
-                D2D1::Point2F(cx - 2.0f * s, cy - 2.8f * s),
+                D2D1::Point2F(cx - 2.0f * s, cy - 3.5f * s),
                 D2D1::SizeF(r, r),
                 0.0f,
                 D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE,
                 D2D1_ARC_SIZE_LARGE
             ));
-            sink->AddLine(D2D1::Point2F(cx - 5.5f * s, cy - 2.8f * s));
+            sink->AddLine(D2D1::Point2F(cx - 6.5f * s, cy - 3.5f * s));
             sink->EndFigure(D2D1_FIGURE_END_OPEN);
             sink->Close();
             sink->Release();
-            target->DrawGeometry(path, brush, 1.4f * s, RoundStrokeStyle);
+            target->DrawGeometry(path, brush, strokeW, RoundStrokeStyle);
         }
         path->Release();
     }
 
     // Left arrowhead
-    float ax = cx - 5.5f * s;
-    float ay = cy - 2.8f * s;
-    target->DrawLine(D2D1::Point2F(ax + 2.8f * s, ay - 2.6f * s), D2D1::Point2F(ax, ay), brush, 1.4f * s, RoundStrokeStyle);
-    target->DrawLine(D2D1::Point2F(ax + 2.8f * s, ay + 2.6f * s), D2D1::Point2F(ax, ay), brush, 1.4f * s, RoundStrokeStyle);
+    float ax = cx - 6.5f * s;
+    float ay = cy - 3.5f * s;
+    target->DrawLine(D2D1::Point2F(ax + 3.5f * s, ay - 3.2f * s), D2D1::Point2F(ax, ay), brush, strokeW, RoundStrokeStyle);
+    target->DrawLine(D2D1::Point2F(ax + 3.5f * s, ay + 3.2f * s), D2D1::Point2F(ax, ay), brush, strokeW, RoundStrokeStyle);
 }
 
 void D2DEngine::DrawIconRedo(float cx, float cy, float size, ID2D1Brush* brush, ID2D1RenderTarget* rt) {
     ID2D1RenderTarget* target = rt ? rt : m_renderTarget;
     if (!target || !brush) return;
-
-    float s = size / 24.0f;
-    float r = 4.8f * s;
+    float s = (size > 0.0f ? size : 16.0f) / 24.0f;
+    float strokeW = 1.6f * (size / 16.0f);
+    float r = 6.0f * s;
 
     // Smooth circular return arc
     ID2D1PathGeometry* path = nullptr;
-    m_d2dFactory->CreatePathGeometry(&path);
-    if (path) {
+    if (m_d2dFactory && SUCCEEDED(m_d2dFactory->CreatePathGeometry(&path)) && path) {
         ID2D1GeometrySink* sink = nullptr;
-        path->Open(&sink);
-        if (sink) {
-            sink->BeginFigure(D2D1::Point2F(cx - 4.8f * s, cy + 4.5f * s), D2D1_FIGURE_BEGIN_HOLLOW);
+        if (SUCCEEDED(path->Open(&sink)) && sink) {
+            sink->BeginFigure(D2D1::Point2F(cx - 6.0f * s, cy + 5.5f * s), D2D1_FIGURE_BEGIN_HOLLOW);
             sink->AddArc(D2D1::ArcSegment(
-                D2D1::Point2F(cx + 2.0f * s, cy - 2.8f * s),
+                D2D1::Point2F(cx + 2.0f * s, cy - 3.5f * s),
                 D2D1::SizeF(r, r),
                 0.0f,
                 D2D1_SWEEP_DIRECTION_CLOCKWISE,
                 D2D1_ARC_SIZE_LARGE
             ));
-            sink->AddLine(D2D1::Point2F(cx + 5.5f * s, cy - 2.8f * s));
+            sink->AddLine(D2D1::Point2F(cx + 6.5f * s, cy - 3.5f * s));
             sink->EndFigure(D2D1_FIGURE_END_OPEN);
             sink->Close();
             sink->Release();
-            target->DrawGeometry(path, brush, 1.4f * s, RoundStrokeStyle);
+            target->DrawGeometry(path, brush, strokeW, RoundStrokeStyle);
         }
         path->Release();
     }
 
     // Right arrowhead
-    float ax = cx + 5.5f * s;
-    float ay = cy - 2.8f * s;
-    target->DrawLine(D2D1::Point2F(ax - 2.8f * s, ay - 2.6f * s), D2D1::Point2F(ax, ay), brush, 1.4f * s, RoundStrokeStyle);
-    target->DrawLine(D2D1::Point2F(ax - 2.8f * s, ay + 2.6f * s), D2D1::Point2F(ax, ay), brush, 1.4f * s, RoundStrokeStyle);
+    float ax = cx + 6.5f * s;
+    float ay = cy - 3.5f * s;
+    target->DrawLine(D2D1::Point2F(ax - 3.5f * s, ay - 3.2f * s), D2D1::Point2F(ax, ay), brush, strokeW, RoundStrokeStyle);
+    target->DrawLine(D2D1::Point2F(ax - 3.5f * s, ay + 3.2f * s), D2D1::Point2F(ax, ay), brush, strokeW, RoundStrokeStyle);
 }
 
 void D2DEngine::DrawIconCut(float cx, float cy, float size, ID2D1Brush* brush, ID2D1RenderTarget* rt) {
     ID2D1RenderTarget* target = rt ? rt : m_renderTarget;
     if (!target || !brush) return;
+    float s = (size > 0.0f ? size : 16.0f) / 24.0f;
+    float strokeW = 1.6f * (size / 16.0f);
 
-    float s = size / 24.0f;
     // Symmetrical scissor handle loops
-    target->DrawEllipse(D2D1::Ellipse(D2D1::Point2F(cx - 3.2f * s, cy + 4.0f * s), 2.2f * s, 2.2f * s), brush, 1.4f * s);
-    target->DrawEllipse(D2D1::Ellipse(D2D1::Point2F(cx + 3.2f * s, cy + 4.0f * s), 2.2f * s, 2.2f * s), brush, 1.4f * s);
+    target->DrawEllipse(D2D1::Ellipse(D2D1::Point2F(cx - 4.0f * s, cy + 5.0f * s), 2.8f * s, 2.8f * s), brush, strokeW);
+    target->DrawEllipse(D2D1::Ellipse(D2D1::Point2F(cx + 4.0f * s, cy + 5.0f * s), 2.8f * s, 2.8f * s), brush, strokeW);
 
     // Blades crossing through center (cx, cy)
-    target->DrawLine(D2D1::Point2F(cx - 1.8f * s, cy + 2.4f * s), D2D1::Point2F(cx + 4.8f * s, cy - 5.5f * s), brush, 1.4f * s, RoundStrokeStyle);
-    target->DrawLine(D2D1::Point2F(cx + 1.8f * s, cy + 2.4f * s), D2D1::Point2F(cx - 4.8f * s, cy - 5.5f * s), brush, 1.4f * s, RoundStrokeStyle);
+    target->DrawLine(D2D1::Point2F(cx - 2.2f * s, cy + 2.8f * s), D2D1::Point2F(cx + 6.0f * s, cy - 7.0f * s), brush, strokeW, RoundStrokeStyle);
+    target->DrawLine(D2D1::Point2F(cx + 2.2f * s, cy + 2.8f * s), D2D1::Point2F(cx - 6.0f * s, cy - 7.0f * s), brush, strokeW, RoundStrokeStyle);
 
     // Center pivot screw pin
-    target->FillEllipse(D2D1::Ellipse(D2D1::Point2F(cx, cy + 0.2f * s), 0.9f * s, 0.9f * s), brush);
+    target->FillEllipse(D2D1::Ellipse(D2D1::Point2F(cx, cy + 0.2f * s), 1.1f * s, 1.1f * s), brush);
 }
 
 void D2DEngine::DrawIconPaste(float cx, float cy, float size, ID2D1Brush* brush, ID2D1RenderTarget* rt) {
     ID2D1RenderTarget* target = rt ? rt : m_renderTarget;
     if (!target || !brush) return;
+    float s = (size > 0.0f ? size : 16.0f) / 24.0f;
+    float strokeW = 1.6f * (size / 16.0f);
 
-    float s = size / 24.0f;
     // Board back
-    D2D1_ROUNDED_RECT board = D2D1::RoundedRect(D2D1::RectF(cx - 5.0f * s, cy - 3.5f * s, cx + 5.0f * s, cy + 6.2f * s), 1.6f * s, 1.6f * s);
-    target->DrawRoundedRectangle(board, brush, 1.4f * s, RoundStrokeStyle);
+    D2D1_ROUNDED_RECT board = D2D1::RoundedRect(D2D1::RectF(cx - 6.5f * s, cy - 4.5f * s, cx + 6.5f * s, cy + 8.0f * s), 2.0f * s, 2.0f * s);
+    target->DrawRoundedRectangle(board, brush, strokeW, RoundStrokeStyle);
 
     // Clip at top
-    D2D1_ROUNDED_RECT clip = D2D1::RoundedRect(D2D1::RectF(cx - 2.5f * s, cy - 5.8f * s, cx + 2.5f * s, cy - 2.2f * s), 1.2f * s, 1.2f * s);
-    target->DrawRoundedRectangle(clip, brush, 1.4f * s, RoundStrokeStyle);
+    D2D1_ROUNDED_RECT clip = D2D1::RoundedRect(D2D1::RectF(cx - 3.5f * s, cy - 7.5f * s, cx + 3.5f * s, cy - 3.0f * s), 1.5f * s, 1.5f * s);
+    target->DrawRoundedRectangle(clip, brush, strokeW, RoundStrokeStyle);
 
     // Document lines inside clipboard
-    target->DrawLine(D2D1::Point2F(cx - 2.8f * s, cy + 0.5f * s), D2D1::Point2F(cx + 2.8f * s, cy + 0.5f * s), brush, 1.2f * s, RoundStrokeStyle);
-    target->DrawLine(D2D1::Point2F(cx - 2.8f * s, cy + 3.2f * s), D2D1::Point2F(cx + 1.5f * s, cy + 3.2f * s), brush, 1.2f * s, RoundStrokeStyle);
+    target->DrawLine(D2D1::Point2F(cx - 3.5f * s, cy + 0.5f * s), D2D1::Point2F(cx + 3.5f * s, cy + 0.5f * s), brush, strokeW * 0.9f, RoundStrokeStyle);
+    target->DrawLine(D2D1::Point2F(cx - 3.5f * s, cy + 4.0f * s), D2D1::Point2F(cx + 1.8f * s, cy + 4.0f * s), brush, strokeW * 0.9f, RoundStrokeStyle);
 }
 
 void D2DEngine::DrawIconSettings(float cx, float cy, float size, ID2D1Brush* brush, ID2D1RenderTarget* rt) {
     ID2D1RenderTarget* target = rt ? rt : m_renderTarget;
     if (!target || !brush) return;
+    float s = (size > 0.0f ? size : 16.0f) / 24.0f;
+    float strokeW = 1.6f * (size / 16.0f);
 
-    float s = size / 24.0f;
-    float innerR = 3.2f * s;
-    target->DrawEllipse(D2D1::Ellipse(D2D1::Point2F(cx, cy), innerR, innerR), brush, 1.4f * s);
+    float innerR = 3.6f * s;
+    target->DrawEllipse(D2D1::Ellipse(D2D1::Point2F(cx, cy), innerR, innerR), brush, strokeW);
 
     // 6 gear cogs
     for (int i = 0; i < 6; ++i) {
         float angle = (float)i * 60.0f * 3.14159265f / 180.0f;
         float cosA = cosf(angle);
         float sinA = sinf(angle);
-        float r1 = 4.2f * s;
-        float r2 = 6.4f * s;
+        float r1 = 4.8f * s;
+        float r2 = 7.8f * s;
         target->DrawLine(
             D2D1::Point2F(cx + r1 * cosA, cy + r1 * sinA),
             D2D1::Point2F(cx + r2 * cosA, cy + r2 * sinA),
-            brush, 1.8f * s, RoundStrokeStyle
+            brush, strokeW * 1.35f, RoundStrokeStyle
         );
     }
 }
@@ -1297,16 +1391,16 @@ void D2DEngine::DrawIconSettings(float cx, float cy, float size, ID2D1Brush* bru
 void D2DEngine::DrawIconEye(float cx, float cy, float size, ID2D1Brush* brush, ID2D1RenderTarget* rt) {
     ID2D1RenderTarget* target = rt ? rt : m_renderTarget;
     if (!target || !brush) return;
+    float s = (size > 0.0f ? size : 16.0f) / 24.0f;
+    float strokeW = 1.6f * (size / 16.0f);
 
-    float r = size * 0.46f;
-    float h = size * 0.28f;
+    float r = 8.0f * s;
+    float h = 4.8f * s;
 
     ID2D1PathGeometry* eye = nullptr;
-    m_d2dFactory->CreatePathGeometry(&eye);
-    if (eye) {
+    if (m_d2dFactory && SUCCEEDED(m_d2dFactory->CreatePathGeometry(&eye)) && eye) {
         ID2D1GeometrySink* sink = nullptr;
-        eye->Open(&sink);
-        if (sink) {
+        if (SUCCEEDED(eye->Open(&sink)) && sink) {
             // Upper eyelid curve
             sink->BeginFigure(D2D1::Point2F(cx - r, cy), D2D1_FIGURE_BEGIN_HOLLOW);
             sink->AddBezier(D2D1::BezierSegment(
@@ -1323,29 +1417,28 @@ void D2DEngine::DrawIconEye(float cx, float cy, float size, ID2D1Brush* brush, I
             sink->EndFigure(D2D1_FIGURE_END_CLOSED);
             sink->Close();
             sink->Release();
-            target->DrawGeometry(eye, brush, 1.8f * m_dpiScale, RoundStrokeStyle);
+            target->DrawGeometry(eye, brush, strokeW, RoundStrokeStyle);
         }
         eye->Release();
     }
     // Iris / Pupil circle
-    D2D1_ELLIPSE pupil = D2D1::Ellipse(D2D1::Point2F(cx, cy), size * 0.16f, size * 0.16f);
-    target->FillEllipse(pupil, brush);
+    target->FillEllipse(D2D1::Ellipse(D2D1::Point2F(cx, cy), 2.5f * s, 2.5f * s), brush);
 }
 
 void D2DEngine::DrawIconFileDocument(float cx, float cy, float size, ID2D1Brush* brush, ID2D1RenderTarget* rt) {
     ID2D1RenderTarget* target = rt ? rt : m_renderTarget;
     if (!target || !brush) return;
+    float s = (size > 0.0f ? size : 16.0f) / 24.0f;
+    float strokeW = 1.6f * (size / 16.0f);
 
-    float w = size * 0.34f;
-    float h = size * 0.44f;
-    float fold = size * 0.15f;
+    float w = 6.5f * s;
+    float h = 8.5f * s;
+    float fold = 4.0f * s;
 
     ID2D1PathGeometry* doc = nullptr;
-    m_d2dFactory->CreatePathGeometry(&doc);
-    if (doc) {
+    if (m_d2dFactory && SUCCEEDED(m_d2dFactory->CreatePathGeometry(&doc)) && doc) {
         ID2D1GeometrySink* sink = nullptr;
-        doc->Open(&sink);
-        if (sink) {
+        if (SUCCEEDED(doc->Open(&sink)) && sink) {
             sink->BeginFigure(D2D1::Point2F(cx - w, cy - h), D2D1_FIGURE_BEGIN_HOLLOW);
             sink->AddLine(D2D1::Point2F(cx + w - fold, cy - h));
             sink->AddLine(D2D1::Point2F(cx + w, cy - h + fold));
@@ -1354,34 +1447,39 @@ void D2DEngine::DrawIconFileDocument(float cx, float cy, float size, ID2D1Brush*
             sink->EndFigure(D2D1_FIGURE_END_CLOSED);
             sink->Close();
             sink->Release();
-            target->DrawGeometry(doc, brush, 1.8f * m_dpiScale, RoundStrokeStyle);
+            target->DrawGeometry(doc, brush, strokeW, RoundStrokeStyle);
         }
         doc->Release();
     }
     // Corner fold lines
-    target->DrawLine(D2D1::Point2F(cx + w - fold, cy - h), D2D1::Point2F(cx + w - fold, cy - h + fold), brush, 1.5f * m_dpiScale, RoundStrokeStyle);
-    target->DrawLine(D2D1::Point2F(cx + w - fold, cy - h + fold), D2D1::Point2F(cx + w, cy - h + fold), brush, 1.5f * m_dpiScale, RoundStrokeStyle);
+    target->DrawLine(D2D1::Point2F(cx + w - fold, cy - h), D2D1::Point2F(cx + w - fold, cy - h + fold), brush, strokeW, RoundStrokeStyle);
+    target->DrawLine(D2D1::Point2F(cx + w - fold, cy - h + fold), D2D1::Point2F(cx + w, cy - h + fold), brush, strokeW, RoundStrokeStyle);
+
+    // Document lines
+    target->DrawLine(D2D1::Point2F(cx - w + 3.0f * s, cy - 0.5f * s), D2D1::Point2F(cx + w - 3.0f * s, cy - 0.5f * s), brush, strokeW * 0.9f, RoundStrokeStyle);
+    target->DrawLine(D2D1::Point2F(cx - w + 3.0f * s, cy + 2.8f * s), D2D1::Point2F(cx + w - 3.0f * s, cy + 2.8f * s), brush, strokeW * 0.9f, RoundStrokeStyle);
+    target->DrawLine(D2D1::Point2F(cx - w + 3.0f * s, cy + 6.0f * s), D2D1::Point2F(cx + 0.5f * s, cy + 6.0f * s), brush, strokeW * 0.9f, RoundStrokeStyle);
 }
 
 void D2DEngine::DrawIconExternalLink(float cx, float cy, float size, ID2D1Brush* brush, ID2D1RenderTarget* rt) {
     ID2D1RenderTarget* target = rt ? rt : m_renderTarget;
     if (!target || !brush) return;
-
-    float s = size / 24.0f;
-    float strokeW = 1.6f * s;
+    float s = (size > 0.0f ? size : 16.0f) / 24.0f;
+    float strokeW = 1.6f * (size / 16.0f);
 
     // 1. Box with open top-right corner
     ID2D1PathGeometry* path = nullptr;
-    m_d2dFactory->CreatePathGeometry(&path);
-    if (path) {
+    if (m_d2dFactory && SUCCEEDED(m_d2dFactory->CreatePathGeometry(&path)) && path) {
         ID2D1GeometrySink* sink = nullptr;
-        path->Open(&sink);
-        if (sink) {
-            sink->BeginFigure(D2D1::Point2F(cx + 1.2f * s, cy - 6.2f * s), D2D1_FIGURE_BEGIN_HOLLOW);
-            sink->AddLine(D2D1::Point2F(cx - 6.2f * s, cy - 6.2f * s));
-            sink->AddLine(D2D1::Point2F(cx - 6.2f * s, cy + 6.2f * s));
-            sink->AddLine(D2D1::Point2F(cx + 6.2f * s, cy + 6.2f * s));
-            sink->AddLine(D2D1::Point2F(cx + 6.2f * s, cy - 1.2f * s));
+        if (SUCCEEDED(path->Open(&sink)) && sink) {
+            sink->BeginFigure(D2D1::Point2F(cx + 1.5f * s, cy - 7.5f * s), D2D1_FIGURE_BEGIN_HOLLOW);
+            sink->AddLine(D2D1::Point2F(cx - 5.5f * s, cy - 7.5f * s));
+            sink->AddArc(D2D1::ArcSegment(D2D1::Point2F(cx - 7.5f * s, cy - 5.5f * s), D2D1::SizeF(2.0f * s, 2.0f * s), 0.0f, D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE, D2D1_ARC_SIZE_SMALL));
+            sink->AddLine(D2D1::Point2F(cx - 7.5f * s, cy + 5.5f * s));
+            sink->AddArc(D2D1::ArcSegment(D2D1::Point2F(cx - 5.5f * s, cy + 7.5f * s), D2D1::SizeF(2.0f * s, 2.0f * s), 0.0f, D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE, D2D1_ARC_SIZE_SMALL));
+            sink->AddLine(D2D1::Point2F(cx + 5.5f * s, cy + 7.5f * s));
+            sink->AddArc(D2D1::ArcSegment(D2D1::Point2F(cx + 7.5f * s, cy + 5.5f * s), D2D1::SizeF(2.0f * s, 2.0f * s), 0.0f, D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE, D2D1_ARC_SIZE_SMALL));
+            sink->AddLine(D2D1::Point2F(cx + 7.5f * s, cy - 1.5f * s));
             sink->EndFigure(D2D1_FIGURE_END_OPEN);
             sink->Close();
             sink->Release();
@@ -1391,28 +1489,85 @@ void D2DEngine::DrawIconExternalLink(float cx, float cy, float size, ID2D1Brush*
     }
 
     // 2. Diagonal Arrow pointing to top-right
-    D2D1_POINT_2F arrowTip = D2D1::Point2F(cx + 6.2f * s, cy - 6.2f * s);
+    D2D1_POINT_2F arrowTip = D2D1::Point2F(cx + 7.5f * s, cy - 7.5f * s);
     D2D1_POINT_2F arrowBase = D2D1::Point2F(cx - 0.5f * s, cy + 0.5f * s);
     target->DrawLine(arrowBase, arrowTip, brush, strokeW, RoundStrokeStyle);
 
     // 3. Arrowhead barbs
-    target->DrawLine(D2D1::Point2F(arrowTip.x - 4.5f * s, arrowTip.y), arrowTip, brush, strokeW, RoundStrokeStyle);
-    target->DrawLine(D2D1::Point2F(arrowTip.x, arrowTip.y + 4.5f * s), arrowTip, brush, strokeW, RoundStrokeStyle);
+    target->DrawLine(D2D1::Point2F(arrowTip.x - 4.8f * s, arrowTip.y), arrowTip, brush, strokeW, RoundStrokeStyle);
+    target->DrawLine(D2D1::Point2F(arrowTip.x, arrowTip.y + 4.8f * s), arrowTip, brush, strokeW, RoundStrokeStyle);
 }
 
 void D2DEngine::DrawIconHamburger(float cx, float cy, float size, ID2D1Brush* brush, ID2D1RenderTarget* rt) {
     ID2D1RenderTarget* target = rt ? rt : m_renderTarget;
     if (!target || !brush) return;
+    float s = (size > 0.0f ? size : 16.0f) / 24.0f;
+    float strokeW = 1.6f * (size / 16.0f);
 
-    float s = size / 24.0f;
-    float halfW = 6.0f * s;
-    float strokeW = 1.7f * s;
-    float yOffset = 4.6f * s;
+    float halfW = 7.0f * s;
+    float yOffset = 5.0f * s;
 
     // Three horizontal lines with rounded caps
     target->DrawLine(D2D1::Point2F(cx - halfW, cy - yOffset), D2D1::Point2F(cx + halfW, cy - yOffset), brush, strokeW, RoundStrokeStyle);
     target->DrawLine(D2D1::Point2F(cx - halfW, cy),           D2D1::Point2F(cx + halfW, cy),           brush, strokeW, RoundStrokeStyle);
     target->DrawLine(D2D1::Point2F(cx - halfW, cy + yOffset), D2D1::Point2F(cx + halfW, cy + yOffset), brush, strokeW, RoundStrokeStyle);
+}
+
+void D2DEngine::DrawIconFolder(float cx, float cy, float size, ID2D1Brush* brush, ID2D1RenderTarget* rt) {
+    ID2D1RenderTarget* target = rt ? rt : m_renderTarget;
+    if (!target || !brush) return;
+    float s = (size > 0.0f ? size : 16.0f) / 24.0f;
+    float strokeW = 1.6f * (size / 16.0f);
+
+    float w = 8.0f * s;
+    float h = 6.0f * s;
+    float topY = cy - h;
+    float botY = cy + h;
+
+    ID2D1PathGeometry* folderPath = nullptr;
+    if (m_d2dFactory && SUCCEEDED(m_d2dFactory->CreatePathGeometry(&folderPath)) && folderPath) {
+        ID2D1GeometrySink* sink = nullptr;
+        if (SUCCEEDED(folderPath->Open(&sink)) && sink) {
+            sink->BeginFigure(D2D1::Point2F(cx - w, botY - 1.5f * s), D2D1_FIGURE_BEGIN_HOLLOW);
+            sink->AddLine(D2D1::Point2F(cx - w, topY + 1.5f * s));
+            sink->AddArc(D2D1::ArcSegment(D2D1::Point2F(cx - w + 1.5f * s, topY), D2D1::SizeF(1.5f * s, 1.5f * s), 0.0f, D2D1_SWEEP_DIRECTION_CLOCKWISE, D2D1_ARC_SIZE_SMALL));
+            sink->AddLine(D2D1::Point2F(cx - 3.0f * s, topY));
+            sink->AddLine(D2D1::Point2F(cx - 1.0f * s, topY + 2.5f * s));
+            sink->AddLine(D2D1::Point2F(cx + w - 1.5f * s, topY + 2.5f * s));
+            sink->AddArc(D2D1::ArcSegment(D2D1::Point2F(cx + w, topY + 4.0f * s), D2D1::SizeF(1.5f * s, 1.5f * s), 0.0f, D2D1_SWEEP_DIRECTION_CLOCKWISE, D2D1_ARC_SIZE_SMALL));
+            sink->AddLine(D2D1::Point2F(cx + w, botY - 1.5f * s));
+            sink->AddArc(D2D1::ArcSegment(D2D1::Point2F(cx + w - 1.5f * s, botY), D2D1::SizeF(1.5f * s, 1.5f * s), 0.0f, D2D1_SWEEP_DIRECTION_CLOCKWISE, D2D1_ARC_SIZE_SMALL));
+            sink->AddLine(D2D1::Point2F(cx - w + 1.5f * s, botY));
+            sink->AddArc(D2D1::ArcSegment(D2D1::Point2F(cx - w, botY - 1.5f * s), D2D1::SizeF(1.5f * s, 1.5f * s), 0.0f, D2D1_SWEEP_DIRECTION_CLOCKWISE, D2D1_ARC_SIZE_SMALL));
+            sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+            sink->Close();
+            sink->Release();
+            target->DrawGeometry(folderPath, brush, strokeW, RoundStrokeStyle);
+        }
+        folderPath->Release();
+    }
+}
+
+void D2DEngine::DrawIconSun(float cx, float cy, float size, ID2D1Brush* brush, ID2D1RenderTarget* rt) {
+    ID2D1RenderTarget* target = rt ? rt : m_renderTarget;
+    if (!target || !brush) return;
+    float s = (size > 0.0f ? size : 16.0f) / 24.0f;
+    float strokeW = 1.6f * (size / 16.0f);
+
+    target->DrawEllipse(D2D1::Ellipse(D2D1::Point2F(cx, cy), 3.6f * s, 3.6f * s), brush, strokeW);
+
+    for (int i = 0; i < 8; ++i) {
+        float angle = (float)i * 45.0f * 3.14159265f / 180.0f;
+        float cosA = cosf(angle);
+        float sinA = sinf(angle);
+        float r1 = 5.4f * s;
+        float r2 = 7.6f * s;
+        target->DrawLine(
+            D2D1::Point2F(cx + r1 * cosA, cy + r1 * sinA),
+            D2D1::Point2F(cx + r2 * cosA, cy + r2 * sinA),
+            brush, strokeW, RoundStrokeStyle
+        );
+    }
 }
 
 // =========================================================================

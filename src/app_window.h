@@ -75,7 +75,8 @@ enum IconType {
     ICON_PASTE,
     ICON_SETTINGS,
     ICON_OPEN_WITH,
-    ICON_MORE
+    ICON_MORE,
+    ICON_FOLDER
 };
 
 enum ContextMenuCommand {
