@@ -1174,56 +1174,65 @@ void AppWindow::NavigateFolder(int delta) {
 
     std::wstring folder = current.substr(0, lastSlash);
 
-    // Rebuild the peer list only when the directory changed or cache is empty
-    bool sameDir = (s_peerCacheDir.size() == folder.size() && _wcsicmp(s_peerCacheDir.c_str(), folder.c_str()) == 0);
-    if (!sameDir || s_peerCache.empty()) {
-        s_peerCache.clear();
-        if (!BuildFolderPeerList(folder, s_peerCache)) return;
-        s_peerCacheDir = folder;
-    }
-
-    const std::vector<std::wstring>& peerFiles = s_peerCache;
-    if (peerFiles.size() <= 1) return;
-
+    std::vector<std::wstring> peerFiles;
     int curIdx = -1;
-    for (size_t i = 0; i < peerFiles.size(); i++) {
-        if (_wcsicmp(peerFiles[i].c_str(), m_currentFilePath.c_str()) == 0 ||
-            _wcsicmp(peerFiles[i].c_str(), current.c_str()) == 0) {
-            curIdx = (int)i;
-            break;
-        }
-    }
 
-    // Fallback if not found in cache (e.g. file was newly added or path casing differed)
-    if (curIdx < 0) {
-        s_peerCache.clear();
-        if (BuildFolderPeerList(folder, s_peerCache)) {
+    // 1. Primary: Query active Windows Explorer or Desktop window directly!
+    // This obtains the EXACT placement order and visual sequence as displayed in the folder view
+    // (respecting user sort order by name, date modified, type, size, grouped view, etc.).
+    if (ExplorerHook::GetExplorerViewItems(m_currentFilePath, peerFiles, curIdx) && !peerFiles.empty()) {
+        s_peerCache = peerFiles;
+        s_peerCacheDir = folder;
+    } else {
+        // 2. Fallback: Filesystem directory enumeration when opened standalone without an Explorer window
+        bool sameDir = (s_peerCacheDir.size() == folder.size() && _wcsicmp(s_peerCacheDir.c_str(), folder.c_str()) == 0);
+        if (!sameDir || s_peerCache.empty()) {
+            s_peerCache.clear();
+            if (!BuildFolderPeerList(folder, s_peerCache)) return;
             s_peerCacheDir = folder;
-            for (size_t i = 0; i < s_peerCache.size(); i++) {
-                if (_wcsicmp(s_peerCache[i].c_str(), m_currentFilePath.c_str()) == 0 ||
-                    _wcsicmp(s_peerCache[i].c_str(), current.c_str()) == 0) {
-                    curIdx = (int)i;
-                    break;
-                }
+        }
+        peerFiles = s_peerCache;
+
+        for (size_t i = 0; i < peerFiles.size(); i++) {
+            if (_wcsicmp(peerFiles[i].c_str(), m_currentFilePath.c_str()) == 0 ||
+                _wcsicmp(peerFiles[i].c_str(), current.c_str()) == 0) {
+                curIdx = (int)i;
+                break;
             }
         }
-        if (curIdx < 0 && !s_peerCache.empty()) {
+        if (curIdx < 0 && !peerFiles.empty()) {
             curIdx = 0;
         }
     }
 
-    if (curIdx >= 0 && !peerFiles.empty()) {
-        int nextIdx = curIdx + delta;
-        if (m_loopFolderNav) {
-            nextIdx = (nextIdx + (int)peerFiles.size()) % (int)peerFiles.size();
-        } else {
-            if (nextIdx < 0 || nextIdx >= (int)peerFiles.size()) {
-                return;
-            }
+    int totalCount = (int)peerFiles.size();
+    if (totalCount <= 1 || curIdx < 0) return;
+
+    // Step to the next or previous index based on arrow key
+    int nextIdx = curIdx + delta;
+
+    // Continuous loop navigation:
+    // If at the end item -> start from 1st item
+    // If at the 1st item -> wrap around to the end item
+    if (m_loopFolderNav) {
+        if (nextIdx >= totalCount) {
+            nextIdx = 0;
+        } else if (nextIdx < 0) {
+            nextIdx = totalCount - 1;
         }
-        OpenFile(peerFiles[nextIdx]);
-        InvalidateRect(m_hwnd, NULL, FALSE);
+    } else {
+        if (nextIdx < 0 || nextIdx >= totalCount) {
+            return;
+        }
     }
+
+    std::wstring nextFile = peerFiles[nextIdx];
+
+    // Synchronize Windows Explorer selection so Explorer's live highlight matches the preview
+    ExplorerHook::SelectExplorerItem(nextFile);
+
+    OpenFile(nextFile);
+    InvalidateRect(m_hwnd, NULL, FALSE);
 
     // Avoid pathological memory: the cache only ever holds one folder's names.
     if (s_peerCache.size() > 20000) s_peerCache.clear();

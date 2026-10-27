@@ -4,6 +4,7 @@
 #endif
 #include <windows.h>
 #include <string>
+#include <vector>
 
 namespace WinPreview {
 
@@ -19,6 +20,8 @@ struct HotkeyConfig {
 class ExplorerHook {
 public:
     static bool GetSelectedExplorerPath(std::wstring& outPath);
+    static bool GetExplorerViewItems(const std::wstring& targetPath, std::vector<std::wstring>& outItems, int& outCurrentIndex);
+    static bool SelectExplorerItem(const std::wstring& itemPath);
     static bool InstallHook(HWND targetHwnd);
     static void UninstallHook();
     static bool IsHookInstalled();

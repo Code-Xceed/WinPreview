@@ -1,6 +1,6 @@
 {
-  "version": "1.2.5",
+  "version": "1.2.6",
   "release_date": "2026-10-27",
   "download_url": "https://github.com/Code-Xceed/WinPreview/releases/latest/download/WinPreview-Setup-x64.exe",
-  "changelog": "WinPreview v1.2.5 - Universal File & Folder Navigation: Seamless Next/Previous arrow navigation across all file types (images, videos, audio, PDFs, text/code, spreadsheets, markdown, fonts, archives, folders, and binaries) with unified Explorer natural sorting, auto-saving text edits, and responsive media HUD skip controls."
+  "changelog": "WinPreview v1.2.6 - Live Explorer View Sequence Sync: Next and Previous arrow navigation now dynamically synchronizes with Windows Explorer and Desktop view placement. Opening item 12 in a folder and pressing Right Arrow moves to item 13 (and Left Arrow to item 11) in the exact displayed order regardless of sort criteria, with full continuous looping from the last item back to the first item, and real-time live Explorer selection synchronization."
 }

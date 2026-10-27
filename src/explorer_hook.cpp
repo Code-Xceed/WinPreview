@@ -474,6 +474,283 @@ bool ExplorerHook::GetSelectedExplorerPath(std::wstring& outPath) {
     return found && !outPath.empty();
 }
 
+bool ExplorerHook::GetExplorerViewItems(
+    const std::wstring& targetPath,
+    std::vector<std::wstring>& outItems,
+    int& outCurrentIndex)
+{
+    outItems.clear();
+    outCurrentIndex = -1;
+    if (targetPath.empty()) return false;
+
+    std::wstring current = targetPath;
+    while (!current.empty() && (current.back() == L'\\' || current.back() == L'/')) {
+        current.pop_back();
+    }
+    size_t lastSlash = current.find_last_of(L"\\/");
+    if (lastSlash == std::wstring::npos) return false;
+
+    std::wstring folder = current.substr(0, lastSlash);
+
+    IShellWindows* psw = nullptr;
+    if (FAILED(CoCreateInstance(CLSID_ShellWindows, NULL, CLSCTX_ALL, IID_IShellWindows, (void**)&psw)) || !psw) {
+        return false;
+    }
+
+    auto extractItemsFromView = [&](IShellView* psv) -> bool {
+        if (!psv) return false;
+        IFolderView2* pfv2 = nullptr;
+        if (FAILED(psv->QueryInterface(IID_IFolderView2, (void**)&pfv2)) || !pfv2) {
+            return false;
+        }
+
+        int count = 0;
+        HRESULT hr = pfv2->ItemCount(SVGIO_ALLVIEW, &count);
+        if (FAILED(hr) || count <= 0) {
+            pfv2->Release();
+            return false;
+        }
+
+        outItems.reserve(count);
+        for (int i = 0; i < count; ++i) {
+            IShellItem* psi = nullptr;
+            if (SUCCEEDED(pfv2->GetItem(i, IID_IShellItem, (void**)&psi)) && psi) {
+                PWSTR psz = nullptr;
+                if (SUCCEEDED(psi->GetDisplayName(SIGDN_FILESYSPATH, &psz)) && psz) {
+                    std::wstring itemPath = psz;
+                    CoTaskMemFree(psz);
+                    if (!itemPath.empty()) {
+                        if (_wcsicmp(itemPath.c_str(), targetPath.c_str()) == 0 ||
+                            _wcsicmp(itemPath.c_str(), current.c_str()) == 0) {
+                            outCurrentIndex = (int)outItems.size();
+                        }
+                        outItems.push_back(std::move(itemPath));
+                    }
+                }
+                psi->Release();
+            }
+        }
+        pfv2->Release();
+        return !outItems.empty();
+    };
+
+    bool found = false;
+
+    // Check Desktop if the target path is in Desktop directory
+    WCHAR desktopPath[MAX_PATH] = {};
+    SHGetFolderPathW(NULL, CSIDL_DESKTOPDIRECTORY, NULL, 0, desktopPath);
+    WCHAR commonDesktopPath[MAX_PATH] = {};
+    SHGetFolderPathW(NULL, CSIDL_COMMON_DESKTOPDIRECTORY, NULL, 0, commonDesktopPath);
+
+    bool isTargetOnDesktop = (_wcsicmp(folder.c_str(), desktopPath) == 0 ||
+                              _wcsicmp(folder.c_str(), commonDesktopPath) == 0);
+
+    if (isTargetOnDesktop) {
+        VARIANT vEmpty = {};
+        VariantInit(&vEmpty);
+        long lHwnd = 0;
+        IDispatch* pDisp = nullptr;
+        if (SUCCEEDED(psw->FindWindowSW(&vEmpty, &vEmpty, 8 /* SWC_DESKTOP */, &lHwnd, 1, &pDisp)) && pDisp) {
+            IServiceProvider* psp = nullptr;
+            if (SUCCEEDED(pDisp->QueryInterface(IID_IServiceProvider, (void**)&psp)) && psp) {
+                IShellBrowser* psb = nullptr;
+                if (SUCCEEDED(psp->QueryService(SID_STopLevelBrowser, IID_IShellBrowser, (void**)&psb)) && psb) {
+                    IShellView* psv = nullptr;
+                    if (SUCCEEDED(psb->QueryActiveShellView(&psv)) && psv) {
+                        found = extractItemsFromView(psv);
+                        psv->Release();
+                    }
+                    psb->Release();
+                }
+                psp->Release();
+            }
+            pDisp->Release();
+        }
+    }
+
+    if (!found) {
+        long count = 0;
+        psw->get_Count(&count);
+
+        for (long i = 0; i < count && !found; ++i) {
+            VARIANT v; v.vt = VT_I4; v.lVal = i;
+            IDispatch* pdisp = nullptr;
+            if (SUCCEEDED(psw->Item(v, &pdisp)) && pdisp) {
+                IWebBrowserApp* pwba = nullptr;
+                if (SUCCEEDED(pdisp->QueryInterface(IID_IWebBrowserApp, (void**)&pwba)) && pwba) {
+                    IServiceProvider* psp = nullptr;
+                    if (SUCCEEDED(pwba->QueryInterface(IID_IServiceProvider, (void**)&psp)) && psp) {
+                        IShellBrowser* psb = nullptr;
+                        if (SUCCEEDED(psp->QueryService(SID_STopLevelBrowser, IID_IShellBrowser, (void**)&psb)) && psb) {
+                            IShellView* psv = nullptr;
+                            if (SUCCEEDED(psb->QueryActiveShellView(&psv)) && psv) {
+                                IFolderView* pfv = nullptr;
+                                if (SUCCEEDED(psv->QueryInterface(IID_IFolderView, (void**)&pfv)) && pfv) {
+                                    IPersistFolder2* ppf2 = nullptr;
+                                    if (SUCCEEDED(pfv->GetFolder(IID_IPersistFolder2, (void**)&ppf2)) && ppf2) {
+                                        PIDLIST_ABSOLUTE folderPidl = nullptr;
+                                        if (SUCCEEDED(ppf2->GetCurFolder(&folderPidl)) && folderPidl) {
+                                            WCHAR szWindowFolder[MAX_PATH] = {};
+                                            if (SHGetPathFromIDListW(folderPidl, szWindowFolder)) {
+                                                if (_wcsicmp(szWindowFolder, folder.c_str()) == 0) {
+                                                    found = extractItemsFromView(psv);
+                                                }
+                                            }
+                                            ILFree(folderPidl);
+                                        }
+                                        ppf2->Release();
+                                    }
+                                    pfv->Release();
+                                }
+                                psv->Release();
+                            }
+                            psb->Release();
+                        }
+                        psp->Release();
+                    }
+                    pwba->Release();
+                }
+                pdisp->Release();
+            }
+        }
+    }
+
+    psw->Release();
+    return found && !outItems.empty();
+}
+
+bool ExplorerHook::SelectExplorerItem(const std::wstring& itemPath) {
+    if (itemPath.empty()) return false;
+
+    std::wstring current = itemPath;
+    while (!current.empty() && (current.back() == L'\\' || current.back() == L'/')) {
+        current.pop_back();
+    }
+    size_t lastSlash = current.find_last_of(L"\\/");
+    if (lastSlash == std::wstring::npos) return false;
+
+    std::wstring folder = current.substr(0, lastSlash);
+
+    IShellWindows* psw = nullptr;
+    if (FAILED(CoCreateInstance(CLSID_ShellWindows, NULL, CLSCTX_ALL, IID_IShellWindows, (void**)&psw)) || !psw) {
+        return false;
+    }
+
+    auto selectInView = [&](IShellView* psv) -> bool {
+        if (!psv) return false;
+        IFolderView2* pfv2 = nullptr;
+        if (FAILED(psv->QueryInterface(IID_IFolderView2, (void**)&pfv2)) || !pfv2) {
+            return false;
+        }
+
+        int count = 0;
+        pfv2->ItemCount(SVGIO_ALLVIEW, &count);
+        bool selected = false;
+
+        for (int i = 0; i < count; ++i) {
+            IShellItem* psi = nullptr;
+            if (SUCCEEDED(pfv2->GetItem(i, IID_IShellItem, (void**)&psi)) && psi) {
+                PWSTR psz = nullptr;
+                if (SUCCEEDED(psi->GetDisplayName(SIGDN_FILESYSPATH, &psz)) && psz) {
+                    if (_wcsicmp(psz, itemPath.c_str()) == 0 || _wcsicmp(psz, current.c_str()) == 0) {
+                        pfv2->SelectItem(i, SVSI_SELECT | SVSI_DESELECTOTHERS | SVSI_ENSUREVISIBLE | SVSI_FOCUSED);
+                        selected = true;
+                    }
+                    CoTaskMemFree(psz);
+                }
+                psi->Release();
+                if (selected) break;
+            }
+        }
+
+        pfv2->Release();
+        return selected;
+    };
+
+    bool done = false;
+
+    WCHAR desktopPath[MAX_PATH] = {};
+    SHGetFolderPathW(NULL, CSIDL_DESKTOPDIRECTORY, NULL, 0, desktopPath);
+    WCHAR commonDesktopPath[MAX_PATH] = {};
+    SHGetFolderPathW(NULL, CSIDL_COMMON_DESKTOPDIRECTORY, NULL, 0, commonDesktopPath);
+
+    bool isTargetOnDesktop = (_wcsicmp(folder.c_str(), desktopPath) == 0 ||
+                              _wcsicmp(folder.c_str(), commonDesktopPath) == 0);
+
+    if (isTargetOnDesktop) {
+        VARIANT vEmpty = {};
+        VariantInit(&vEmpty);
+        long lHwnd = 0;
+        IDispatch* pDisp = nullptr;
+        if (SUCCEEDED(psw->FindWindowSW(&vEmpty, &vEmpty, 8 /* SWC_DESKTOP */, &lHwnd, 1, &pDisp)) && pDisp) {
+            IServiceProvider* psp = nullptr;
+            if (SUCCEEDED(pDisp->QueryInterface(IID_IServiceProvider, (void**)&psp)) && psp) {
+                IShellBrowser* psb = nullptr;
+                if (SUCCEEDED(psp->QueryService(SID_STopLevelBrowser, IID_IShellBrowser, (void**)&psb)) && psb) {
+                    IShellView* psv = nullptr;
+                    if (SUCCEEDED(psb->QueryActiveShellView(&psv)) && psv) {
+                        done = selectInView(psv);
+                        psv->Release();
+                    }
+                    psb->Release();
+                }
+                psp->Release();
+            }
+            pDisp->Release();
+        }
+    }
+
+    if (!done) {
+        long count = 0;
+        psw->get_Count(&count);
+
+        for (long i = 0; i < count && !done; ++i) {
+            VARIANT v; v.vt = VT_I4; v.lVal = i;
+            IDispatch* pdisp = nullptr;
+            if (SUCCEEDED(psw->Item(v, &pdisp)) && pdisp) {
+                IWebBrowserApp* pwba = nullptr;
+                if (SUCCEEDED(pdisp->QueryInterface(IID_IWebBrowserApp, (void**)&pwba)) && pwba) {
+                    IServiceProvider* psp = nullptr;
+                    if (SUCCEEDED(pwba->QueryInterface(IID_IServiceProvider, (void**)&psp)) && psp) {
+                        IShellBrowser* psb = nullptr;
+                        if (SUCCEEDED(psp->QueryService(SID_STopLevelBrowser, IID_IShellBrowser, (void**)&psb)) && psb) {
+                            IShellView* psv = nullptr;
+                            if (SUCCEEDED(psb->QueryActiveShellView(&psv)) && psv) {
+                                IFolderView* pfv = nullptr;
+                                if (SUCCEEDED(psv->QueryInterface(IID_IFolderView, (void**)&pfv)) && pfv) {
+                                    IPersistFolder2* ppf2 = nullptr;
+                                    if (SUCCEEDED(pfv->GetFolder(IID_IPersistFolder2, (void**)&ppf2)) && ppf2) {
+                                        PIDLIST_ABSOLUTE folderPidl = nullptr;
+                                        if (SUCCEEDED(ppf2->GetCurFolder(&folderPidl)) && folderPidl) {
+                                            WCHAR szWindowFolder[MAX_PATH] = {};
+                                            if (SHGetPathFromIDListW(folderPidl, szWindowFolder)) {
+                                                if (_wcsicmp(szWindowFolder, folder.c_str()) == 0) {
+                                                    done = selectInView(psv);
+                                                }
+                                            }
+                                            ILFree(folderPidl);
+                                        }
+                                        ppf2->Release();
+                                    }
+                                    pfv->Release();
+                                }
+                                psv->Release();
+                            }
+                            psb->Release();
+                        }
+                        psp->Release();
+                    }
+                    pwba->Release();
+                }
+                pdisp->Release();
+            }
+        }
+    }
+
+    psw->Release();
+    return done;
+}
+
 static LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
     if (nCode == HC_ACTION && (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN)) {
         if (g_synthesizingSpace.exchange(false, std::memory_order_acq_rel)) {
