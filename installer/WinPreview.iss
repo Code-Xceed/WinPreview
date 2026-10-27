@@ -4,7 +4,7 @@
 ; =====================================================================
 
 #define MyAppName "WinPreview"
-#define MyAppVersion "1.1.0"
+#define MyAppVersion "1.2.1"
 #define MyAppPublisher "Code-Xceed"
 #define MyAppURL "https://github.com/Code-Xceed/WinPreview"
 #define MyAppExeName "WinPreview.exe"
@@ -168,6 +168,9 @@ begin
   Sleep(150);
   Result := '';
 end;
+
+
+
 
 
 

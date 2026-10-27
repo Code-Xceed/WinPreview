@@ -158,6 +158,7 @@ private:
 
     // Audio Rich UI & Animation
     ID2D1Bitmap* m_audioAlbumArt = nullptr;
+    ID2D1BitmapBrush* m_audioAlbumBrush = nullptr;
     float m_audioDiscAngle = 0.0f;
     float m_audioAnimTime = 0.0f;
     float m_audioVisualizerBars[64] = {};

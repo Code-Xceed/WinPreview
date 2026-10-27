@@ -1,6 +1,6 @@
 {
-  "version": "1.1.0",
+  "version": "1.2.1",
   "release_date": "2026-10-26",
   "download_url": "https://github.com/Code-Xceed/WinPreview/releases/latest/download/WinPreview-Setup-x64.exe",
-  "changelog": "WinPreview v1.1.0 - Production-Grade UI Consistency & Polish: System-wide elimination of jitters and edge blurriness via integer pixel snapping. Smooth 180ms ease-out spring physics for Inspector, Search, Overflow Menu, and Settings modals. Monospace tabular numbers on media timer displays to eliminate text shifting during playback. Tactile 0.96 scale active press feedback across all buttons and pills. Concentric radius hierarchy and refined 1px thumbnail outlines."
+  "changelog": "WinPreview v1.2.1 - 60 FPS Smooth Vinyl Animation & Global Settings Unification: Buttery smooth 60 FPS vinyl disc audio animation with zero-allocation texture fills (ID2D1BitmapBrush) and delta-time physics, removal of redundant settings gear buttons from all document dock toolbars, non-interactive Zen Editorial empty state status badge, unified single global Settings panel (Ctrl+,), Zen Editorial Tech Obsidian Dark mode palette, precision corner crosshairs (+), and pixel-perfect Direct2D GPU rendering."
 }

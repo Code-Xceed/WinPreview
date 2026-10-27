@@ -74,8 +74,17 @@ public:
     ID2D1SolidColorBrush* BrushGreen = nullptr;
     ID2D1SolidColorBrush* BrushAmber = nullptr;
     ID2D1SolidColorBrush* BrushRed = nullptr;
+    ID2D1SolidColorBrush* BrushCrosshair = nullptr;
+    ID2D1SolidColorBrush* BrushBorderHighlight = nullptr;
+    ID2D1SolidColorBrush* BrushTextDim = nullptr;
+    ID2D1SolidColorBrush* BrushChipBg = nullptr;
+    ID2D1SolidColorBrush* BrushChipBorder = nullptr;
+    ID2D1SolidColorBrush* BrushCrimson = nullptr;
+    ID2D1SolidColorBrush* BrushGinkgo = nullptr;
 
     // Text formats
+    IDWriteTextFormat* FontDisplay = nullptr;
+    IDWriteTextFormat* FontDisplayCenter = nullptr;
     IDWriteTextFormat* FontHero = nullptr;
     IDWriteTextFormat* FontHeroCenter = nullptr;
     IDWriteTextFormat* FontTitle = nullptr;
@@ -90,6 +99,8 @@ public:
     IDWriteTextFormat* FontCaptionRight = nullptr;
     IDWriteTextFormat* FontMenu = nullptr;
     IDWriteTextFormat* FontTimer = nullptr;
+    IDWriteTextFormat* FontUtilityMono = nullptr;
+    IDWriteTextFormat* FontUtilityMonoCenter = nullptr;
 
     // Stroke styles
     ID2D1StrokeStyle* RoundStrokeStyle = nullptr;
@@ -134,6 +145,10 @@ public:
 
     // Micro-Tooltip Renderer (Smooth Alpha, Direct2D Anti-aliased)
     void DrawMicroTooltip(float centerX, float topY, const WCHAR* text, float alpha, bool above = false);
+
+    // Zen Editorial Tech Drawing Helpers
+    void DrawCornerCrosshairs(const D2D1_RECT_F& rect, float armLength = 5.0f, float strokeWidth = 1.0f, ID2D1RenderTarget* rt = nullptr);
+    void DrawTechChip(const D2D1_RECT_F& rect, const wchar_t* label, const wchar_t* countOrTag = nullptr, bool active = false, ID2D1RenderTarget* rt = nullptr);
 
     float GetDpiScale() const { return m_dpiScale; }
     void UpdateDpi(UINT dpi);

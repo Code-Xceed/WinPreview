@@ -8,6 +8,7 @@
 #include <propkey.h>
 #include <propvarutil.h>
 #include <shobjidl.h>
+#include <timeapi.h>
 
 namespace WinPreview {
 
@@ -136,6 +137,7 @@ AppWindow::~AppWindow() {
     SafeRelease(m_imageBitmap);
     SafeRelease(m_pdfPageBitmap);
     SafeRelease(m_audioAlbumArt);
+    SafeRelease(m_audioAlbumBrush);
     SafeRelease(m_officeBitmap);
     m_svg.Close();
     m_font.Close();
@@ -270,6 +272,8 @@ bool AppWindow::Create(HINSTANCE hInstance, int nCmdShow, bool showTrayNotificat
         }
     }
 
+    timeBeginPeriod(1);
+
     // Initialize D2D Engine factory
     if (!m_d2d.Initialize()) {
         LogTime("m_d2d.Initialize FAILED");
@@ -279,7 +283,7 @@ bool AppWindow::Create(HINSTANCE hInstance, int nCmdShow, bool showTrayNotificat
     // Defer hardware device resources & animation timer until the window is actually shown (zero GPU & 0% CPU in background)
     if (nCmdShow != SW_HIDE) {
         m_d2d.CreateDeviceResources(m_hwnd);
-        SetTimer(m_hwnd, 1, 30, NULL);
+        SetTimer(m_hwnd, 1, 16, NULL);
         m_animTimerRunning = true;
     }
 
@@ -356,6 +360,7 @@ bool AppWindow::OpenFile(const std::wstring& filePath) {
     SafeRelease(m_imageBitmap);
     SafeRelease(m_pdfPageBitmap);
     SafeRelease(m_audioAlbumArt);
+    SafeRelease(m_audioAlbumBrush);
     SafeRelease(m_officeBitmap);
     m_svg.Close();
     m_font.Close();
@@ -1691,7 +1696,7 @@ const WCHAR* AppWindow::GetButtonTooltip(int buttonId) const {
         case BTN_OPEN_WITH:
             m_openWithTooltip = L"Open with " + (m_openWithAppName.empty() ? L"Default App" : m_openWithAppName) + L" (Enter)";
             return m_openWithTooltip.c_str();
-        case BTN_SETTINGS: return L"Keybind Settings (Ctrl+,)";
+        case BTN_SETTINGS: return L"Settings (Ctrl+,)";
         case BTN_OVERFLOW_MENU: return L"More Actions (⋯)";
         case BTN_LOG_LUT: return m_media.GetLogProfileName(m_media.GetLogTransform());
         default: return nullptr;
@@ -2058,36 +2063,36 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
     bool showPdfNav = (m_docType == DocumentType::Pdf && m_totalPages > 1);
 
     if (m_docType == DocumentType::Image) {
-        if (availW >= 460.0f) dockW = 427.0f;
+        if (availW >= 460.0f) dockW = 393.0f;
         else if (availW >= 320.0f) dockW = 210.0f;
         else dockW = 136.0f;
     } else if (m_docType == DocumentType::Pdf) {
         if (showPdfNav) {
-            if (availW >= 560.0f) dockW = 538.0f;
+            if (availW >= 560.0f) dockW = 504.0f;
             else if (availW >= 380.0f) dockW = 322.0f;
             else dockW = 194.0f;
         } else {
-            if (availW >= 460.0f) dockW = 427.0f;
+            if (availW >= 460.0f) dockW = 393.0f;
             else if (availW >= 320.0f) dockW = 210.0f;
             else dockW = 136.0f;
         }
     } else if (m_docType == DocumentType::Text) {
-        if (availW >= 560.0f) dockW = 514.0f;
+        if (availW >= 560.0f) dockW = 480.0f;
         else if (availW >= 420.0f) dockW = 364.0f;
         else dockW = 232.0f;
     } else if (m_docType == DocumentType::Spreadsheet) {
-        if (availW >= 560.0f) dockW = 514.0f;
+        if (availW >= 560.0f) dockW = 480.0f;
         else if (availW >= 420.0f) dockW = 364.0f;
         else dockW = 232.0f;
     } else if (m_docType == DocumentType::Office || m_docType == DocumentType::Svg) {
-        if (availW >= 440.0f) dockW = 393.0f;
+        if (availW >= 440.0f) dockW = 359.0f;
         else if (availW >= 320.0f) dockW = 210.0f;
         else dockW = 136.0f;
     } else if (m_docType == DocumentType::Markdown || m_docType == DocumentType::Notebook) {
-        if (availW >= 320.0f) dockW = 218.0f;
+        if (availW >= 320.0f) dockW = 184.0f;
         else dockW = 88.0f;
     } else if (m_docType == DocumentType::Font) {
-        if (availW >= 280.0f) dockW = 172.0f;
+        if (availW >= 280.0f) dockW = 138.0f;
         else dockW = 74.0f;
     }
 
@@ -2226,10 +2231,6 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
 
                 m_btnOpenWithRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
                 DrawIconButton(m_btnOpenWithRect, ICON_OPEN_WITH, BTN_OPEN_WITH, true);
-                curX += 34.0f;
-
-                m_btnSettingsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-                DrawIconButton(m_btnSettingsRect, ICON_SETTINGS, BTN_SETTINGS, true);
                 curX += 34.0f;
 
                 m_btnToolbarFsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
@@ -2440,10 +2441,6 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
                     DrawIconButton(m_btnOpenWithRect, ICON_OPEN_WITH, BTN_OPEN_WITH, true);
                     curX += 34.0f;
 
-                    m_btnSettingsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-                    DrawIconButton(m_btnSettingsRect, ICON_SETTINGS, BTN_SETTINGS, true);
-                    curX += 34.0f;
-
                     m_btnToolbarFsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
                     DrawIconButton(m_btnToolbarFsRect, ICON_FULLSCREEN, BTN_TOOLBAR_FS, true);
                 } else {
@@ -2627,10 +2624,6 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
                     DrawIconButton(m_btnOpenWithRect, ICON_OPEN_WITH, BTN_OPEN_WITH, true);
                     curX += 34.0f;
 
-                    m_btnSettingsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-                    DrawIconButton(m_btnSettingsRect, ICON_SETTINGS, BTN_SETTINGS, true);
-                    curX += 34.0f;
-
                     m_btnToolbarFsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
                     DrawIconButton(m_btnToolbarFsRect, ICON_FULLSCREEN, BTN_TOOLBAR_FS, true);
                 } else {
@@ -2786,10 +2779,6 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
 
                 m_btnOpenWithRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
                 DrawIconButton(m_btnOpenWithRect, ICON_OPEN_WITH, BTN_OPEN_WITH, true);
-                curX += 34.0f;
-
-                m_btnSettingsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-                DrawIconButton(m_btnSettingsRect, ICON_SETTINGS, BTN_SETTINGS, true);
                 curX += 34.0f;
 
                 m_btnToolbarFsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
@@ -2965,10 +2954,6 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
                 DrawIconButton(m_btnOpenWithRect, ICON_OPEN_WITH, BTN_OPEN_WITH, true);
                 curX += 34.0f;
 
-                m_btnSettingsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-                DrawIconButton(m_btnSettingsRect, ICON_SETTINGS, BTN_SETTINGS, true);
-                curX += 34.0f;
-
                 m_btnToolbarFsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
                 DrawIconButton(m_btnToolbarFsRect, ICON_FULLSCREEN, BTN_TOOLBAR_FS, true);
             } else {
@@ -3125,10 +3110,6 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
                 DrawIconButton(m_btnOpenWithRect, ICON_OPEN_WITH, BTN_OPEN_WITH, true);
                 curX += 34.0f;
 
-                m_btnSettingsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-                DrawIconButton(m_btnSettingsRect, ICON_SETTINGS, BTN_SETTINGS, true);
-                curX += 34.0f;
-
                 m_btnToolbarFsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
                 DrawIconButton(m_btnToolbarFsRect, ICON_FULLSCREEN, BTN_TOOLBAR_FS, true);
             } else {
@@ -3196,10 +3177,6 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
             DrawIconButton(m_btnOpenWithRect, ICON_OPEN_WITH, BTN_OPEN_WITH, true);
             curX += 34.0f;
 
-            m_btnSettingsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-            DrawIconButton(m_btnSettingsRect, ICON_SETTINGS, BTN_SETTINGS, true);
-            curX += 34.0f;
-
             m_btnToolbarFsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
             DrawIconButton(m_btnToolbarFsRect, ICON_FULLSCREEN, BTN_TOOLBAR_FS, true);
         } else {
@@ -3223,10 +3200,6 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
 
             m_btnOpenWithRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
             DrawIconButton(m_btnOpenWithRect, ICON_OPEN_WITH, BTN_OPEN_WITH, true);
-            curX += 34.0f;
-
-            m_btnSettingsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
-            DrawIconButton(m_btnSettingsRect, ICON_SETTINGS, BTN_SETTINGS, true);
             curX += 34.0f;
 
             m_btnToolbarFsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
@@ -3261,7 +3234,7 @@ std::vector<AppWindow::OverflowMenuItem> AppWindow::GetCurrentOverflowItems() co
         items.push_back({ BTN_INFO, ICON_INFO, L"File Info", L"I", false, false, true });
         items.push_back({ BTN_OPEN_WITH, ICON_OPEN_WITH, openWithLabel, L"Enter", false, false, true });
         items.push_back({ 0, ICON_MORE, L"", L"", true, false, false }); // divider
-        items.push_back({ BTN_SETTINGS, ICON_SETTINGS, L"Keybind Settings", L"Ctrl+,", false, false, true });
+        items.push_back({ BTN_SETTINGS, ICON_SETTINGS, L"Settings", L"Ctrl+,", false, false, true });
         items.push_back({ BTN_TOOLBAR_FS, ICON_FULLSCREEN, m_isFullscreen ? L"Exit Fullscreen" : L"Fullscreen", L"F", false, false, true });
     } else if (m_docType == DocumentType::Pdf) {
         if (m_totalPages > 1) {
@@ -3274,7 +3247,7 @@ std::vector<AppWindow::OverflowMenuItem> AppWindow::GetCurrentOverflowItems() co
         items.push_back({ BTN_INFO, ICON_INFO, L"File Info", L"I", false, false, true });
         items.push_back({ BTN_OPEN_WITH, ICON_OPEN_WITH, openWithLabel, L"Enter", false, false, true });
         items.push_back({ 0, ICON_MORE, L"", L"", true, false, false }); // divider
-        items.push_back({ BTN_SETTINGS, ICON_SETTINGS, L"Keybind Settings", L"Ctrl+,", false, false, true });
+        items.push_back({ BTN_SETTINGS, ICON_SETTINGS, L"Settings", L"Ctrl+,", false, false, true });
         items.push_back({ BTN_TOOLBAR_FS, ICON_FULLSCREEN, m_isFullscreen ? L"Exit Fullscreen" : L"Fullscreen", L"F", false, false, true });
     } else if (m_docType == DocumentType::Text) {
         items.push_back({ BTN_CUT, ICON_CUT, L"Cut Selection", L"Ctrl+X", false, false, m_text.HasSelection() });
@@ -3285,7 +3258,7 @@ std::vector<AppWindow::OverflowMenuItem> AppWindow::GetCurrentOverflowItems() co
         items.push_back({ BTN_INFO, ICON_INFO, L"File Info", L"I", false, false, true });
         items.push_back({ BTN_OPEN_WITH, ICON_OPEN_WITH, openWithLabel, L"Enter", false, false, true });
         items.push_back({ 0, ICON_MORE, L"", L"", true, false, false }); // divider
-        items.push_back({ BTN_SETTINGS, ICON_SETTINGS, L"Keybind Settings", L"Ctrl+,", false, false, true });
+        items.push_back({ BTN_SETTINGS, ICON_SETTINGS, L"Settings", L"Ctrl+,", false, false, true });
         items.push_back({ BTN_TOOLBAR_FS, ICON_FULLSCREEN, m_isFullscreen ? L"Exit Fullscreen" : L"Fullscreen", L"F", false, false, true });
     } else if (m_docType == DocumentType::Spreadsheet) {
         items.push_back({ BTN_TABLE_VIEW, ICON_TABLE, m_text.IsTableView() ? L"Raw Text Editor" : L"Table Grid View", L"T", false, m_text.IsTableView(), true });
@@ -3295,7 +3268,7 @@ std::vector<AppWindow::OverflowMenuItem> AppWindow::GetCurrentOverflowItems() co
         items.push_back({ BTN_INFO, ICON_INFO, L"File Info", L"I", false, false, true });
         items.push_back({ BTN_OPEN_WITH, ICON_OPEN_WITH, openWithLabel, L"Enter", false, false, true });
         items.push_back({ 0, ICON_MORE, L"", L"", true, false, false }); // divider
-        items.push_back({ BTN_SETTINGS, ICON_SETTINGS, L"Keybind Settings", L"Ctrl+,", false, false, true });
+        items.push_back({ BTN_SETTINGS, ICON_SETTINGS, L"Settings", L"Ctrl+,", false, false, true });
         items.push_back({ BTN_TOOLBAR_FS, ICON_FULLSCREEN, m_isFullscreen ? L"Exit Fullscreen" : L"Fullscreen", L"F", false, false, true });
     } else if (m_docType == DocumentType::Office || m_docType == DocumentType::Svg) {
         items.push_back({ BTN_ROTATE_L, ICON_ROTATE_LEFT, L"Rotate Left", L"L", false, false, true });
@@ -3304,7 +3277,7 @@ std::vector<AppWindow::OverflowMenuItem> AppWindow::GetCurrentOverflowItems() co
         items.push_back({ BTN_INFO, ICON_INFO, L"File Info", L"I", false, false, true });
         items.push_back({ BTN_OPEN_WITH, ICON_OPEN_WITH, openWithLabel, L"Enter", false, false, true });
         items.push_back({ 0, ICON_MORE, L"", L"", true, false, false }); // divider
-        items.push_back({ BTN_SETTINGS, ICON_SETTINGS, L"Keybind Settings", L"Ctrl+,", false, false, true });
+        items.push_back({ BTN_SETTINGS, ICON_SETTINGS, L"Settings", L"Ctrl+,", false, false, true });
         items.push_back({ BTN_TOOLBAR_FS, ICON_FULLSCREEN, m_isFullscreen ? L"Exit Fullscreen" : L"Fullscreen", L"F", false, false, true });
     } else if (m_docType == DocumentType::Markdown || m_docType == DocumentType::Notebook) {
         items.push_back({ BTN_COPY_TEXT, ICON_COPY, L"Copy All Text", L"Ctrl+C", false, false, true });
@@ -3312,13 +3285,13 @@ std::vector<AppWindow::OverflowMenuItem> AppWindow::GetCurrentOverflowItems() co
         items.push_back({ BTN_INFO, ICON_INFO, L"File Info", L"I", false, false, true });
         items.push_back({ BTN_OPEN_WITH, ICON_OPEN_WITH, openWithLabel, L"Enter", false, false, true });
         items.push_back({ 0, ICON_MORE, L"", L"", true, false, false }); // divider
-        items.push_back({ BTN_SETTINGS, ICON_SETTINGS, L"Keybind Settings", L"Ctrl+,", false, false, true });
+        items.push_back({ BTN_SETTINGS, ICON_SETTINGS, L"Settings", L"Ctrl+,", false, false, true });
         items.push_back({ BTN_TOOLBAR_FS, ICON_FULLSCREEN, m_isFullscreen ? L"Exit Fullscreen" : L"Fullscreen", L"F", false, false, true });
     } else if (m_docType == DocumentType::Font) {
         items.push_back({ BTN_INFO, ICON_INFO, L"Font Info", L"I", false, false, true });
         items.push_back({ BTN_OPEN_WITH, ICON_OPEN_WITH, openWithLabel, L"Enter", false, false, true });
         items.push_back({ 0, ICON_MORE, L"", L"", true, false, false }); // divider
-        items.push_back({ BTN_SETTINGS, ICON_SETTINGS, L"Keybind Settings", L"Ctrl+,", false, false, true });
+        items.push_back({ BTN_SETTINGS, ICON_SETTINGS, L"Settings", L"Ctrl+,", false, false, true });
         items.push_back({ BTN_TOOLBAR_FS, ICON_FULLSCREEN, m_isFullscreen ? L"Exit Fullscreen" : L"Fullscreen", L"F", false, false, true });
     }
 
@@ -3792,20 +3765,7 @@ void AppWindow::RenderEmptyState(const D2D1_RECT_F& rect) {
     float height = rect.bottom - rect.top;
     float cx = rect.left + width / 2.0f;
 
-    // Total center stack height:
-    // 68 (squircle) + 16 (gap) + 30 (title) + 8 (gap) + 22 (sub) + 24 (gap) + 36 (pill) = 204px
-    float totalStackH = 204.0f;
-    float startY = rect.top + (height - totalStackH) / 2.0f - 18.0f;
-    if (startY < rect.top + 20.0f) startY = rect.top + 20.0f;
-
-    // 1. Sleek Frosted QuickLook Icon Squircle (72x72, 20px radius)
-    float iconTileSize = 72.0f;
-    D2D1_RECT_F iconBox = D2D1::RectF(cx - iconTileSize / 2.0f, startY, cx + iconTileSize / 2.0f, startY + iconTileSize);
-    D2D1_ROUNDED_RECT rIconBox = D2D1::RoundedRect(iconBox, 20.0f, 20.0f);
-    rt->FillRoundedRectangle(rIconBox, m_d2d.BrushCard);
-    rt->DrawRoundedRectangle(rIconBox, m_d2d.BrushBorder, 1.2f);
-
-    // Load and render official WinPreview App Logo
+    // Load official WinPreview App Logo if not already cached
     if (!m_appLogoBitmap) {
         // Priority 1: High-res 32bpp PNG embedded as RCDATA 102
         HRSRC hRes = FindResourceW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(102), RT_RCDATA);
@@ -3836,72 +3796,111 @@ void AppWindow::RenderEmptyState(const D2D1_RECT_F& rect) {
         }
     }
 
+    // Zen Editorial Tech Center Layout Calculation
+    float totalStackH = 260.0f;
+    float startY = rect.top + (height - totalStackH) / 2.0f - 14.0f;
+    if (startY < rect.top + 24.0f) startY = rect.top + 24.0f;
+
+    // 1. Sleek Frosted Logo Squircle with Precision Corner Crosshairs
+    float iconTileSize = 64.0f;
+    D2D1_RECT_F iconBox = D2D1::RectF(cx - iconTileSize / 2.0f, startY, cx + iconTileSize / 2.0f, startY + iconTileSize);
+    D2D1_ROUNDED_RECT rIconBox = D2D1::RoundedRect(iconBox, 16.0f, 16.0f);
+    rt->FillRoundedRectangle(rIconBox, m_d2d.BrushCard);
+    rt->DrawRoundedRectangle(rIconBox, m_d2d.BrushBorder, 1.2f);
+    if (m_d2d.BrushBorderHighlight) {
+        rt->DrawLine(D2D1::Point2F(iconBox.left + 14.0f, iconBox.top), D2D1::Point2F(iconBox.right - 14.0f, iconBox.top), m_d2d.BrushBorderHighlight, 1.0f);
+    }
+    m_d2d.DrawCornerCrosshairs(iconBox, 4.0f, 1.0f, rt);
+
     if (m_appLogoBitmap) {
-        float logoSize = 52.0f;
+        float logoSize = 46.0f;
         D2D1_RECT_F logoRect = D2D1::RectF(cx - logoSize / 2.0f, startY + (iconTileSize - logoSize) / 2.0f,
                                           cx + logoSize / 2.0f, startY + (iconTileSize + logoSize) / 2.0f);
         rt->DrawBitmap(m_appLogoBitmap, logoRect, 1.0f, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
     } else {
-        m_d2d.DrawIconEye(cx, startY + iconTileSize / 2.0f, 26.0f, m_d2d.BrushAccent);
+        m_d2d.DrawIconEye(cx, startY + iconTileSize / 2.0f, 24.0f, m_d2d.BrushAccent);
     }
 
-    // 2. Hero Title (Crisp Segoe UI Variable Display, perfectly centered)
-    float titleY = startY + iconTileSize + 16.0f;
+    // 2. Grand Display Title (28px Bold Zen Editorial Headline)
+    float titleY = startY + iconTileSize + 14.0f;
     const WCHAR* title = L"WinPreview";
-    D2D1_RECT_F titleRect = D2D1::RectF(rect.left + 16.0f, titleY, rect.right - 16.0f, titleY + 30.0f);
-    rt->DrawText(title, (UINT32)wcslen(title), m_d2d.FontHeroCenter ? m_d2d.FontHeroCenter : m_d2d.FontHero, titleRect, m_d2d.BrushText);
+    D2D1_RECT_F titleRect = D2D1::RectF(rect.left + 16.0f, titleY, rect.right - 16.0f, titleY + 34.0f);
+    rt->DrawText(title, (UINT32)wcslen(title), m_d2d.FontDisplayCenter ? m_d2d.FontDisplayCenter : m_d2d.FontHeroCenter, titleRect, m_d2d.BrushText);
 
-    // 3. Subtitle (Centered, minimal, clear)
-    float subY = titleY + 30.0f + 8.0f;
-    const WCHAR* subtitle = L"Select any file in File Explorer and press Space to preview";
-    D2D1_RECT_F subRect = D2D1::RectF(rect.left + 16.0f, subY, rect.right - 16.0f, subY + 22.0f);
-    rt->DrawText(subtitle, (UINT32)wcslen(subtitle), m_d2d.FontBodyCenter ? m_d2d.FontBodyCenter : m_d2d.FontBody, subRect, m_d2d.BrushTextMuted);
+    // 3. Monospace Category Subtitle & Botanical Amber Highlight
+    float subY = titleY + 34.0f + 4.0f;
+    const WCHAR* subtitle = L"✨ INSTANT DIRECT2D GPU PIPELINE • ZERO LATENCY";
+    D2D1_RECT_F subRect = D2D1::RectF(rect.left + 16.0f, subY, rect.right - 16.0f, subY + 18.0f);
+    ID2D1Brush* subBrush = m_d2d.BrushGinkgo ? (ID2D1Brush*)m_d2d.BrushGinkgo : (ID2D1Brush*)m_d2d.BrushTextMuted;
+    rt->DrawText(subtitle, (UINT32)wcslen(subtitle), m_d2d.FontUtilityMonoCenter ? m_d2d.FontUtilityMonoCenter : m_d2d.FontCaptionCenter, subRect, subBrush);
 
-    // 4. Interactive Keybind Indicator Pill (Click to open Settings)
-    float pillY = subY + 22.0f + 24.0f;
+    // 4. Central Framed Tech Container (Editorial Tech Card with Corner Crosshairs)
+    float cardY = subY + 18.0f + 16.0f;
+    float cardW = (std::min)(500.0f, width - 40.0f);
+    float cardH = 114.0f;
+    float cardLeft = std::floor(cx - cardW / 2.0f + 0.5f);
+    D2D1_RECT_F centerCard = D2D1::RectF(cardLeft, cardY, cardLeft + cardW, cardY + cardH);
+    D2D1_ROUNDED_RECT rCenterCard = D2D1::RoundedRect(centerCard, 14.0f, 14.0f);
+
+    rt->FillRoundedRectangle(rCenterCard, m_d2d.BrushCard);
+    rt->DrawRoundedRectangle(rCenterCard, m_d2d.BrushBorder, 1.0f);
+    if (m_d2d.BrushBorderHighlight) {
+        rt->DrawLine(D2D1::Point2F(centerCard.left + 16.0f, centerCard.top), D2D1::Point2F(centerCard.right - 16.0f, centerCard.top), m_d2d.BrushBorderHighlight, 1.0f);
+    }
+    m_d2d.DrawCornerCrosshairs(centerCard, 5.0f, 1.0f, rt);
+
+    // Card Header Row: Section Label + Crimson Status Dot
+    float metaY = cardY + 12.0f;
+    D2D1_RECT_F metaLabelR = D2D1::RectF(cardLeft + 16.0f, metaY, cardLeft + 220.0f, metaY + 16.0f);
+    const WCHAR* metaLabel = L"FAST PREVIEW WORKFLOW ⌵";
+    rt->DrawText(metaLabel, (UINT32)wcslen(metaLabel), m_d2d.FontUtilityMono ? m_d2d.FontUtilityMono : m_d2d.FontCaption, metaLabelR, m_d2d.BrushTextDim ? m_d2d.BrushTextDim : m_d2d.BrushTextMuted);
+
+    D2D1_RECT_F statusDotR = D2D1::RectF(centerCard.right - 90.0f, metaY, centerCard.right - 16.0f, metaY + 16.0f);
+    const WCHAR* statusReady = L"● READY";
+    rt->DrawText(statusReady, (UINT32)wcslen(statusReady), m_d2d.FontUtilityMono ? m_d2d.FontUtilityMono : m_d2d.FontCaption, statusDotR, m_d2d.BrushCrimson ? m_d2d.BrushCrimson : m_d2d.BrushGreen);
+
+    // Editorial Keybind Indicator (Non-interactive clean status badge; single global settings accessed via Ctrl+,)
+    float pillY = metaY + 22.0f;
     HotkeyConfig curCfg = ExplorerHook::GetHotkeyConfig();
-    std::wstring keybindLabel = (width < 390.0f) ?
+    std::wstring keybindLabel = (width < 420.0f) ?
         (L"[ " + curCfg.name + L" ]   Settings (Ctrl+,)") :
         (L"Preview Keybind: [ " + curCfg.name + L" ]   •   Settings (Ctrl+,)");
-    float pillW = 380.0f;
-    if (pillW > width - 24.0f) pillW = width - 24.0f;
-    float pillH = 36.0f;
-    float btnLeft = std::floor(cx - pillW / 2.0f + 0.5f);
-    float btnTop = std::floor(pillY + 0.5f);
-    m_emptyStateKeybindBtn = D2D1::RectF(btnLeft, btnTop, btnLeft + pillW, btnTop + pillH);
-    D2D1_ROUNDED_RECT pillR = D2D1::RoundedRect(m_emptyStateKeybindBtn, 18.0f, 18.0f);
-    if (m_pressedButtonId == BTN_SETTINGS) {
-        float halfW = pillW * 0.5f;
-        float halfH = pillH * 0.5f;
-        float kcx = btnLeft + halfW;
-        float kcy = btnTop + halfH;
-        D2D1_ROUNDED_RECT insetR = D2D1::RoundedRect(D2D1::RectF(kcx - halfW * 0.96f, kcy - halfH * 0.96f + 0.5f, kcx + halfW * 0.96f, kcy + halfH * 0.96f + 0.5f), 17.0f, 17.0f);
-        rt->FillRoundedRectangle(insetR, m_d2d.BrushActive);
-        rt->DrawRoundedRectangle(insetR, m_d2d.BrushAccent, 1.2f);
-    } else if (m_hoveredButtonId == BTN_SETTINGS) {
-        rt->FillRoundedRectangle(pillR, m_d2d.BrushHover);
-        rt->DrawRoundedRectangle(pillR, m_d2d.BrushAccent, 1.2f);
-    } else {
-        rt->FillRoundedRectangle(pillR, m_d2d.BrushCard);
-        rt->DrawRoundedRectangle(pillR, m_d2d.BrushBorderSubtle, 1.0f);
-    }
-    rt->DrawText(keybindLabel.c_str(), (UINT32)keybindLabel.length(), m_d2d.FontButton, m_emptyStateKeybindBtn, m_d2d.BrushText);
+    float pillW = cardW - 32.0f;
+    float pillH = 34.0f;
+    float btnLeft = cardLeft + 16.0f;
+    float btnTop = pillY;
+    D2D1_RECT_F statusBadgeRect = D2D1::RectF(btnLeft, btnTop, btnLeft + pillW, btnTop + pillH);
+    D2D1_ROUNDED_RECT pillR = D2D1::RoundedRect(statusBadgeRect, 8.0f, 8.0f);
+    m_emptyStateKeybindBtn = {}; // Non-clickable
 
-    // 5. Clean Keyboard Legend at bottom (Always centered, never clips)
+    rt->FillRoundedRectangle(pillR, m_d2d.BrushChipBg ? m_d2d.BrushChipBg : m_d2d.BrushCard);
+    rt->DrawRoundedRectangle(pillR, m_d2d.BrushChipBorder ? m_d2d.BrushChipBorder : m_d2d.BrushBorderSubtle, 1.0f);
+    rt->DrawText(keybindLabel.c_str(), (UINT32)keybindLabel.length(), m_d2d.FontButton, statusBadgeRect, m_d2d.BrushText);
+
+    // Micro prompt inside card
+    float cardFootY = pillY + pillH + 6.0f;
+    D2D1_RECT_F promptR = D2D1::RectF(cardLeft + 16.0f, cardFootY, centerCard.right - 16.0f, cardFootY + 16.0f);
+    const WCHAR* promptText = L"Select any file in Explorer and press Space  •  Drag & drop supported";
+    rt->DrawText(promptText, (UINT32)wcslen(promptText), m_d2d.FontUtilityMonoCenter ? m_d2d.FontUtilityMonoCenter : m_d2d.FontCaptionCenter, promptR, m_d2d.BrushTextDim ? m_d2d.BrushTextDim : m_d2d.BrushTextMuted);
+
+    // 5. Clean Monospace Utility Keyboard Legend at Bottom
     if (height >= 260.0f) {
-        float legendW = 440.0f;
+        float legendW = 460.0f;
         if (legendW > width - 24.0f) legendW = width - 24.0f;
         float legendH = 30.0f;
         float legendY = rect.bottom - 46.0f;
         D2D1_RECT_F legendRect = D2D1::RectF(cx - legendW / 2.0f, legendY, cx + legendW / 2.0f, legendY + legendH);
-        D2D1_ROUNDED_RECT rLegend = D2D1::RoundedRect(legendRect, 15.0f, 15.0f);
+        D2D1_ROUNDED_RECT rLegend = D2D1::RoundedRect(legendRect, 8.0f, 8.0f);
         rt->FillRoundedRectangle(rLegend, m_d2d.BrushCard);
         rt->DrawRoundedRectangle(rLegend, m_d2d.BrushBorderSubtle, 1.0f);
+        if (m_d2d.BrushBorderHighlight) {
+            rt->DrawLine(D2D1::Point2F(legendRect.left + 10.0f, legendRect.top), D2D1::Point2F(legendRect.right - 10.0f, legendRect.top), m_d2d.BrushBorderHighlight, 1.0f);
+        }
 
         const WCHAR* hints = (width < 450.0f) ?
             L"Space  Preview   •   ←/→  Next   •   Esc  Close" :
             L"Space  Preview / Dismiss   •   ←/→  Next File   •   Esc  Close   •   Ctrl+,  Settings";
-        rt->DrawText(hints, (UINT32)wcslen(hints), m_d2d.FontCaptionCenter ? m_d2d.FontCaptionCenter : m_d2d.FontCaption, legendRect, m_d2d.BrushTextMuted);
+        rt->DrawText(hints, (UINT32)wcslen(hints), m_d2d.FontUtilityMonoCenter ? m_d2d.FontUtilityMonoCenter : m_d2d.FontCaptionCenter, legendRect, m_d2d.BrushTextMuted);
     }
 }
 
@@ -4688,7 +4687,7 @@ void AppWindow::ShowContextMenu(int screenX, int screenY) {
     }
 
     AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
-    AppendMenuW(hMenu, MF_STRING, IDM_CTX_SETTINGS, L"Keybind Settings...\tCtrl+,");
+    AppendMenuW(hMenu, MF_STRING, IDM_CTX_SETTINGS, L"Settings...\tCtrl+,");
     AppendMenuW(hMenu, MF_STRING, IDM_CTX_CHECK_UPDATES, L"Check for Updates...\tCtrl+U");
     AppendMenuW(hMenu, MF_STRING, IDM_CTX_SIMULATE_UPDATE, L"Simulate Update Prompt (Test)\tCtrl+Shift+U");
 
@@ -4810,10 +4809,6 @@ void AppWindow::RenderCanvas(const D2D1_RECT_F& rect) {
 
         bool isPlaying = m_media.IsPlaying();
 
-        // Smooth physical slide transition for vinyl disc
-        float targetSlide = isPlaying ? 58.0f : 20.0f;
-        m_audioVinylSlide += (targetSlide - m_audioVinylSlide) * 0.16f;
-
         // 1. Responsive Visual Sizing (Minimal, zero hard background circles)
         float artSize = std::clamp(stageH * 0.36f, 140.0f, 200.0f);
         float mediaY = cy - 80.0f;
@@ -4880,19 +4875,28 @@ void AppWindow::RenderCanvas(const D2D1_RECT_F& rect) {
             );
             rt->FillRoundedRectangle(artShadow, m_d2d.BrushShadowDark);
 
-            // Draw Album Art with rounded clip
-            ID2D1Layer* artLayer = nullptr;
-            rt->CreateLayer(NULL, &artLayer);
-            if (artLayer) {
-                ID2D1RoundedRectangleGeometry* geom = nullptr;
-                m_d2d.GetD2DFactory()->CreateRoundedRectangleGeometry(rArt, &geom);
-                if (geom) {
-                    rt->PushLayer(D2D1::LayerParameters(D2D1::InfiniteRect(), geom), artLayer);
-                    rt->DrawBitmap(m_audioAlbumArt, artRect);
-                    rt->PopLayer();
-                    geom->Release();
+            // Draw Album Art with rounded clip (Zero-allocation cached ID2D1BitmapBrush)
+            if (!m_audioAlbumBrush && rt && m_audioAlbumArt) {
+                D2D1_BITMAP_BRUSH_PROPERTIES brushProps = D2D1::BitmapBrushProperties(
+                    D2D1_EXTEND_MODE_CLAMP,
+                    D2D1_EXTEND_MODE_CLAMP,
+                    D2D1_BITMAP_INTERPOLATION_MODE_LINEAR
+                );
+                rt->CreateBitmapBrush(m_audioAlbumArt, brushProps, &m_audioAlbumBrush);
+            }
+            if (m_audioAlbumBrush && m_audioAlbumArt) {
+                D2D1_SIZE_F bmpSize = m_audioAlbumArt->GetSize();
+                if (bmpSize.width > 0.0f && bmpSize.height > 0.0f) {
+                    float sx = (artRect.right - artRect.left) / bmpSize.width;
+                    float sy = (artRect.bottom - artRect.top) / bmpSize.height;
+                    m_audioAlbumBrush->SetTransform(
+                        D2D1::Matrix3x2F::Scale(sx, sy) *
+                        D2D1::Matrix3x2F::Translation(artRect.left, artRect.top)
+                    );
+                    rt->FillRoundedRectangle(rArt, m_audioAlbumBrush);
                 }
-                artLayer->Release();
+            } else {
+                rt->FillRoundedRectangle(rArt, m_d2d.BrushCard);
             }
             rt->DrawRoundedRectangle(rArt, m_d2d.BrushBorderSubtle, 1.2f);
 
@@ -5531,10 +5535,14 @@ void AppWindow::RenderInspector(const D2D1_RECT_F& canvasRect) {
     // Body & border
     rt->FillRoundedRectangle(cardR, m_d2d.BrushCard);
     rt->DrawRoundedRectangle(cardR, m_d2d.BrushBorder, 1.2f);
+    if (m_d2d.BrushBorderHighlight) {
+        rt->DrawLine(D2D1::Point2F(cardX + 14.0f, cardY), D2D1::Point2F(cardX + cardW - 14.0f, cardY), m_d2d.BrushBorderHighlight, 1.0f);
+    }
+    m_d2d.DrawCornerCrosshairs(m_inspectorRect, 4.0f, 1.0f, rt);
 
-    // Header bar
+    // Header bar (Zen Editorial Tech title with Amber accent dot)
     D2D1_RECT_F headerR = D2D1::RectF(cardX + 16.0f, cardY + 12.0f, cardX + cardW - 44.0f, cardY + 36.0f);
-    rt->DrawText(L"Inspector", 9, m_d2d.FontTitle ? m_d2d.FontTitle : m_d2d.FontBody, headerR, m_d2d.BrushText);
+    rt->DrawText(L"METADATA INSPECTOR ⌵", 20, m_d2d.FontUtilityMono ? m_d2d.FontUtilityMono : (m_d2d.FontTitle ? m_d2d.FontTitle : m_d2d.FontBody), headerR, m_d2d.BrushText);
 
     // Close button (24x24 hit area, optical center)
     float closeX = cardX + cardW - 24.0f;
@@ -5556,11 +5564,11 @@ void AppWindow::RenderInspector(const D2D1_RECT_F& canvasRect) {
     // Divider line
     rt->DrawLine(D2D1::Point2F(cardX + 16.0f, cardY + 44.0f), D2D1::Point2F(cardX + cardW - 16.0f, cardY + 44.0f), m_d2d.BrushBorderSubtle, 1.0f);
 
-    // Action button at bottom: Copy Metadata
-    float copyBtnH = 26.0f;
+    // Action button at bottom: Copy Metadata (Refined Chip Style)
+    float copyBtnH = 28.0f;
     float copyBtnY = cardY + cardH - copyBtnH - 12.0f;
     m_inspectorCopyRect = D2D1::RectF(cardX + 16.0f, copyBtnY, cardX + cardW - 16.0f, copyBtnY + copyBtnH);
-    D2D1_ROUNDED_RECT copyR = D2D1::RoundedRect(m_inspectorCopyRect, 6.0f, 6.0f);
+    D2D1_ROUNDED_RECT copyR = D2D1::RoundedRect(m_inspectorCopyRect, 7.0f, 7.0f);
 
     if (m_pressedButtonId == BTN_INSPECTOR_COPY) {
         rt->FillRoundedRectangle(copyR, m_d2d.BrushActive);
@@ -5568,11 +5576,12 @@ void AppWindow::RenderInspector(const D2D1_RECT_F& canvasRect) {
         rt->FillRoundedRectangle(copyR, m_d2d.BrushHover);
         rt->DrawRoundedRectangle(copyR, m_d2d.BrushAccent, 1.0f);
     } else {
-        rt->FillRoundedRectangle(copyR, m_d2d.BrushCard);
-        rt->DrawRoundedRectangle(copyR, m_d2d.BrushBorderSubtle, 1.0f);
+        rt->FillRoundedRectangle(copyR, m_d2d.BrushChipBg ? m_d2d.BrushChipBg : m_d2d.BrushCard);
+        rt->DrawRoundedRectangle(copyR, m_d2d.BrushChipBorder ? m_d2d.BrushChipBorder : m_d2d.BrushBorderSubtle, 1.0f);
     }
-    const WCHAR* copyLabel = L"Copy Metadata";
-    rt->DrawText(copyLabel, (UINT32)wcslen(copyLabel), m_d2d.FontButton ? m_d2d.FontButton : m_d2d.FontCaption, m_inspectorCopyRect, m_d2d.BrushText);
+    const WCHAR* copyLabel = L"COPY METADATA ↗";
+    IDWriteTextFormat* copyFont = m_d2d.FontUtilityMonoCenter ? m_d2d.FontUtilityMonoCenter : (m_d2d.FontButton ? m_d2d.FontButton : m_d2d.FontCaption);
+    rt->DrawText(copyLabel, (UINT32)wcslen(copyLabel), copyFont, m_inspectorCopyRect, m_d2d.BrushText);
 
     // Rows rendering
     float rowY = cardY + 52.0f;
@@ -5585,7 +5594,8 @@ void AppWindow::RenderInspector(const D2D1_RECT_F& canvasRect) {
         if (val.empty() || rowY + rowH > copyBtnY - 4.0f) return;
         D2D1_RECT_F lblR = D2D1::RectF(cardX + 16.0f, rowY, cardX + 16.0f + labelW, rowY + rowH);
         D2D1_RECT_F vR = D2D1::RectF(valX, rowY, valX + valW, rowY + rowH);
-        rt->DrawText(label, (UINT32)wcslen(label), m_d2d.FontCaption, lblR, m_d2d.BrushTextMuted);
+        ID2D1Brush* lblBrush = m_d2d.BrushTextDim ? (ID2D1Brush*)m_d2d.BrushTextDim : (ID2D1Brush*)m_d2d.BrushTextMuted;
+        rt->DrawText(label, (UINT32)wcslen(label), m_d2d.FontCaption, lblR, lblBrush);
         rt->DrawText(val.c_str(), (UINT32)val.length(), m_d2d.FontCaption, vR, m_d2d.BrushText);
         rowY += rowH;
     };
@@ -6095,12 +6105,16 @@ void AppWindow::RenderSettingsModal(const D2D1_RECT_F& canvasRect) {
     );
     rt->FillRoundedRectangle(shadowR, m_d2d.BrushShadowSoft);
 
-    // 3. Card Surface & Border
+    // 3. Card Surface & Border (Obsidian & Zen Editorial Tech with Corner Crosshairs)
     D2D1_ROUNDED_RECT cardR = D2D1::RoundedRect(m_settingsModalRect, 16.0f, 16.0f);
     m_d2d.BrushCard->SetOpacity(0.98f);
     rt->FillRoundedRectangle(cardR, m_d2d.BrushCard);
     m_d2d.BrushCard->SetOpacity(1.0f);
     rt->DrawRoundedRectangle(cardR, m_d2d.BrushBorder, 1.2f);
+    if (m_d2d.BrushBorderHighlight) {
+        rt->DrawLine(D2D1::Point2F(m_settingsModalRect.left + 16.0f, m_settingsModalRect.top), D2D1::Point2F(m_settingsModalRect.right - 16.0f, m_settingsModalRect.top), m_d2d.BrushBorderHighlight, 1.0f);
+    }
+    m_d2d.DrawCornerCrosshairs(m_settingsModalRect, 5.0f, 1.0f, rt);
 
     // 4. Header Bar
     float curY = m_settingsModalRect.top + 18.0f;
@@ -6109,9 +6123,9 @@ void AppWindow::RenderSettingsModal(const D2D1_RECT_F& canvasRect) {
     float iconCy = curY + 12.0f;
     m_d2d.DrawIconSettings(iconCx, iconCy, 18.0f, m_d2d.BrushAccent);
 
-    // Title & Subtitle
+    // Title & Subtitle (Monospace Section Header)
     D2D1_RECT_F titleR = D2D1::RectF(iconCx + 18.0f, curY, m_settingsModalRect.right - 60.0f, curY + 22.0f);
-    const WCHAR* titleText = L"Preferences & Settings";
+    const WCHAR* titleText = L"PREFERENCES & SETTINGS ⌵";
     rt->DrawText(titleText, (UINT32)wcslen(titleText), m_d2d.FontButton ? m_d2d.FontButton : m_d2d.FontCaption, titleR, m_d2d.BrushText);
 
     D2D1_RECT_F subR = D2D1::RectF(iconCx + 18.0f, curY + 22.0f, m_settingsModalRect.right - 60.0f, curY + 38.0f);
@@ -6133,16 +6147,16 @@ void AppWindow::RenderSettingsModal(const D2D1_RECT_F& canvasRect) {
 
     curY += 46.0f;
 
-    // 5. Segmented Navigation Tab Bar
+    // 5. Segmented Navigation Tab Bar (Zen Editorial Tech Monospace Chips)
     float tabW = modalW - padX * 2.0f;
     float tabH = 34.0f;
     D2D1_RECT_F tabContainerR = D2D1::RectF(m_settingsModalRect.left + padX, curY, m_settingsModalRect.left + padX + tabW, curY + tabH);
     rt->FillRoundedRectangle(D2D1::RoundedRect(tabContainerR, 8.0f, 8.0f), m_d2d.BrushSidebar);
     rt->DrawRoundedRectangle(D2D1::RoundedRect(tabContainerR, 8.0f, 8.0f), m_d2d.BrushBorderSubtle, 1.0f);
 
-    const wchar_t* tabTitles[4] = { L"General", L"Hotkeys & Nav", L"Viewer & Media", L"About" };
+    const wchar_t* tabTitles[4] = { L"GENERAL", L"HOTKEYS & NAV", L"VIEWER & MEDIA", L"ABOUT" };
     float chipW = tabW / 4.0f;
-    IDWriteTextFormat* btnCenterFont = m_d2d.FontCaptionCenter ? m_d2d.FontCaptionCenter : m_d2d.FontCaption;
+    IDWriteTextFormat* btnCenterFont = m_d2d.FontUtilityMonoCenter ? m_d2d.FontUtilityMonoCenter : (m_d2d.FontCaptionCenter ? m_d2d.FontCaptionCenter : m_d2d.FontCaption);
 
     for (int i = 0; i < 4; ++i) {
         float tx = tabContainerR.left + i * chipW;
@@ -6199,6 +6213,7 @@ void AppWindow::RenderSettingsModal(const D2D1_RECT_F& canvasRect) {
         D2D1_RECT_F groupCard = D2D1::RectF(contentX, curY, contentX + contentW, curY + cardH);
         rt->FillRoundedRectangle(D2D1::RoundedRect(groupCard, 8.0f, 8.0f), m_d2d.BrushSidebar);
         rt->DrawRoundedRectangle(D2D1::RoundedRect(groupCard, 8.0f, 8.0f), m_d2d.BrushBorderSubtle, 1.0f);
+        m_d2d.DrawCornerCrosshairs(groupCard, 4.0f, 1.0f, rt);
 
         float rH = 62.0f;
         drawSettingRow(contentX, curY + 0 * rH, contentW, rH,
@@ -6227,6 +6242,7 @@ void AppWindow::RenderSettingsModal(const D2D1_RECT_F& canvasRect) {
         } else {
             rt->DrawRoundedRectangle(D2D1::RoundedRect(keyCardRect, 8.0f, 8.0f), m_d2d.BrushBorderSubtle, 1.0f);
         }
+        m_d2d.DrawCornerCrosshairs(keyCardRect, 3.5f, 1.0f, rt);
 
         HotkeyConfig curCfg = ExplorerHook::GetHotkeyConfig();
 
@@ -6328,6 +6344,7 @@ void AppWindow::RenderSettingsModal(const D2D1_RECT_F& canvasRect) {
         D2D1_RECT_F navCard = D2D1::RectF(contentX, navCardY, contentX + contentW, navCardY + navCardH);
         rt->FillRoundedRectangle(D2D1::RoundedRect(navCard, 8.0f, 8.0f), m_d2d.BrushSidebar);
         rt->DrawRoundedRectangle(D2D1::RoundedRect(navCard, 8.0f, 8.0f), m_d2d.BrushBorderSubtle, 1.0f);
+        m_d2d.DrawCornerCrosshairs(navCard, 4.0f, 1.0f, rt);
 
         float rH = 62.0f;
         drawSettingRow(contentX, navCardY + 0 * rH, contentW, rH,
@@ -6344,6 +6361,7 @@ void AppWindow::RenderSettingsModal(const D2D1_RECT_F& canvasRect) {
         D2D1_RECT_F groupCard = D2D1::RectF(contentX, curY, contentX + contentW, curY + cardH);
         rt->FillRoundedRectangle(D2D1::RoundedRect(groupCard, 8.0f, 8.0f), m_d2d.BrushSidebar);
         rt->DrawRoundedRectangle(D2D1::RoundedRect(groupCard, 8.0f, 8.0f), m_d2d.BrushBorderSubtle, 1.0f);
+        m_d2d.DrawCornerCrosshairs(groupCard, 4.0f, 1.0f, rt);
 
         float rH = 58.0f;
         drawSettingRow(contentX, curY + 0 * rH, contentW, rH,
@@ -6372,6 +6390,7 @@ void AppWindow::RenderSettingsModal(const D2D1_RECT_F& canvasRect) {
         D2D1_RECT_F groupCard = D2D1::RectF(contentX, curY, contentX + contentW, curY + cardH);
         rt->FillRoundedRectangle(D2D1::RoundedRect(groupCard, 8.0f, 8.0f), m_d2d.BrushSidebar);
         rt->DrawRoundedRectangle(D2D1::RoundedRect(groupCard, 8.0f, 8.0f), m_d2d.BrushBorderSubtle, 1.0f);
+        m_d2d.DrawCornerCrosshairs(groupCard, 4.0f, 1.0f, rt);
 
         // App Branding Header
         float brandY = curY + 18.0f;
@@ -6380,7 +6399,7 @@ void AppWindow::RenderSettingsModal(const D2D1_RECT_F& canvasRect) {
         m_d2d.DrawIconSettings(brandIconCx, brandIconCy, 24.0f, m_d2d.BrushAccent);
 
         D2D1_RECT_F bTitleR = D2D1::RectF(contentX + 56.0f, brandY, contentX + contentW - 20.0f, brandY + 20.0f);
-        const WCHAR* bTitle = L"WinPreview v1.1.0 (Native Release Engine)";
+        const WCHAR* bTitle = L"WinPreview v" WINPREVIEW_VERSION_WSTR L" (Native Release Engine)";
         rt->DrawText(bTitle, (UINT32)wcslen(bTitle), m_d2d.FontButton ? m_d2d.FontButton : m_d2d.FontCaption, bTitleR, m_d2d.BrushText);
 
         D2D1_RECT_F bSubR = D2D1::RectF(contentX + 56.0f, brandY + 20.0f, contentX + contentW - 20.0f, brandY + 36.0f);
@@ -6412,7 +6431,7 @@ void AppWindow::RenderSettingsModal(const D2D1_RECT_F& canvasRect) {
         float div2Y = rowY + 32.0f;
         rt->DrawLine(D2D1::Point2F(contentX + 16.0f, div2Y), D2D1::Point2F(contentX + contentW - 16.0f, div2Y), m_d2d.BrushBorderSubtle, 1.0f);
 
-        // Action buttons
+        // Action buttons (Zen Editorial Tech Monospace Chips)
         float actBtnY = div2Y + 12.0f;
         float actBtnW = 180.0f;
         float actBtnH = 32.0f;
@@ -6420,16 +6439,16 @@ void AppWindow::RenderSettingsModal(const D2D1_RECT_F& canvasRect) {
         m_settingsAboutUpdateBtn = D2D1::RectF(contentX + 16.0f, actBtnY, contentX + 16.0f + actBtnW, actBtnY + actBtnH);
         D2D1_ROUNDED_RECT upR = D2D1::RoundedRect(m_settingsAboutUpdateBtn, 6.0f, 6.0f);
         if (m_hoveredButtonId == BTN_SETTINGS_ABOUT_UPDATE_NOW) rt->FillRoundedRectangle(upR, m_d2d.BrushHover);
-        else rt->FillRoundedRectangle(upR, m_d2d.BrushCard);
-        rt->DrawRoundedRectangle(upR, m_d2d.BrushBorder, 1.0f);
+        else rt->FillRoundedRectangle(upR, m_d2d.BrushChipBg ? m_d2d.BrushChipBg : m_d2d.BrushCard);
+        rt->DrawRoundedRectangle(upR, m_d2d.BrushChipBorder ? m_d2d.BrushChipBorder : m_d2d.BrushBorder, 1.0f);
         const WCHAR* upTxt = L"Check for Updates Now";
         rt->DrawText(upTxt, (UINT32)wcslen(upTxt), btnCenterFont, m_settingsAboutUpdateBtn, m_d2d.BrushText);
 
         m_settingsAboutGithubBtn = D2D1::RectF(m_settingsAboutUpdateBtn.right + 12.0f, actBtnY, m_settingsAboutUpdateBtn.right + 12.0f + 160.0f, actBtnY + actBtnH);
         D2D1_ROUNDED_RECT ghR = D2D1::RoundedRect(m_settingsAboutGithubBtn, 6.0f, 6.0f);
         if (m_hoveredButtonId == BTN_SETTINGS_ABOUT_GITHUB) rt->FillRoundedRectangle(ghR, m_d2d.BrushHover);
-        else rt->FillRoundedRectangle(ghR, m_d2d.BrushCard);
-        rt->DrawRoundedRectangle(ghR, m_d2d.BrushBorder, 1.0f);
+        else rt->FillRoundedRectangle(ghR, m_d2d.BrushChipBg ? m_d2d.BrushChipBg : m_d2d.BrushCard);
+        rt->DrawRoundedRectangle(ghR, m_d2d.BrushChipBorder ? m_d2d.BrushChipBorder : m_d2d.BrushBorder, 1.0f);
         const WCHAR* ghTxt = L"GitHub Repository";
         rt->DrawText(ghTxt, (UINT32)wcslen(ghTxt), btnCenterFont, m_settingsAboutGithubBtn, m_d2d.BrushTextMuted);
     }
@@ -6536,18 +6555,18 @@ bool AppWindow::CreateHudWindow() {
     m_hudRenderTarget->SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
     m_hudRenderTarget->SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE);
 
-    // Create HUD solid color brushes
-    m_hudRenderTarget->CreateSolidColorBrush(D2D1::ColorF(0.094f, 0.094f, 0.106f, 0.96f), &m_hudBrushBg);
-    m_hudRenderTarget->CreateSolidColorBrush(D2D1::ColorF(0.180f, 0.180f, 0.200f, 1.0f), &m_hudBrushBorder);
-    m_hudRenderTarget->CreateSolidColorBrush(D2D1::ColorF(0.965f, 0.965f, 0.973f, 1.0f), &m_hudBrushText);
-    m_hudRenderTarget->CreateSolidColorBrush(D2D1::ColorF(0.580f, 0.580f, 0.620f, 1.0f), &m_hudBrushTextMuted);
-    m_hudRenderTarget->CreateSolidColorBrush(D2D1::ColorF(0.039f, 0.518f, 1.000f, 1.0f), &m_hudBrushAccent);
-    m_hudRenderTarget->CreateSolidColorBrush(D2D1::ColorF(0.039f, 0.518f, 1.000f, 0.35f), &m_hudBrushAccentGlow);
-    m_hudRenderTarget->CreateSolidColorBrush(D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.08f), &m_hudBrushHover);
-    m_hudRenderTarget->CreateSolidColorBrush(D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.16f), &m_hudBrushActive);
-    m_hudRenderTarget->CreateSolidColorBrush(D2D1::ColorF(0.165f, 0.165f, 0.180f, 1.0f), &m_hudBrushTrack);
-    m_hudRenderTarget->CreateSolidColorBrush(D2D1::ColorF(0.063f, 0.063f, 0.071f, 0.96f), &m_hudBrushTooltipBg);
-    m_hudRenderTarget->CreateSolidColorBrush(D2D1::ColorF(0.240f, 0.240f, 0.260f, 1.0f), &m_hudBrushTooltipBorder);
+    // Create HUD solid color brushes (Obsidian & Zen Editorial Tech Dark Palette)
+    m_hudRenderTarget->CreateSolidColorBrush(D2D1::ColorF(0.047f, 0.047f, 0.059f, 0.96f), &m_hudBrushBg);             // Deep Obsidian (#0C0C0F)
+    m_hudRenderTarget->CreateSolidColorBrush(D2D1::ColorF(0.133f, 0.133f, 0.157f, 1.0f), &m_hudBrushBorder);         // Precision Border (#222228)
+    m_hudRenderTarget->CreateSolidColorBrush(D2D1::ColorF(0.973f, 0.973f, 0.980f, 1.0f), &m_hudBrushText);           // Pure text (#F8F8FA)
+    m_hudRenderTarget->CreateSolidColorBrush(D2D1::ColorF(0.520f, 0.520f, 0.560f, 1.0f), &m_hudBrushTextMuted);      // Muted text (#85858F)
+    m_hudRenderTarget->CreateSolidColorBrush(D2D1::ColorF(0.039f, 0.518f, 1.000f, 1.0f), &m_hudBrushAccent);         // Electric Cyan / Apple Blue (#0A84FF)
+    m_hudRenderTarget->CreateSolidColorBrush(D2D1::ColorF(0.039f, 0.518f, 1.000f, 0.35f), &m_hudBrushAccentGlow);    // Accent Glow
+    m_hudRenderTarget->CreateSolidColorBrush(D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.08f), &m_hudBrushHover);               // Hover overlay
+    m_hudRenderTarget->CreateSolidColorBrush(D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.16f), &m_hudBrushActive);              // Active overlay
+    m_hudRenderTarget->CreateSolidColorBrush(D2D1::ColorF(0.118f, 0.118f, 0.133f, 1.0f), &m_hudBrushTrack);          // Unfilled Track (#1E1E22)
+    m_hudRenderTarget->CreateSolidColorBrush(D2D1::ColorF(0.035f, 0.035f, 0.043f, 0.96f), &m_hudBrushTooltipBg);      // Tooltip Surface (#09090B)
+    m_hudRenderTarget->CreateSolidColorBrush(D2D1::ColorF(0.149f, 0.149f, 0.184f, 1.0f), &m_hudBrushTooltipBorder);  // Tooltip Border (#26262F)
 
     return true;
 }
@@ -6646,10 +6665,10 @@ void AppWindow::SetCursorVisibility(bool visible) {
 }
 
 void AppWindow::EnsureAnimTimer() {
-    // Idempotent: arms the 30ms render-pump only when visible and not already armed.
+    // Idempotent: arms the 16ms (60 FPS) render-pump only when visible and not already armed.
     if (m_animTimerRunning || !m_hwnd || !IsWindow(m_hwnd)) return;
     if (!IsWindowVisible(m_hwnd) || IsIconic(m_hwnd)) return;
-    SetTimer(m_hwnd, 1, 30, NULL);
+    SetTimer(m_hwnd, 1, 16, NULL);
     m_animTimerRunning = true;
 }
 
@@ -6767,7 +6786,7 @@ void AppWindow::RenderHud() {
     if (!m_hudRenderTarget) return;
 
     m_hudRenderTarget->BeginDraw();
-    m_hudRenderTarget->Clear(D2D1::ColorF(0.094f, 0.094f, 0.106f, 0.96f));
+    m_hudRenderTarget->Clear(D2D1::ColorF(0.047f, 0.047f, 0.059f, 0.96f));
 
     D2D1_SIZE_F sz = m_hudRenderTarget->GetSize();
     float hudW = sz.width;
@@ -8188,11 +8207,13 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 if (m_isAudioOnly) {
                     bool isPlayingAudio = m_media.IsPlaying();
                     float targetSlide = isPlayingAudio ? 58.0f : 20.0f;
-                    bool isTransitioning = std::abs(targetSlide - m_audioVinylSlide) > 0.5f;
+                    float dtAudio = (float)elapsedMs * 0.001f;
+                    m_audioVinylSlide += (targetSlide - m_audioVinylSlide) * (1.0f - std::exp(-12.0f * dtAudio));
+                    bool isTransitioning = std::abs(targetSlide - m_audioVinylSlide) > 0.15f;
                     if (isPlayingAudio) {
-                        m_audioDiscAngle += 2.2f;
+                        m_audioDiscAngle += dtAudio * 72.0f;
                         if (m_audioDiscAngle >= 360.0f) m_audioDiscAngle -= 360.0f;
-                        m_audioAnimTime += (float)elapsedMs * 0.0042f;
+                        m_audioAnimTime += dtAudio * 4.2f;
                         if (m_audioAnimTime >= 10000.0f) m_audioAnimTime -= 10000.0f;
                     }
                     bool barsSettling = false;
@@ -8551,7 +8572,7 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 HMENU hMenu = CreatePopupMenu();
                 AppendMenuW(hMenu, MF_STRING, IDM_TRAY_OPEN, L"Open WinPreview");
                 AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
-                AppendMenuW(hMenu, MF_STRING, IDM_TRAY_SETTINGS, L"Keybind Settings...\tCtrl+,");
+                AppendMenuW(hMenu, MF_STRING, IDM_TRAY_SETTINGS, L"Settings...\tCtrl+,");
                 AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
                 bool autoStart = IsAutoStartEnabled();
                 AppendMenuW(hMenu, MF_STRING | (autoStart ? MF_CHECKED : MF_UNCHECKED), IDM_TRAY_AUTOSTART, L"Start with Windows");
@@ -8970,12 +8991,6 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 return 0;
             }
 
-            // Empty State Keybind Button
-            if (m_docType == DocumentType::None && hit(m_emptyStateKeybindBtn)) {
-                ToggleSettings();
-                return 0;
-            }
-
             // Unsupported State Action Buttons
             if (m_docType == DocumentType::Unsupported) {
                 if (hit(m_unsupportedOpenBtnRect)) {
@@ -9152,9 +9167,6 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 } else if (hit(m_btnOpenWithRect)) {
                     m_pressedButtonId = BTN_OPEN_WITH;
                     OpenCurrentFileInDefaultApp();
-                } else if (hit(m_btnSettingsRect)) {
-                    m_pressedButtonId = BTN_SETTINGS;
-                    ToggleSettings();
                 } else if (hit(m_btnOverflowRect)) {
                     m_pressedButtonId = BTN_OVERFLOW_MENU;
                     m_showOverflowMenu = !m_showOverflowMenu;
@@ -9446,7 +9458,6 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 else if (hit(m_btnWrapTextRect)) m_hoveredButtonId = BTN_WRAP_TEXT;
                 else if (hit(m_btnTableViewRect)) m_hoveredButtonId = BTN_TABLE_VIEW;
                 else if (hit(m_btnOpenWithRect)) m_hoveredButtonId = BTN_OPEN_WITH;
-                else if (hit(m_btnSettingsRect)) m_hoveredButtonId = BTN_SETTINGS;
                 else if (hit(m_btnOverflowRect)) m_hoveredButtonId = BTN_OVERFLOW_MENU;
             }
             if (m_showOverflowMenu) {
@@ -9455,9 +9466,6 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 if (m_overflowHoveredIndex != oldHover) {
                     InvalidateRect(m_hwnd, NULL, FALSE);
                 }
-            }
-            if (m_docType == DocumentType::None && hit(m_emptyStateKeybindBtn)) {
-                m_hoveredButtonId = BTN_SETTINGS;
             }
             if (m_docType == DocumentType::Unsupported) {
                 if (hit(m_unsupportedOpenBtnRect)) m_hoveredButtonId = BTN_UNSUPPORTED_OPEN;
@@ -10270,6 +10278,7 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         }
 
         case WM_DESTROY: {
+            timeEndPeriod(1);
             RemoveTrayIcon();
             ExplorerHook::UninstallHook();
             DestroyHudWindow();

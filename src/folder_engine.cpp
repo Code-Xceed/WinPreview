@@ -392,40 +392,42 @@ void FolderEngine::Render(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D1_RECT
 
         curY += 72.0f;
 
-        // Badges
+        // Badges (Zen Editorial Tech Monospace Chips)
         float badgeY = curY;
-        auto drawPill = [&](const std::wstring& txt, float x, ID2D1SolidColorBrush* bg, ID2D1SolidColorBrush* fg) -> float {
+        auto drawPill = [&](const std::wstring& txt, float x, ID2D1SolidColorBrush* bg, ID2D1SolidColorBrush* fg, bool isAccent = false) -> float {
             float pw = 18.0f + (float)txt.length() * 7.2f;
-            D2D1_ROUNDED_RECT r = D2D1::RoundedRect(D2D1::RectF(x, badgeY, x + pw, badgeY + 22.0f), 11.0f, 11.0f);
-            rt->FillRoundedRectangle(r, bg);
-            rt->DrawRoundedRectangle(r, d2d.BrushBorder, 1.0f);
+            D2D1_ROUNDED_RECT r = D2D1::RoundedRect(D2D1::RectF(x, badgeY, x + pw, badgeY + 24.0f), 6.0f, 6.0f);
+            rt->FillRoundedRectangle(r, bg ? bg : d2d.BrushChipBg);
+            rt->DrawRoundedRectangle(r, isAccent ? (ID2D1Brush*)d2d.BrushAccent : (d2d.BrushChipBorder ? (ID2D1Brush*)d2d.BrushChipBorder : (ID2D1Brush*)d2d.BrushBorder), 1.0f);
 
+            IDWriteTextFormat* badgeFont = d2d.FontUtilityMono ? d2d.FontUtilityMono : d2d.FontBadge;
             IDWriteTextLayout* btl = nullptr;
-            d2d.GetDWriteFactory()->CreateTextLayout(txt.c_str(), (UINT32)txt.length(), d2d.FontBadge, pw, 22.0f, &btl);
+            d2d.GetDWriteFactory()->CreateTextLayout(txt.c_str(), (UINT32)txt.length(), badgeFont, pw, 24.0f, &btl);
             if (btl) {
                 btl->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
                 btl->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
-                rt->DrawTextLayout(D2D1::Point2F(x, badgeY), btl, fg);
+                rt->DrawTextLayout(D2D1::Point2F(x, badgeY), btl, fg ? fg : d2d.BrushText);
                 btl->Release();
             }
             return pw + 8.0f;
         };
 
         float bx = marginX;
+        ID2D1SolidColorBrush* chipBg = d2d.BrushChipBg ? d2d.BrushChipBg : d2d.BrushCard;
         if (m_isArchive) {
-            bx += drawPill(m_archiveTypeName, bx, d2d.BrushCard, d2d.BrushAccent);
+            bx += drawPill(m_archiveTypeName, bx, chipBg, d2d.BrushAccent, true);
             WCHAR countStr[64];
             swprintf_s(countStr, L"%u FILES • %u SUBFOLDERS", m_fileCount, m_dirCount);
-            bx += drawPill(countStr, bx, d2d.BrushCard, d2d.BrushText);
-            bx += drawPill(L"UNCOMPRESSED: " + FormatSize(m_totalSizeBytes), bx, d2d.BrushCard, d2d.BrushTextMuted);
-            bx += drawPill(L"COMPRESSED: " + FormatSize(m_totalCompressedBytes), bx, d2d.BrushCard, d2d.BrushGreen);
+            bx += drawPill(countStr, bx, chipBg, d2d.BrushText);
+            bx += drawPill(L"UNCOMPRESSED: " + FormatSize(m_totalSizeBytes), bx, chipBg, d2d.BrushTextMuted);
+            bx += drawPill(L"COMPRESSED: " + FormatSize(m_totalCompressedBytes), bx, chipBg, d2d.BrushGreen);
         } else {
-            bx += drawPill(L"DIRECTORY", bx, d2d.BrushCard, d2d.BrushAccent);
+            bx += drawPill(L"DIRECTORY", bx, chipBg, d2d.BrushAccent, true);
             WCHAR countStr[64];
             swprintf_s(countStr, L"%u FILES • %u SUBFOLDERS", m_fileCount, m_dirCount);
-            bx += drawPill(countStr, bx, d2d.BrushCard, d2d.BrushText);
-            bx += drawPill(FormatSize(m_totalSizeBytes), bx, d2d.BrushCard, d2d.BrushTextMuted);
-            bx += drawPill(FormatFileTime(m_lastWriteTime), bx, d2d.BrushCard, d2d.BrushTextMuted);
+            bx += drawPill(countStr, bx, chipBg, d2d.BrushText);
+            bx += drawPill(FormatSize(m_totalSizeBytes), bx, chipBg, d2d.BrushTextMuted);
+            bx += drawPill(FormatFileTime(m_lastWriteTime), bx, chipBg, d2d.BrushTextMuted);
         }
 
         curY += 36.0f;

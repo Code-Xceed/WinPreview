@@ -11,14 +11,25 @@ D2DEngine::D2DEngine()
       BrushHover(nullptr), BrushActive(nullptr), BrushCard(nullptr),
       BrushCardSelected(nullptr), BrushGlassPill(nullptr),
       BrushShadowDark(nullptr), BrushShadowSoft(nullptr),
+      BrushSelection(nullptr), BrushHighlight(nullptr), BrushActiveMatch(nullptr),
+      BrushCropOverlay(nullptr), BrushAudioWavePlayed(nullptr), BrushAudioWaveUnplayed(nullptr),
+      BrushAudioWavePlayhead(nullptr), BrushAudioSubtitle(nullptr),
+      BrushGreen(nullptr), BrushAmber(nullptr), BrushRed(nullptr),
+      BrushCrosshair(nullptr), BrushBorderHighlight(nullptr), BrushTextDim(nullptr),
+      BrushChipBg(nullptr), BrushChipBorder(nullptr), BrushCrimson(nullptr), BrushGinkgo(nullptr),
+      FontDisplay(nullptr), FontDisplayCenter(nullptr),
       FontHero(nullptr), FontHeroCenter(nullptr), FontTitle(nullptr), FontTitleCenter(nullptr),
       FontBody(nullptr), FontBodyCenter(nullptr), FontCaption(nullptr), FontCaptionCenter(nullptr),
-      FontBadge(nullptr), FontMono(nullptr), FontButton(nullptr), FontCaptionRight(nullptr), FontMenu(nullptr), FontTimer(nullptr), RoundStrokeStyle(nullptr)
+      FontBadge(nullptr), FontMono(nullptr), FontButton(nullptr), FontCaptionRight(nullptr),
+      FontMenu(nullptr), FontTimer(nullptr), FontUtilityMono(nullptr), FontUtilityMonoCenter(nullptr),
+      RoundStrokeStyle(nullptr)
 {
 }
 
 D2DEngine::~D2DEngine() {
     DiscardDeviceResources();
+    SafeRelease(FontDisplay);
+    SafeRelease(FontDisplayCenter);
     SafeRelease(FontHero);
     SafeRelease(FontHeroCenter);
     SafeRelease(FontTitle);
@@ -33,6 +44,8 @@ D2DEngine::~D2DEngine() {
     SafeRelease(FontCaptionRight);
     SafeRelease(FontMenu);
     SafeRelease(FontTimer);
+    SafeRelease(FontUtilityMono);
+    SafeRelease(FontUtilityMonoCenter);
     SafeRelease(RoundStrokeStyle);
     SafeRelease(m_dwriteFactory);
     SafeRelease(m_wicFactory);
@@ -67,6 +80,8 @@ bool D2DEngine::Initialize() {
 }
 
 void D2DEngine::CreateFonts() {
+    SafeRelease(FontDisplay);
+    SafeRelease(FontDisplayCenter);
     SafeRelease(FontHero);
     SafeRelease(FontHeroCenter);
     SafeRelease(FontTitle);
@@ -81,6 +96,8 @@ void D2DEngine::CreateFonts() {
     SafeRelease(FontCaptionRight);
     SafeRelease(FontMenu);
     SafeRelease(FontTimer);
+    SafeRelease(FontUtilityMono);
+    SafeRelease(FontUtilityMonoCenter);
 
     if (!m_dwriteFactory) return;
 
@@ -110,11 +127,20 @@ void D2DEngine::CreateFonts() {
     // Direct2D render targets automatically scale DIPs to device pixels using their configured DPI.
     // Specifying font sizes in DIPs ensures pixel-perfect, crisp rendering without double-scaling.
 
-    // Hero / Welcome (Large display optical weight)
+    // Display / Grand Title (Zen Editorial Tech Headline)
     m_dwriteFactory->CreateTextFormat(
         s_displayFamily, NULL,
-        DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
-        22.0f, L"en-us", &FontHero);
+        DWRITE_FONT_WEIGHT_BOLD, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+        28.0f, L"en-us", &FontDisplay);
+
+    m_dwriteFactory->CreateTextFormat(
+        s_displayFamily, NULL,
+        DWRITE_FONT_WEIGHT_BOLD, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+        28.0f, L"en-us", &FontDisplayCenter);
+    if (FontDisplayCenter) {
+        FontDisplayCenter->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+        FontDisplayCenter->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+    }
 
     // Hero Center (for centered titles in Welcome / Unsupported screens)
     m_dwriteFactory->CreateTextFormat(
@@ -277,6 +303,38 @@ void D2DEngine::CreateFonts() {
         FontTimer->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
         FontTimer->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
     }
+
+    // Monospace Utility Labels (Zen Editorial Tech badges, counts & metadata)
+    HRESULT hrUtil = m_dwriteFactory->CreateTextFormat(
+        L"Cascadia Code", NULL,
+        DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+        10.5f, L"en-us", &FontUtilityMono);
+    if (FAILED(hrUtil) || !FontUtilityMono) {
+        m_dwriteFactory->CreateTextFormat(
+            L"Consolas", NULL,
+            DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+            10.5f, L"en-us", &FontUtilityMono);
+    }
+    if (FontUtilityMono) {
+        FontUtilityMono->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+        FontUtilityMono->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+    }
+
+    HRESULT hrUtilCenter = m_dwriteFactory->CreateTextFormat(
+        L"Cascadia Code", NULL,
+        DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+        10.5f, L"en-us", &FontUtilityMonoCenter);
+    if (FAILED(hrUtilCenter) || !FontUtilityMonoCenter) {
+        m_dwriteFactory->CreateTextFormat(
+            L"Consolas", NULL,
+            DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+            10.5f, L"en-us", &FontUtilityMonoCenter);
+    }
+    if (FontUtilityMonoCenter) {
+        FontUtilityMonoCenter->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+        FontUtilityMonoCenter->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+        FontUtilityMonoCenter->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+    }
 }
 
 void D2DEngine::UpdateDpi(UINT dpi) {
@@ -321,23 +379,24 @@ bool D2DEngine::CreateDeviceResources(HWND hwnd) {
 void D2DEngine::CreateBrushes() {
     if (!m_renderTarget) return;
 
-    // Refined Apple Dark Zinc Theme Palette
-    m_renderTarget->CreateSolidColorBrush(D2D1::ColorF(0.063f, 0.063f, 0.071f, 1.0f), &BrushBg);             // Deep Zinc (#101012)
-    m_renderTarget->CreateSolidColorBrush(D2D1::ColorF(0.094f, 0.094f, 0.106f, 1.0f), &BrushToolbar);        // Toolbar (#18181B)
-    m_renderTarget->CreateSolidColorBrush(D2D1::ColorF(0.082f, 0.082f, 0.094f, 1.0f), &BrushSidebar);        // Sidebar (#151518)
-    m_renderTarget->CreateSolidColorBrush(D2D1::ColorF(0.165f, 0.165f, 0.180f, 1.0f), &BrushBorder);         // Border (#2A2A2E)
-    m_renderTarget->CreateSolidColorBrush(D2D1::ColorF(0.125f, 0.125f, 0.141f, 1.0f), &BrushBorderSubtle);   // Subtle Border (#202024)
-    m_renderTarget->CreateSolidColorBrush(D2D1::ColorF(0.965f, 0.965f, 0.973f, 1.0f), &BrushText);           // Pure text (#F6F6F8)
-    m_renderTarget->CreateSolidColorBrush(D2D1::ColorF(0.580f, 0.580f, 0.620f, 1.0f), &BrushTextMuted);      // Muted text (#94949E)
-    m_renderTarget->CreateSolidColorBrush(D2D1::ColorF(0.039f, 0.518f, 1.000f, 1.0f), &BrushAccent);         // Apple Blue (#0A84FF)
+    // Refined Obsidian & Zen Editorial Tech Dark Mode Palette
+    m_renderTarget->CreateSolidColorBrush(D2D1::ColorF(0.035f, 0.035f, 0.043f, 1.0f), &BrushBg);             // Deep Obsidian (#09090B)
+    m_renderTarget->CreateSolidColorBrush(D2D1::ColorF(0.055f, 0.055f, 0.067f, 1.0f), &BrushToolbar);        // Dark Tool Bar (#0E0E11)
+    m_renderTarget->CreateSolidColorBrush(D2D1::ColorF(0.047f, 0.047f, 0.059f, 1.0f), &BrushSidebar);        // Deep Sidebar (#0C0C0F)
+    m_renderTarget->CreateSolidColorBrush(D2D1::ColorF(0.133f, 0.133f, 0.157f, 1.0f), &BrushBorder);         // Precision Border (#222228)
+    m_renderTarget->CreateSolidColorBrush(D2D1::ColorF(0.098f, 0.098f, 0.118f, 1.0f), &BrushBorderSubtle);   // Subtle Border (#19191E)
+    m_renderTarget->CreateSolidColorBrush(D2D1::ColorF(0.973f, 0.973f, 0.980f, 1.0f), &BrushText);           // Pure text (#F8F8FA)
+    m_renderTarget->CreateSolidColorBrush(D2D1::ColorF(0.520f, 0.520f, 0.560f, 1.0f), &BrushTextMuted);      // Muted text (#85858F)
+    m_renderTarget->CreateSolidColorBrush(D2D1::ColorF(0.380f, 0.380f, 0.420f, 1.0f), &BrushTextDim);        // Dim utility text (#61616B)
+    m_renderTarget->CreateSolidColorBrush(D2D1::ColorF(0.039f, 0.518f, 1.000f, 1.0f), &BrushAccent);         // Apple Blue / Electric Cyan (#0A84FF)
     m_renderTarget->CreateSolidColorBrush(D2D1::ColorF(0.039f, 0.518f, 1.000f, 0.35f), &BrushAccentGlow);    // Accent Glow
     m_renderTarget->CreateSolidColorBrush(D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.07f), &BrushHover);               // Hover overlay
     m_renderTarget->CreateSolidColorBrush(D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.14f), &BrushActive);              // Active overlay
-    m_renderTarget->CreateSolidColorBrush(D2D1::ColorF(0.118f, 0.118f, 0.133f, 1.0f), &BrushCard);           // Card surface (#1E1E22)
+    m_renderTarget->CreateSolidColorBrush(D2D1::ColorF(0.071f, 0.071f, 0.086f, 1.0f), &BrushCard);           // Elevated Card (#121216)
     m_renderTarget->CreateSolidColorBrush(D2D1::ColorF(0.039f, 0.518f, 1.000f, 0.15f), &BrushCardSelected);   // Card selected tint
-    m_renderTarget->CreateSolidColorBrush(D2D1::ColorF(0.094f, 0.094f, 0.106f, 0.92f), &BrushGlassPill);      // Frosted HUD Pill (#18181BEB)
-    m_renderTarget->CreateSolidColorBrush(D2D1::ColorF(0.000f, 0.000f, 0.000f, 0.40f), &BrushShadowDark);     // Hard drop shadow
-    m_renderTarget->CreateSolidColorBrush(D2D1::ColorF(0.000f, 0.000f, 0.000f, 0.15f), &BrushShadowSoft);     // Ambient soft shadow
+    m_renderTarget->CreateSolidColorBrush(D2D1::ColorF(0.071f, 0.071f, 0.086f, 0.92f), &BrushGlassPill);      // Frosted HUD Pill (#121216EB)
+    m_renderTarget->CreateSolidColorBrush(D2D1::ColorF(0.000f, 0.000f, 0.000f, 0.45f), &BrushShadowDark);     // Hard drop shadow
+    m_renderTarget->CreateSolidColorBrush(D2D1::ColorF(0.000f, 0.000f, 0.000f, 0.18f), &BrushShadowSoft);     // Ambient soft shadow
     m_renderTarget->CreateSolidColorBrush(D2D1::ColorF(0.000f, 0.470f, 0.830f, 0.35f), &BrushSelection);      // PDF Text Selection Blue
     m_renderTarget->CreateSolidColorBrush(D2D1::ColorF(1.000f, 0.880f, 0.200f, 0.45f), &BrushHighlight);      // Search Match Yellow Glow
     m_renderTarget->CreateSolidColorBrush(D2D1::ColorF(0.000f, 0.500f, 1.000f, 0.70f), &BrushActiveMatch);    // Active Match Blue Pill
@@ -349,6 +408,14 @@ void D2DEngine::CreateBrushes() {
     m_renderTarget->CreateSolidColorBrush(D2D1::ColorF(0.188f, 0.820f, 0.447f, 1.00f), &BrushGreen);             // Emerald Green (#30D158 / #10B981)
     m_renderTarget->CreateSolidColorBrush(D2D1::ColorF(1.000f, 0.624f, 0.039f, 1.00f), &BrushAmber);             // Amber Orange (#FF9F0A)
     m_renderTarget->CreateSolidColorBrush(D2D1::ColorF(1.000f, 0.271f, 0.227f, 1.00f), &BrushRed);               // Red (#FF453A)
+
+    // Zen Editorial Tech Accents
+    m_renderTarget->CreateSolidColorBrush(D2D1::ColorF(1.000f, 1.000f, 1.000f, 0.22f), &BrushCrosshair);       // Corner crosshair marks (+)
+    m_renderTarget->CreateSolidColorBrush(D2D1::ColorF(1.000f, 1.000f, 1.000f, 0.08f), &BrushBorderHighlight);  // Top-edge light bevel
+    m_renderTarget->CreateSolidColorBrush(D2D1::ColorF(0.078f, 0.078f, 0.094f, 1.0f), &BrushChipBg);           // Tech pill surface (#141418)
+    m_renderTarget->CreateSolidColorBrush(D2D1::ColorF(0.149f, 0.149f, 0.184f, 1.0f), &BrushChipBorder);       // Tech pill border (#26262F)
+    m_renderTarget->CreateSolidColorBrush(D2D1::ColorF(0.882f, 0.114f, 0.282f, 1.0f), &BrushCrimson);          // Japanese Maple Crimson (#E11D48)
+    m_renderTarget->CreateSolidColorBrush(D2D1::ColorF(0.961f, 0.620f, 0.043f, 1.0f), &BrushGinkgo);           // Golden Ginkgo Amber (#F59E0B)
 }
 
 void D2DEngine::DiscardDeviceResources() {
@@ -359,6 +426,7 @@ void D2DEngine::DiscardDeviceResources() {
     SafeRelease(BrushBorderSubtle);
     SafeRelease(BrushText);
     SafeRelease(BrushTextMuted);
+    SafeRelease(BrushTextDim);
     SafeRelease(BrushAccent);
     SafeRelease(BrushAccentGlow);
     SafeRelease(BrushHover);
@@ -379,6 +447,12 @@ void D2DEngine::DiscardDeviceResources() {
     SafeRelease(BrushGreen);
     SafeRelease(BrushAmber);
     SafeRelease(BrushRed);
+    SafeRelease(BrushCrosshair);
+    SafeRelease(BrushBorderHighlight);
+    SafeRelease(BrushChipBg);
+    SafeRelease(BrushChipBorder);
+    SafeRelease(BrushCrimson);
+    SafeRelease(BrushGinkgo);
     SafeRelease(m_renderTarget);
 }
 
@@ -1341,6 +1415,92 @@ void D2DEngine::DrawIconHamburger(float cx, float cy, float size, ID2D1Brush* br
     target->DrawLine(D2D1::Point2F(cx - halfW, cy - yOffset), D2D1::Point2F(cx + halfW, cy - yOffset), brush, strokeW, RoundStrokeStyle);
     target->DrawLine(D2D1::Point2F(cx - halfW, cy),           D2D1::Point2F(cx + halfW, cy),           brush, strokeW, RoundStrokeStyle);
     target->DrawLine(D2D1::Point2F(cx - halfW, cy + yOffset), D2D1::Point2F(cx + halfW, cy + yOffset), brush, strokeW, RoundStrokeStyle);
+}
+
+// =========================================================================
+// ZEN EDITORIAL TECH DRAWING HELPERS
+// =========================================================================
+
+void D2DEngine::DrawCornerCrosshairs(const D2D1_RECT_F& rect, float armLength, float strokeWidth, ID2D1RenderTarget* rt) {
+    ID2D1RenderTarget* target = rt ? rt : m_renderTarget;
+    if (!target) return;
+    ID2D1Brush* brush = BrushCrosshair ? BrushCrosshair : BrushBorder;
+    if (!brush) return;
+
+    float s = m_dpiScale;
+    float len = armLength * s;
+    float sw = strokeWidth * s;
+
+    // 4 Corner registration crosshairs (+)
+    D2D1_POINT_2F corners[4] = {
+        D2D1::Point2F(rect.left, rect.top),       // Top-Left
+        D2D1::Point2F(rect.right, rect.top),      // Top-Right
+        D2D1::Point2F(rect.left, rect.bottom),    // Bottom-Left
+        D2D1::Point2F(rect.right, rect.bottom)    // Bottom-Right
+    };
+
+    for (int i = 0; i < 4; ++i) {
+        float cx = corners[i].x;
+        float cy = corners[i].y;
+        target->DrawLine(D2D1::Point2F(cx - len, cy), D2D1::Point2F(cx + len, cy), brush, sw);
+        target->DrawLine(D2D1::Point2F(cx, cy - len), D2D1::Point2F(cx, cy + len), brush, sw);
+    }
+}
+
+void D2DEngine::DrawTechChip(const D2D1_RECT_F& rect, const wchar_t* label, const wchar_t* countOrTag, bool active, ID2D1RenderTarget* rt) {
+    ID2D1RenderTarget* target = rt ? rt : m_renderTarget;
+    if (!target || !label) return;
+
+    float radius = (rect.bottom - rect.top) * 0.5f;
+    if (radius > 12.0f * m_dpiScale) radius = 12.0f * m_dpiScale;
+    D2D1_ROUNDED_RECT rrect = D2D1::RoundedRect(rect, radius, radius);
+
+    // Chip Background
+    if (active && BrushAccent) {
+        D2D1_COLOR_F c = D2D1::ColorF(0.039f, 0.518f, 1.000f, 0.18f);
+        ID2D1SolidColorBrush* activeBg = nullptr;
+        if (SUCCEEDED(target->CreateSolidColorBrush(c, &activeBg)) && activeBg) {
+            target->FillRoundedRectangle(rrect, activeBg);
+            activeBg->Release();
+        }
+    } else if (BrushChipBg) {
+        target->FillRoundedRectangle(rrect, BrushChipBg);
+    }
+
+    // 1px Border
+    ID2D1Brush* borderBrush = active ? BrushAccent : (BrushChipBorder ? BrushChipBorder : BrushBorderSubtle);
+    if (borderBrush) {
+        target->DrawRoundedRectangle(rrect, borderBrush, 1.0f * m_dpiScale);
+    }
+
+    // Typography
+    IDWriteTextFormat* font = FontUtilityMono ? FontUtilityMono : FontCaption;
+    ID2D1Brush* textBrush = active ? (BrushAccent ? BrushAccent : BrushText) : (BrushText ? BrushText : BrushTextMuted);
+
+    if (countOrTag && countOrTag[0] != L'\0') {
+        float padding = 8.0f * m_dpiScale;
+        D2D1_RECT_F labelRect = D2D1::RectF(rect.left + padding, rect.top, rect.right - 28.0f * m_dpiScale, rect.bottom);
+        target->DrawText(label, (UINT32)wcslen(label), font, labelRect, textBrush);
+
+        float badgeW = 20.0f * m_dpiScale;
+        float badgeH = (rect.bottom - rect.top) - 6.0f * m_dpiScale;
+        float badgeX = rect.right - badgeW - 4.0f * m_dpiScale;
+        float badgeY = rect.top + 3.0f * m_dpiScale;
+        D2D1_ROUNDED_RECT badgeRRect = D2D1::RoundedRect(
+            D2D1::RectF(badgeX, badgeY, badgeX + badgeW, badgeY + badgeH),
+            badgeH * 0.5f, badgeH * 0.5f
+        );
+        if (BrushBorder) {
+            target->FillRoundedRectangle(badgeRRect, BrushBorder);
+        }
+        ID2D1Brush* countBrush = BrushTextMuted ? BrushTextMuted : textBrush;
+        IDWriteTextFormat* countFont = FontUtilityMonoCenter ? FontUtilityMonoCenter : font;
+        target->DrawText(countOrTag, (UINT32)wcslen(countOrTag), countFont,
+            D2D1::RectF(badgeX, badgeY, badgeX + badgeW, badgeY + badgeH), countBrush);
+    } else {
+        IDWriteTextFormat* centerFont = FontUtilityMonoCenter ? FontUtilityMonoCenter : FontButton;
+        target->DrawText(label, (UINT32)wcslen(label), centerFont, rect, textBrush);
+    }
 }
 
 } // namespace WinPreview
