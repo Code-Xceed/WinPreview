@@ -4809,6 +4809,14 @@ void AppWindow::RenderCanvas(const D2D1_RECT_F& rect) {
 
         bool isPlaying = m_media.IsPlaying();
 
+        // Smooth physical slide transition for vinyl disc (buttery smooth 60fps frame lerp)
+        float targetSlide = isPlaying ? 58.0f : 20.0f;
+        if (std::abs(targetSlide - m_audioVinylSlide) > 0.05f) {
+            m_audioVinylSlide += (targetSlide - m_audioVinylSlide) * 0.16f;
+        } else {
+            m_audioVinylSlide = targetSlide;
+        }
+
         // 1. Responsive Visual Sizing (Minimal, zero hard background circles)
         float artSize = std::clamp(stageH * 0.36f, 140.0f, 200.0f);
         float mediaY = cy - 80.0f;
@@ -7133,6 +7141,7 @@ LRESULT AppWindow::HandleHudMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             if (hit(m_hudBtnPlayPause)) {
                 m_hudPressedButtonId = BTN_PLAY_PAUSE;
                 m_media.TogglePlayPause();
+                EnsureAnimTimer();
                 InvalidateRect(m_hwnd, NULL, FALSE);
             } else if (hit(m_hudBtnSkipBack)) {
                 m_hudPressedButtonId = BTN_SKIP_BACK;
@@ -8207,19 +8216,17 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 if (m_isAudioOnly) {
                     bool isPlayingAudio = m_media.IsPlaying();
                     float targetSlide = isPlayingAudio ? 58.0f : 20.0f;
-                    float dtAudio = (float)elapsedMs * 0.001f;
-                    m_audioVinylSlide += (targetSlide - m_audioVinylSlide) * (1.0f - std::exp(-12.0f * dtAudio));
-                    bool isTransitioning = std::abs(targetSlide - m_audioVinylSlide) > 0.15f;
+                    bool isTransitioning = std::abs(targetSlide - m_audioVinylSlide) > 0.05f;
                     if (isPlayingAudio) {
-                        m_audioDiscAngle += dtAudio * 72.0f;
+                        m_audioDiscAngle += 2.2f;
                         if (m_audioDiscAngle >= 360.0f) m_audioDiscAngle -= 360.0f;
-                        m_audioAnimTime += dtAudio * 4.2f;
+                        m_audioAnimTime += 0.04f;
                         if (m_audioAnimTime >= 10000.0f) m_audioAnimTime -= 10000.0f;
                     }
                     bool barsSettling = false;
                     if (!isPlayingAudio) {
                         for (int i = 0; i < 64; ++i) {
-                            if (m_audioVisualizerBars[i] > 14.0f) {
+                            if (m_audioVisualizerBars[i] > 11.0f) {
                                 barsSettling = true;
                                 break;
                             }
@@ -8314,11 +8321,28 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                                          (m_settingsAnim > 0.005f && m_settingsAnim < 0.995f);
 
             // ================================================================
-            // Idle detection: when nothing is animating, park the 30ms render-pump
+            // Idle detection: when nothing is animating, park the 16ms render-pump
             // timer entirely. Zero wakeups while a static document is on screen;
             // any input re-arms it through EnsureAnimTimer() (WakeAllUiAndCursor,
             // ShowToast, key/wheel/button handlers).
             // ================================================================
+            bool isAudioAnimating = false;
+            if (m_docType == DocumentType::Media && m_isAudioOnly) {
+                float targetSlide = m_media.IsPlaying() ? 58.0f : 20.0f;
+                bool isSlideTransitioning = std::abs(targetSlide - m_audioVinylSlide) > 0.05f;
+                bool barsSettling = false;
+                if (!m_media.IsPlaying()) {
+                    for (int i = 0; i < 64; ++i) {
+                        if (m_audioVisualizerBars[i] > 11.0f) {
+                            barsSettling = true;
+                            break;
+                        }
+                    }
+                }
+                isAudioAnimating = m_media.IsPlaying() || isSlideTransitioning || barsSettling ||
+                                   m_isScrubbing || m_isVolDragging || m_isWaveformSeeking;
+            }
+
             bool animationsActive =
                 panelAnimationsActive ||
                 isDockFading || isHudFading ||
@@ -8326,7 +8350,7 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 (m_tooltipAlpha > 0.0f && m_tooltipAlpha < 0.995f) ||
                 (m_docType == DocumentType::Text || m_docType == DocumentType::Spreadsheet) ||
                 (m_docType == DocumentType::Media &&
-                    (m_media.IsPlaying() || m_isScrubbing || m_isVolDragging || m_isWaveformSeeking)) ||
+                    (m_media.IsPlaying() || m_isScrubbing || m_isVolDragging || m_isWaveformSeeking || isAudioAnimating)) ||
                 (m_zoom != m_targetZoom || m_panX != m_targetPanX || m_panY != m_targetPanY) ||
                 (m_showSidebar && (m_sidebarScrollY != m_targetSidebarScrollY ||
                                    m_outlineScrollY != m_targetOutlineScrollY)) ||
@@ -8601,6 +8625,7 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             } else if (cmdId == 1001) {
                 WakeAllUiAndCursor();
                 m_media.TogglePlayPause();
+                EnsureAnimTimer();
             } else if (cmdId == 1002) {
                 WakeAllUiAndCursor();
                 ToggleFullscreen();
@@ -9225,6 +9250,7 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                     return 0;
                 }
                 m_media.TogglePlayPause();
+                EnsureAnimTimer();
                 InvalidateRect(m_hwnd, NULL, FALSE);
                 if (m_hudHwnd) InvalidateRect(m_hudHwnd, NULL, FALSE);
                 return 0;
@@ -10034,6 +10060,9 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 case VK_SPACE:
                     if (m_docType == DocumentType::Media) {
                         m_media.TogglePlayPause();
+                        EnsureAnimTimer();
+                        InvalidateRect(m_hwnd, NULL, FALSE);
+                        if (m_hudHwnd) InvalidateRect(m_hudHwnd, NULL, FALSE);
                     } else if (m_docType == DocumentType::Text || m_docType == DocumentType::Spreadsheet) {
                         m_text.PageDown(600.0f);
                     } else {
