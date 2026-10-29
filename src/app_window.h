@@ -337,6 +337,10 @@ private:
     bool m_autoDetectLog = true;
     bool m_showFormatBadge = true;
     bool m_rememberWindowSize = false;
+    bool m_cleanShowcaseMode = true;
+    bool m_guiVisible = false;
+    D2D1_POINT_2F m_mouseDownPos = {};
+    bool m_hasDraggedDistance = false;
 
     // Settings Modal Hit Rectangles
     D2D1_RECT_F m_settingsModalRect = {};
@@ -357,6 +361,7 @@ private:
     D2D1_RECT_F m_settingsToggleLogDetectRect = {};
     D2D1_RECT_F m_settingsToggleFormatBadgeRect = {};
     D2D1_RECT_F m_settingsToggleRememberSizeRect = {};
+    D2D1_RECT_F m_settingsToggleCleanShowcaseRect = {};
     D2D1_RECT_F m_settingsAboutUpdateBtn = {};
     D2D1_RECT_F m_settingsAboutGithubBtn = {};
     D2D1_RECT_F m_emptyStateKeybindBtn = {};
@@ -477,8 +482,8 @@ private:
 
     float m_hudOpacity = 0.0f;
     float m_hudTargetOpacity = 0.0f;
-    float m_dockOpacity = 1.0f;
-    float m_dockTargetOpacity = 1.0f;
+    float m_dockOpacity = 0.0f;
+    float m_dockTargetOpacity = 0.0f;
     ID2D1Layer* m_dockLayer = nullptr;
     ID2D1Layer* m_inspectorLayer = nullptr;
     ID2D1Layer* m_searchLayer = nullptr;
@@ -550,6 +555,9 @@ private:
     void SetCursorVisibility(bool visible);
     void WakeAllUiAndCursor(const char* reason = "unknown");
     void WakeHudAndCursor() { WakeAllUiAndCursor("WakeHud"); }
+    void ToggleGuiVisibility();
+    void SetGuiVisibility(bool visible);
+    bool IsGuiVisible() const { return m_guiVisible; }
 
 
     // Layout updates

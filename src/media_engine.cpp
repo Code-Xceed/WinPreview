@@ -21,8 +21,8 @@ LRESULT CALLBACK MediaEngine::VideoWndProc(HWND hwnd, UINT msg, WPARAM wParam, L
             break;
         case WM_LBUTTONDOWN:
             if (parent) {
-                // Forward single click to parent or toggle play/pause
-                SendMessage(parent, WM_COMMAND, MAKEWPARAM(1001 /* ID_MEDIA_PLAY_PAUSE */, 0), 0);
+                // Forward single click to parent to toggle GUI showcase visibility (show/hide on click)
+                SendMessage(parent, WM_COMMAND, MAKEWPARAM(1003 /* ID_MEDIA_TOGGLE_GUI */, 0), 0);
             }
             return 0;
         case WM_LBUTTONDBLCLK:

@@ -83,8 +83,9 @@ enum ButtonId {
     BTN_SETTINGS_TOGGLE_LOG_DETECT = 81,
     BTN_SETTINGS_TOGGLE_FORMAT_BADGE = 82,
     BTN_SETTINGS_TOGGLE_REMEMBER_SIZE = 83,
-    BTN_SETTINGS_ABOUT_UPDATE_NOW = 84,
-    BTN_SETTINGS_ABOUT_GITHUB = 85
+    BTN_SETTINGS_TOGGLE_CLEAN_SHOWCASE = 84,
+    BTN_SETTINGS_ABOUT_UPDATE_NOW = 85,
+    BTN_SETTINGS_ABOUT_GITHUB = 86
 };
 
 static void CopyTextToClipboard(HWND hwnd, const std::wstring& text) {
@@ -996,7 +997,17 @@ bool AppWindow::OpenFile(const std::wstring& filePath) {
         POINT clPt = m_lastGlobalMousePos;
         ScreenToClient(m_hwnd, &clPt);
         m_lastActiveMousePos = clPt;
-        WakeAllUiAndCursor();
+
+        // Clean Media Showcase:
+        // When opening visual media files (video, audio, image, svg, office, pdf), start in clean immersion:
+        // GUI hidden initially, toggled on click.
+        if (m_cleanShowcaseMode && (m_docType == DocumentType::Media || m_docType == DocumentType::Image ||
+                                    m_docType == DocumentType::Svg || m_docType == DocumentType::Office ||
+                                    m_docType == DocumentType::Pdf)) {
+            SetGuiVisibility(false);
+        } else {
+            WakeAllUiAndCursor();
+        }
         ExplorerHook::SetSuppressSpaceClose(m_docType == DocumentType::Text);
         CheckUpdateOnPreviewOpen();
         InvalidateRect(m_hwnd, NULL, FALSE);
@@ -4407,6 +4418,9 @@ void AppWindow::LoadPersistedUiState() {
     if (RegReadU64(L"RememberWindowSize", v)) {
         m_rememberWindowSize = (v != 0);
     }
+    if (RegReadU64(L"CleanShowcase", v)) {
+        m_cleanShowcaseMode = (v != 0);
+    }
 }
 
 void AppWindow::SaveGeneralSettings() {
@@ -4419,6 +4433,7 @@ void AppWindow::SaveGeneralSettings() {
     RegWriteU64(L"AutoDetectLog", m_autoDetectLog ? 1 : 0);
     RegWriteU64(L"ShowFormatBadge", m_showFormatBadge ? 1 : 0);
     RegWriteU64(L"RememberWindowSize", m_rememberWindowSize ? 1 : 0);
+    RegWriteU64(L"CleanShowcase", m_cleanShowcaseMode ? 1 : 0);
     SaveLoopPref();
 }
 
@@ -6150,6 +6165,7 @@ void AppWindow::RenderSettingsModal(const D2D1_RECT_F& canvasRect) {
         m_settingsToggleLogDetectRect = {};
         m_settingsToggleFormatBadgeRect = {};
         m_settingsToggleRememberSizeRect = {};
+        m_settingsToggleCleanShowcaseRect = {};
         m_settingsAboutUpdateBtn = {};
         m_settingsAboutGithubBtn = {};
     };
@@ -6442,29 +6458,33 @@ void AppWindow::RenderSettingsModal(const D2D1_RECT_F& canvasRect) {
     }
     // TAB 2: VIEWER & MEDIA
     else if (m_settingsActiveTab == 2) {
-        float cardH = 290.0f;
+        float rH = 50.0f;
+        float cardH = 6 * rH;
         D2D1_RECT_F groupCard = D2D1::RectF(contentX, curY, contentX + contentW, curY + cardH);
         rt->FillRoundedRectangle(D2D1::RoundedRect(groupCard, 8.0f, 8.0f), m_d2d.BrushSidebar);
         rt->DrawRoundedRectangle(D2D1::RoundedRect(groupCard, 8.0f, 8.0f), m_d2d.BrushBorderSubtle, 1.0f);
 
-        float rH = 58.0f;
         drawSettingRow(contentX, curY + 0 * rH, contentW, rH,
+                       L"Clean Media Showcase", L"Single click anywhere toggles GUI; media opens in full clean immersion.",
+                       m_cleanShowcaseMode, BTN_SETTINGS_TOGGLE_CLEAN_SHOWCASE, m_settingsToggleCleanShowcaseRect, false);
+
+        drawSettingRow(contentX, curY + 1 * rH, contentW, rH,
                        L"Auto-Play Videos & Audio", L"Automatically begin playback when opening video or audio files.",
                        m_autoPlayMedia, BTN_SETTINGS_TOGGLE_AUTOPLAY, m_settingsToggleAutoplayRect, false);
 
-        drawSettingRow(contentX, curY + 1 * rH, contentW, rH,
+        drawSettingRow(contentX, curY + 2 * rH, contentW, rH,
                        L"Continuous Media Loop", L"Seamlessly loop video and audio playback.",
                        m_isLooping, BTN_SETTINGS_TOGGLE_LOOP_MEDIA, m_settingsToggleLoopMediaRect, false);
 
-        drawSettingRow(contentX, curY + 2 * rH, contentW, rH,
+        drawSettingRow(contentX, curY + 3 * rH, contentW, rH,
                        L"Auto-Detect Cinema Log Footage", L"Automatically apply Rec.709 tone-map for Apple Log, Sony S-Log, etc.",
                        m_autoDetectLog, BTN_SETTINGS_TOGGLE_LOG_DETECT, m_settingsToggleLogDetectRect, false);
 
-        drawSettingRow(contentX, curY + 3 * rH, contentW, rH,
+        drawSettingRow(contentX, curY + 4 * rH, contentW, rH,
                        L"Show Format & Dimension Badge", L"Display resolution, page count, and codec pill in header dock.",
                        m_showFormatBadge, BTN_SETTINGS_TOGGLE_FORMAT_BADGE, m_settingsToggleFormatBadgeRect, false);
 
-        drawSettingRow(contentX, curY + 4 * rH, contentW, rH,
+        drawSettingRow(contentX, curY + 5 * rH, contentW, rH,
                        L"Remember Window Size", L"Keep window dimensions constant instead of adapting to file aspect ratio.",
                        m_rememberWindowSize, BTN_SETTINGS_TOGGLE_REMEMBER_SIZE, m_settingsToggleRememberSizeRect, true);
     }
@@ -6768,6 +6788,27 @@ void AppWindow::WakeAllUiAndCursor(const char* reason) {
     // Any input can start an animation (hover fades, dock reveal, playback); re-arm first.
     EnsureAnimTimer();
     m_inactivityMs = 0;
+
+    // In Clean Showcase mode, if GUI is currently hidden, mouse movement wakes the cursor only,
+    // without forcing the GUI docks/bars to pop up.
+    if (m_cleanShowcaseMode && !m_guiVisible &&
+        (m_docType == DocumentType::Media || m_docType == DocumentType::Image ||
+         m_docType == DocumentType::Svg || m_docType == DocumentType::Office ||
+         m_docType == DocumentType::Pdf)) {
+        m_dockTargetOpacity = 0.0f;
+        m_hudTargetOpacity = 0.0f;
+        SetCursorVisibility(true);
+        POINT curPos;
+        if (GetCursorPos(&curPos)) {
+            m_lastGlobalMousePos = curPos;
+            POINT clPt = curPos;
+            ScreenToClient(m_hwnd, &clPt);
+            m_lastActiveMousePos = clPt;
+        }
+        InvalidateRect(m_hwnd, NULL, FALSE);
+        return;
+    }
+
     m_dockTargetOpacity = 1.0f;
 
     if (m_docType == DocumentType::Media && IsWindowVisible(m_hwnd) && !IsIconic(m_hwnd)) {
@@ -6796,6 +6837,44 @@ void AppWindow::WakeAllUiAndCursor(const char* reason) {
     }
 
     InvalidateRect(m_hwnd, NULL, FALSE);
+}
+
+void AppWindow::ToggleGuiVisibility() {
+    SetGuiVisibility(!m_guiVisible);
+}
+
+void AppWindow::SetGuiVisibility(bool visible) {
+    m_guiVisible = visible;
+    m_inactivityMs = 0;
+    EnsureAnimTimer();
+
+    if (visible) {
+        m_dockTargetOpacity = 1.0f;
+        if (m_docType == DocumentType::Media && IsWindowVisible(m_hwnd) && !IsIconic(m_hwnd)) {
+            m_hudTargetOpacity = 255.0f;
+            UpdateHudPosition();
+            if (m_hudHwnd) {
+                ShowWindow(m_hudHwnd, SW_SHOWNOACTIVATE);
+                InvalidateRect(m_hudHwnd, NULL, FALSE);
+            }
+        }
+        SetCursorVisibility(true);
+    } else {
+        m_dockTargetOpacity = 0.0f;
+        m_dockOpacity = 0.0f;
+        m_topDockRect = {};
+        if (m_docType == DocumentType::Media) {
+            m_hudTargetOpacity = 0.0f;
+            m_hudOpacity = 0.0f;
+            if (m_hudHwnd && IsWindowVisible(m_hudHwnd)) {
+                ShowWindow(m_hudHwnd, SW_HIDE);
+            }
+        }
+        m_showOverflowMenu = false;
+        SetCursorVisibility(false);
+    }
+    InvalidateRect(m_hwnd, NULL, FALSE);
+    if (m_hudHwnd) InvalidateRect(m_hudHwnd, NULL, FALSE);
 }
 
 void AppWindow::DrawHudIconButton(const D2D1_RECT_F& rect, IconType icon, int buttonId, bool enabled) {
@@ -8204,8 +8283,19 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 m_dockTargetOpacity = 1.0f;
                 if (m_docType == DocumentType::Media) m_hudTargetOpacity = 255.0f;
                 SetCursorVisibility(true);
-            } else if (m_docType == DocumentType::Media && (!m_media.IsPlaying() || m_isAudioOnly)) {
-                // Video paused, stopped, ended, or audio: keep permanently visible
+            } else if (m_cleanShowcaseMode && !m_guiVisible &&
+                       (m_docType == DocumentType::Media || m_docType == DocumentType::Image ||
+                        m_docType == DocumentType::Svg || m_docType == DocumentType::Office ||
+                        m_docType == DocumentType::Pdf)) {
+                // Clean Showcase: GUI is hidden
+                m_dockTargetOpacity = 0.0f;
+                if (m_docType == DocumentType::Media) m_hudTargetOpacity = 0.0f;
+                m_inactivityMs += elapsedMs;
+                if (m_inactivityMs >= 2000 && isCursorOverApp && m_cursorVisible) {
+                    SetCursorVisibility(false);
+                }
+            } else if (m_docType == DocumentType::Media && (!m_media.IsPlaying() || m_isAudioOnly) && !m_cleanShowcaseMode) {
+                // Video paused, stopped, ended, or audio (fallback when clean showcase mode disabled): keep permanently visible
                 m_inactivityMs = 0;
                 m_dockTargetOpacity = 1.0f;
                 m_hudTargetOpacity = 255.0f;
@@ -8218,6 +8308,7 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 // Active document (Image, PDF, or Playing Video): track exact 3-second inactivity
                 m_inactivityMs += elapsedMs;
                 if (m_inactivityMs >= 3000) {
+                    m_guiVisible = false;
                     m_dockTargetOpacity = 0.0f;
                     if (m_docType == DocumentType::Media) m_hudTargetOpacity = 0.0f;
                     if (isCursorOverApp) {
@@ -8732,6 +8823,10 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             } else if (cmdId == 1002) {
                 WakeAllUiAndCursor();
                 ToggleFullscreen();
+            } else if (cmdId == 1003) {
+                // ID_MEDIA_TOGGLE_GUI: Single click on video canvas toggles GUI showcase visibility
+                ToggleGuiVisibility();
+                return 0;
             } else if (cmdId == IDM_TRAY_OPEN) {
                 if (IsIconic(m_hwnd)) ShowWindow(m_hwnd, SW_RESTORE);
                 else ShowWindow(m_hwnd, SW_SHOW);
@@ -8913,6 +9008,8 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             POINT physPt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
             D2D1_POINT_2F pt = ClientToDip(physPt);
             m_lastMousePos = pt;
+            m_mouseDownPos = pt;
+            m_hasDraggedDistance = false;
 
             WakeAllUiAndCursor();
 
@@ -9068,6 +9165,13 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 }
                 else if (m_settingsActiveTab == 2) {
                     // Viewer & Media
+                    if (hit(m_settingsToggleCleanShowcaseRect)) {
+                        m_cleanShowcaseMode = !m_cleanShowcaseMode;
+                        SaveGeneralSettings();
+                        ShowToast(m_cleanShowcaseMode ? L"Clean media showcase enabled" : L"Clean media showcase disabled");
+                        InvalidateRect(m_hwnd, NULL, FALSE);
+                        return 0;
+                    }
                     if (hit(m_settingsToggleAutoplayRect)) {
                         m_autoPlayMedia = !m_autoPlayMedia;
                         SaveGeneralSettings();
@@ -9346,8 +9450,8 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
 
             // 3. Media canvas click
             if (m_docType == DocumentType::Media) {
-                WakeHudAndCursor();
                 if (m_isAudioOnly && hit(m_audioWaveformRect)) {
+                    WakeHudAndCursor();
                     m_isWaveformSeeking = true;
                     SetCapture(m_hwnd);
                     float frac = (pt.x - m_audioWaveformRect.left) / (m_audioWaveformRect.right - m_audioWaveformRect.left);
@@ -9356,11 +9460,17 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                     if (m_hudHwnd) InvalidateRect(m_hudHwnd, NULL, FALSE);
                     return 0;
                 }
-                m_media.TogglePlayPause();
-                EnsureAnimTimer();
-                InvalidateRect(m_hwnd, NULL, FALSE);
-                if (m_hudHwnd) InvalidateRect(m_hudHwnd, NULL, FALSE);
-                return 0;
+                if (m_cleanShowcaseMode) {
+                    ToggleGuiVisibility();
+                    return 0;
+                } else {
+                    WakeHudAndCursor();
+                    m_media.TogglePlayPause();
+                    EnsureAnimTimer();
+                    InvalidateRect(m_hwnd, NULL, FALSE);
+                    if (m_hudHwnd) InvalidateRect(m_hudHwnd, NULL, FALSE);
+                    return 0;
+                }
             }
 
             // 3b. Text & Spreadsheet scrollbar, status bar, and canvas text interaction
@@ -9651,6 +9761,7 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                     else if (hit(m_settingsToggleLogDetectRect)) m_hoveredButtonId = BTN_SETTINGS_TOGGLE_LOG_DETECT;
                     else if (hit(m_settingsToggleFormatBadgeRect)) m_hoveredButtonId = BTN_SETTINGS_TOGGLE_FORMAT_BADGE;
                     else if (hit(m_settingsToggleRememberSizeRect)) m_hoveredButtonId = BTN_SETTINGS_TOGGLE_REMEMBER_SIZE;
+                    else if (hit(m_settingsToggleCleanShowcaseRect)) m_hoveredButtonId = BTN_SETTINGS_TOGGLE_CLEAN_SHOWCASE;
                 }
             }
 
@@ -9674,6 +9785,9 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             if (m_isDragging) {
                 float dx = pt.x - m_lastMousePos.x;
                 float dy = pt.y - m_lastMousePos.y;
+                if (std::hypot(pt.x - m_mouseDownPos.x, pt.y - m_mouseDownPos.y) > 5.0f) {
+                    m_hasDraggedDistance = true;
+                }
                 m_panX += dx;
                 m_panY += dy;
                 m_targetPanX = m_panX;
@@ -9696,6 +9810,10 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
 
         case WM_LBUTTONUP: {
             ReleaseCapture();
+            bool wasDraggingDistance = m_hasDraggedDistance;
+            bool wasCropDragging = (m_cropDragHandle > 0);
+            bool wasSelectingText = m_isSelectingText;
+            bool wasScrubbing = m_isScrubbing || m_isWaveformSeeking;
             m_isDragging = false;
             m_isMomentumActive = false;
             m_dragVelX = 0.0f;
@@ -9706,6 +9824,26 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             m_cropDragHandle = 0;
             m_pressedButtonId = BTN_NONE;
             m_text.HandleMouseUp();
+
+            POINT physPt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            D2D1_POINT_2F pt = ClientToDip(physPt);
+            auto hit = [&](const D2D1_RECT_F& r) {
+                return pt.x >= r.left && pt.x <= r.right && pt.y >= r.top && pt.y <= r.bottom;
+            };
+
+            // If it was a clean click without dragging movement on the canvas (Image, Svg, PDF, Office, etc.):
+            if (m_cleanShowcaseMode && !wasDraggingDistance && !wasCropDragging && !wasSelectingText && !wasScrubbing &&
+                !m_showSettings && !m_showSearch && !m_showInspector && !m_showOverflowMenu &&
+                m_docType != DocumentType::Text && m_docType != DocumentType::Spreadsheet && m_docType != DocumentType::None &&
+                m_docType != DocumentType::Media) {
+                // Check if click was NOT on top dock or sidebar
+                bool hitDock = (m_dockOpacity > 0.05f && hit(m_topDockRect));
+                bool hitSidebar = (m_showSidebar && pt.x < m_sidebarWidth);
+                if (!hitDock && !hitSidebar) {
+                    ToggleGuiVisibility();
+                }
+            }
+
             InvalidateRect(m_hwnd, NULL, FALSE);
             return 0;
         }

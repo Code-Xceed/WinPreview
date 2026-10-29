@@ -1,6 +1,6 @@
 {
-  "version": "1.2.8",
+  "version": "1.2.9",
   "release_date": "2026-10-29",
   "download_url": "https://github.com/Code-Xceed/WinPreview/releases/latest/download/WinPreview-Setup-x64.exe",
-  "changelog": "WinPreview v1.2.8 - Comprehensive Crash Prevention & Rapid-Interaction Hardening: Thread-safe MediaEngine recursive locking with safe vout HWND detachment, COM shell view peer caching with 4-second TTL and 40ms keyboard repeat throttling to eliminate UI thread saturation and 'Not Responding' hangs, re-entrancy protection and PDF handle leak prevention in OpenFile, safe Direct2D render target null checks on async raster callbacks, double-click routing for toolbar dock buttons, robust mouse capture loss recovery (WM_CAPTURECHANGED), and standardized synchronized hotkey debouncing."
+  "changelog": "WinPreview v1.2.9 - Clean Media Showcase & Click-to-Toggle GUI: Immersive full-screen media viewing where controls (dock and HUD) start cleanly hidden and smoothly toggle on click across all media types (video, audio, image, SVG, PDF, office), mouse movement wakes cursor arrow without forcing GUI popups, 3-second auto-hide timeout, drag-pan detection deadzone, double-click fullscreen toggle, and customizable 'Clean Media Showcase' preference in Settings."
 }
