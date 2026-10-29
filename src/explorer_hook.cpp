@@ -825,7 +825,7 @@ static LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lP
         }
 
         DWORD now = GetTickCount();
-        if (now - g_lastSpaceTime < 120) {
+        if (now - g_lastSpaceTime < 150) {
             return 1; // Debounce rapid key repeat
         }
 

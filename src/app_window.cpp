@@ -351,12 +351,22 @@ void AppWindow::RunMessageLoop() {
 
 bool AppWindow::OpenFile(const std::wstring& filePath) {
     if (filePath.empty()) return false;
+
+    static bool s_inOpenFile = false;
+    if (s_inOpenFile) return false;
+    struct OpenFileGuard {
+        bool& flag;
+        OpenFileGuard(bool& f) : flag(f) { flag = true; }
+        ~OpenFileGuard() { flag = false; }
+    } guard(s_inOpenFile);
+
     if (!m_d2d.GetRenderTarget()) {
         m_d2d.CreateDeviceResources(m_hwnd);
     }
 
     // Close previous
     m_media.CloseMedia();
+    m_pdf.CloseDocument();
     SafeRelease(m_imageBitmap);
     SafeRelease(m_pdfPageBitmap);
     SafeRelease(m_audioAlbumArt);
@@ -1104,6 +1114,7 @@ void AppWindow::OpenCurrentFileInDefaultApp() {
 // ---------------------------------------------------------------------------
 static std::wstring  s_peerCacheDir;
 static std::vector<std::wstring> s_peerCache;
+static DWORD s_peerCacheTime = 0;
 
 static bool BuildFolderPeerList(
     const std::wstring& folder,
@@ -1160,6 +1171,14 @@ void AppWindow::NavigateFolder(int delta) {
     if (!m_arrowKeyNavEnabled && delta != 0) return;
     if (m_currentFilePath.empty() || m_docType == DocumentType::None) return;
 
+    DWORD now = GetTickCount();
+    static DWORD s_lastNavTime = 0;
+    // Throttle keyboard repeat to at most 1 navigation every 40ms to keep UI responsive
+    if (delta != 0 && now - s_lastNavTime < 40) {
+        return;
+    }
+    s_lastNavTime = now;
+
     // Auto-save modified text or spreadsheet files before navigating away so edits are never lost
     if ((m_docType == DocumentType::Text || m_docType == DocumentType::Spreadsheet) && m_text.IsModified()) {
         m_text.SaveFile();
@@ -1177,22 +1196,12 @@ void AppWindow::NavigateFolder(int delta) {
     std::vector<std::wstring> peerFiles;
     int curIdx = -1;
 
-    // 1. Primary: Query active Windows Explorer or Desktop window directly!
-    // This obtains the EXACT placement order and visual sequence as displayed in the folder view
-    // (respecting user sort order by name, date modified, type, size, grouped view, etc.).
-    if (ExplorerHook::GetExplorerViewItems(m_currentFilePath, peerFiles, curIdx) && !peerFiles.empty()) {
-        s_peerCache = peerFiles;
-        s_peerCacheDir = folder;
-    } else {
-        // 2. Fallback: Filesystem directory enumeration when opened standalone without an Explorer window
-        bool sameDir = (s_peerCacheDir.size() == folder.size() && _wcsicmp(s_peerCacheDir.c_str(), folder.c_str()) == 0);
-        if (!sameDir || s_peerCache.empty()) {
-            s_peerCache.clear();
-            if (!BuildFolderPeerList(folder, s_peerCache)) return;
-            s_peerCacheDir = folder;
-        }
-        peerFiles = s_peerCache;
+    // Check if we have a fresh valid cache (within 4000ms TTL) for the same folder
+    bool isCacheFresh = (now - s_peerCacheTime < 4000);
+    bool sameDir = (s_peerCacheDir.size() == folder.size() && _wcsicmp(s_peerCacheDir.c_str(), folder.c_str()) == 0);
 
+    if (sameDir && isCacheFresh && !s_peerCache.empty()) {
+        peerFiles = s_peerCache;
         for (size_t i = 0; i < peerFiles.size(); i++) {
             if (_wcsicmp(peerFiles[i].c_str(), m_currentFilePath.c_str()) == 0 ||
                 _wcsicmp(peerFiles[i].c_str(), current.c_str()) == 0) {
@@ -1200,8 +1209,32 @@ void AppWindow::NavigateFolder(int delta) {
                 break;
             }
         }
-        if (curIdx < 0 && !peerFiles.empty()) {
-            curIdx = 0;
+    } else {
+        // 1. Primary: Query active Windows Explorer or Desktop window directly!
+        // This obtains the EXACT placement order and visual sequence as displayed in the folder view
+        // (respecting user sort order by name, date modified, type, size, grouped view, etc.).
+        if (ExplorerHook::GetExplorerViewItems(m_currentFilePath, peerFiles, curIdx) && !peerFiles.empty()) {
+            s_peerCache = peerFiles;
+            s_peerCacheDir = folder;
+            s_peerCacheTime = now;
+        } else {
+            // 2. Fallback: Filesystem directory enumeration when opened standalone without an Explorer window
+            s_peerCache.clear();
+            if (!BuildFolderPeerList(folder, s_peerCache)) return;
+            s_peerCacheDir = folder;
+            s_peerCacheTime = now;
+            peerFiles = s_peerCache;
+
+            for (size_t i = 0; i < peerFiles.size(); i++) {
+                if (_wcsicmp(peerFiles[i].c_str(), m_currentFilePath.c_str()) == 0 ||
+                    _wcsicmp(peerFiles[i].c_str(), current.c_str()) == 0) {
+                    curIdx = (int)i;
+                    break;
+                }
+            }
+            if (curIdx < 0 && !peerFiles.empty()) {
+                curIdx = 0;
+            }
         }
     }
 
@@ -1227,6 +1260,9 @@ void AppWindow::NavigateFolder(int delta) {
     }
 
     std::wstring nextFile = peerFiles[nextIdx];
+
+    // Cancel any pending Explorer navigation timer so it doesn't trigger a duplicate reload
+    KillTimer(m_hwnd, TIMER_EXPLORER_NAV);
 
     // Synchronize Windows Explorer selection so Explorer's live highlight matches the preview
     ExplorerHook::SelectExplorerItem(nextFile);
@@ -6699,6 +6735,7 @@ void AppWindow::HideMainWindow() {
         ReleaseCapture();
     }
     KillTimer(m_hwnd, 1);
+    m_lastHideTime = GetTickCount();
     ShowWindow(m_hwnd, SW_HIDE);
 }
 
@@ -7168,6 +7205,7 @@ LRESULT AppWindow::HandleHudMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             return DefWindowProc(m_hudHwnd, msg, wParam, lParam);
         }
 
+        case WM_LBUTTONDBLCLK:
         case WM_LBUTTONDOWN: {
             SetCapture(m_hudHwnd);
             WakeAllUiAndCursor();
@@ -7222,6 +7260,14 @@ LRESULT AppWindow::HandleHudMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
 
         case WM_LBUTTONUP: {
             ReleaseCapture();
+            m_isScrubbing = false;
+            m_isVolDragging = false;
+            m_hudPressedButtonId = 0;
+            InvalidateRect(m_hudHwnd, NULL, FALSE);
+            return 0;
+        }
+
+        case WM_CAPTURECHANGED: {
             m_isScrubbing = false;
             m_isVolDragging = false;
             m_hudPressedButtonId = 0;
@@ -7748,20 +7794,23 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                     payload->ok && payload->gen == m_pdfRasterGen &&
                     payload->page == m_currentPage && m_docType == DocumentType::Pdf;
                 if (current) {
-                    ID2D1Bitmap* bmp = nullptr;
-                    D2D1_BITMAP_PROPERTIES props = D2D1::BitmapProperties(
-                        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_IGNORE),
-                        96.0f, 96.0f);
-                    HRESULT hr = m_d2d.GetRenderTarget()->CreateBitmap(
-                        D2D1::SizeU((UINT32)payload->width, (UINT32)payload->height),
-                        payload->pixels.data(), payload->stride, props, &bmp);
-                    if (SUCCEEDED(hr) && bmp) {
-                        SafeRelease(m_pdfPageBitmap);
-                        m_pdfPageBitmap = bmp;
-                        m_pdfPageWidth = payload->pageWidth;
-                        m_pdfPageHeight = payload->pageHeight;
-                        m_pdfRasterScale = payload->sampleScale;
-                        InvalidateRect(m_hwnd, NULL, FALSE);
+                    ID2D1HwndRenderTarget* rt = m_d2d.GetRenderTarget();
+                    if (rt) {
+                        ID2D1Bitmap* bmp = nullptr;
+                        D2D1_BITMAP_PROPERTIES props = D2D1::BitmapProperties(
+                            D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_IGNORE),
+                            96.0f, 96.0f);
+                        HRESULT hr = rt->CreateBitmap(
+                            D2D1::SizeU((UINT32)payload->width, (UINT32)payload->height),
+                            payload->pixels.data(), payload->stride, props, &bmp);
+                        if (SUCCEEDED(hr) && bmp) {
+                            SafeRelease(m_pdfPageBitmap);
+                            m_pdfPageBitmap = bmp;
+                            m_pdfPageWidth = payload->pageWidth;
+                            m_pdfPageHeight = payload->pageHeight;
+                            m_pdfRasterScale = payload->sampleScale;
+                            InvalidateRect(m_hwnd, NULL, FALSE);
+                        }
                     }
                 }
                 delete payload;
@@ -7980,6 +8029,21 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
 
         case WM_ACTIVATE: {
             if (LOWORD(wParam) == WA_INACTIVE) {
+                if (GetCapture() == m_hwnd || (m_hudHwnd && GetCapture() == m_hudHwnd)) {
+                    ReleaseCapture();
+                }
+                m_isDragging = false;
+                m_isMomentumActive = false;
+                m_dragVelX = 0.0f;
+                m_dragVelY = 0.0f;
+                m_isScrubbing = false;
+                m_isWaveformSeeking = false;
+                m_isSelectingText = false;
+                m_cropDragHandle = 0;
+                m_pressedButtonId = BTN_NONE;
+                m_hudPressedButtonId = 0;
+                m_text.HandleMouseUp();
+
                 SetCursorVisibility(true);
                 HWND hNewActive = (HWND)lParam;
                 if (hNewActive != m_hudHwnd && m_hudHwnd && IsWindowVisible(m_hudHwnd)) {
@@ -8460,13 +8524,13 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 if (foregroundThreadId != currentThreadId && foregroundThreadId != 0) {
                     AttachThreadInput(foregroundThreadId, currentThreadId, TRUE);
                     SetForegroundWindow(m_hwnd);
-                    SetWindowPos(m_hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOREDRAW);
-                    SetWindowPos(m_hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOREDRAW);
+                    SetWindowPos(m_hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
                     BringWindowToTop(m_hwnd);
                     SetFocus(m_hwnd);
                     AttachThreadInput(foregroundThreadId, currentThreadId, FALSE);
                 } else {
                     SetForegroundWindow(m_hwnd);
+                    SetWindowPos(m_hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
                     BringWindowToTop(m_hwnd);
                     SetFocus(m_hwnd);
                 }
@@ -8514,7 +8578,7 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
 
         case ExplorerHook::WM_WINPREVIEW_EXPLORER_SPACE: {
             DWORD now = GetTickCount();
-            if (now - m_lastHookToggleTime < 180) {
+            if (now - m_lastHookToggleTime < 150 || now - m_lastHideTime < 150) {
                 return 0; // Debounce rapid repeated triggers
             }
             m_lastHookToggleTime = now;
@@ -8530,13 +8594,13 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 if (foregroundThreadId != currentThreadId && foregroundThreadId != 0) {
                     AttachThreadInput(foregroundThreadId, currentThreadId, TRUE);
                     SetForegroundWindow(m_hwnd);
-                    SetWindowPos(m_hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOREDRAW);
-                    SetWindowPos(m_hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOREDRAW);
+                    SetWindowPos(m_hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
                     BringWindowToTop(m_hwnd);
                     SetFocus(m_hwnd);
                     AttachThreadInput(foregroundThreadId, currentThreadId, FALSE);
                 } else {
                     SetForegroundWindow(m_hwnd);
+                    SetWindowPos(m_hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
                     BringWindowToTop(m_hwnd);
                     SetFocus(m_hwnd);
                 }
@@ -8594,13 +8658,13 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 if (foregroundThreadId != currentThreadId && foregroundThreadId != 0) {
                     AttachThreadInput(foregroundThreadId, currentThreadId, TRUE);
                     SetForegroundWindow(m_hwnd);
-                    SetWindowPos(m_hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOREDRAW);
-                    SetWindowPos(m_hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOREDRAW);
+                    SetWindowPos(m_hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
                     BringWindowToTop(m_hwnd);
                     SetFocus(m_hwnd);
                     AttachThreadInput(foregroundThreadId, currentThreadId, FALSE);
                 } else {
                     SetForegroundWindow(m_hwnd);
+                    SetWindowPos(m_hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
                     BringWindowToTop(m_hwnd);
                     SetFocus(m_hwnd);
                 }
@@ -9646,28 +9710,46 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             return 0;
         }
 
+        case WM_CAPTURECHANGED: {
+            m_isDragging = false;
+            m_isMomentumActive = false;
+            m_dragVelX = 0.0f;
+            m_dragVelY = 0.0f;
+            m_isScrubbing = false;
+            m_isWaveformSeeking = false;
+            m_isSelectingText = false;
+            m_cropDragHandle = 0;
+            m_pressedButtonId = BTN_NONE;
+            m_text.HandleMouseUp();
+            InvalidateRect(m_hwnd, NULL, FALSE);
+            return 0;
+        }
+
         case WM_LBUTTONDBLCLK: {
             POINT physPt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
             D2D1_POINT_2F pt = ClientToDip(physPt);
             auto hit = [&](const D2D1_RECT_F& r) {
                 return pt.x >= r.left && pt.x <= r.right && pt.y >= r.top && pt.y <= r.bottom;
             };
-            if (!hit(m_topDockRect)) {
-                if (m_docType == DocumentType::Text || (m_docType == DocumentType::Spreadsheet && !m_text.IsTableView())) {
-                    D2D1_RECT_F canvasRect = GetCanvasRectDip();
-                    m_text.HandleDoubleClick(pt.x, pt.y, canvasRect, m_dpiScale);
-                    InvalidateRect(m_hwnd, NULL, FALSE);
-                    return 0;
-                } else if (m_docType == DocumentType::Media) {
-                    ToggleFullscreen();
+            if (hit(m_topDockRect)) {
+                // Forward rapid button clicks on the top toolbar dock as normal clicks so they aren't dropped!
+                SendMessage(m_hwnd, WM_LBUTTONDOWN, wParam, lParam);
+                return 0;
+            }
+            if (m_docType == DocumentType::Text || (m_docType == DocumentType::Spreadsheet && !m_text.IsTableView())) {
+                D2D1_RECT_F canvasRect = GetCanvasRectDip();
+                m_text.HandleDoubleClick(pt.x, pt.y, canvasRect, m_dpiScale);
+                InvalidateRect(m_hwnd, NULL, FALSE);
+                return 0;
+            } else if (m_docType == DocumentType::Media) {
+                ToggleFullscreen();
+            } else {
+                if (std::abs(m_zoom - 1.0f) < 0.1f) {
+                    FitToWindow();
                 } else {
-                    if (std::abs(m_zoom - 1.0f) < 0.1f) {
-                        FitToWindow();
-                    } else {
-                        ResetZoom();
-                    }
-                    InvalidateRect(m_hwnd, NULL, FALSE);
+                    ResetZoom();
                 }
+                InvalidateRect(m_hwnd, NULL, FALSE);
             }
             return 0;
         }

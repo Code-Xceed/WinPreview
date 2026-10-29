@@ -47,7 +47,23 @@ using WinPreview::LogTime;
 
 typedef BOOL(WINAPI* PFN_SetProcessDpiAwarenessContext)(DPI_AWARENESS_CONTEXT);
 
+static LONG WINAPI WinPreviewCrashFilter(EXCEPTION_POINTERS* ep) {
+    WCHAR tempPath[MAX_PATH];
+    if (GetTempPathW(MAX_PATH, tempPath)) {
+        std::wstring crashLog = std::wstring(tempPath) + L"winpreview_crash.log";
+        FILE* f = _wfopen(crashLog.c_str(), L"a");
+        if (f) {
+            DWORD code = ep && ep->ExceptionRecord ? ep->ExceptionRecord->ExceptionCode : 0;
+            void* addr = ep && ep->ExceptionRecord ? ep->ExceptionRecord->ExceptionAddress : nullptr;
+            fprintf(f, "[WinPreview Crash] ExceptionCode: 0x%08X at Address: %p\n", (unsigned int)code, addr);
+            fclose(f);
+        }
+    }
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine, int nCmdShow) {
+    SetUnhandledExceptionFilter(WinPreviewCrashFilter);
     LogTime("wWinMain entered");
 
     // Set explicit Process Application User Model ID for Windows 10/11 taskbar grouping and branding

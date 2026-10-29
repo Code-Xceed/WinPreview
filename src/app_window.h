@@ -366,6 +366,7 @@ private:
     void DrawToggleSwitch(const D2D1_RECT_F& rect, bool isOn, int buttonId);
     void TogglePreviewFromHook();
     DWORD m_lastHookToggleTime = 0;
+    DWORD m_lastHideTime = 0;
 
     // Unsupported File Inspector state
     std::wstring m_unsupportedTypeName;

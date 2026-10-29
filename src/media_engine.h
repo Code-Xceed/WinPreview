@@ -1,6 +1,7 @@
 #pragma once
 #include "d2d_engine.h"
 #include <string>
+#include <mutex>
 
 namespace WinPreview {
 
@@ -77,6 +78,7 @@ private:
     int m_lastVolume = 80;
     mutable bool m_hasStarted = false;
     mutable float m_pendingSeek = -1.0f;
+    mutable std::recursive_mutex m_mediaMutex;
     LogTransformProfile m_logProfile = LogTransformProfile::None;
 
     void ApplyLogTransform();

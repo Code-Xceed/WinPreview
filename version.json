@@ -1,6 +1,6 @@
 {
-  "version": "1.2.7",
-  "release_date": "2026-10-28",
+  "version": "1.2.8",
+  "release_date": "2026-10-29",
   "download_url": "https://github.com/Code-Xceed/WinPreview/releases/latest/download/WinPreview-Setup-x64.exe",
-  "changelog": "WinPreview v1.2.7 - Professional Background-First Service Architecture: Silent system tray startup without showing default empty window, minimize/hide to system tray on close, single-instance background notifications, and explicit exit via tray context menu, terminal commands, or Task Manager."
+  "changelog": "WinPreview v1.2.8 - Comprehensive Crash Prevention & Rapid-Interaction Hardening: Thread-safe MediaEngine recursive locking with safe vout HWND detachment, COM shell view peer caching with 4-second TTL and 40ms keyboard repeat throttling to eliminate UI thread saturation and 'Not Responding' hangs, re-entrancy protection and PDF handle leak prevention in OpenFile, safe Direct2D render target null checks on async raster callbacks, double-click routing for toolbar dock buttons, robust mouse capture loss recovery (WM_CAPTURECHANGED), and standardized synchronized hotkey debouncing."
 }

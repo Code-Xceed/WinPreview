@@ -184,6 +184,7 @@ bool MediaEngine::Initialize(HWND parentHwnd) {
 }
 
 bool MediaEngine::OpenMedia(const std::wstring& filePath) {
+    std::lock_guard<std::recursive_mutex> lock(m_mediaMutex);
     if (!m_vlc) return false;
     CloseMedia();
 
@@ -234,7 +235,11 @@ bool MediaEngine::OpenMedia(const std::wstring& filePath) {
 }
 
 void MediaEngine::CloseMedia() {
+    std::lock_guard<std::recursive_mutex> lock(m_mediaMutex);
     if (m_mp) {
+        if (fn_libvlc_media_player_set_hwnd) {
+            fn_libvlc_media_player_set_hwnd(m_mp, nullptr);
+        }
         fn_libvlc_media_player_stop(m_mp);
         fn_libvlc_media_player_release(m_mp);
         m_mp = nullptr;
@@ -245,6 +250,7 @@ void MediaEngine::CloseMedia() {
 }
 
 void MediaEngine::CheckPendingSeek() const {
+    std::lock_guard<std::recursive_mutex> lock(m_mediaMutex);
     if (m_pendingSeek >= 0.0f && m_mp && fn_libvlc_media_player_set_position) {
         if (fn_libvlc_media_player_is_playing && fn_libvlc_media_player_is_playing(m_mp)) {
             fn_libvlc_media_player_set_position(m_mp, m_pendingSeek);
@@ -254,6 +260,7 @@ void MediaEngine::CheckPendingSeek() const {
 }
 
 int MediaEngine::GetState() const {
+    std::lock_guard<std::recursive_mutex> lock(m_mediaMutex);
     if (m_mp && fn_libvlc_media_player_get_state) {
         return fn_libvlc_media_player_get_state(m_mp);
     }
@@ -261,6 +268,7 @@ int MediaEngine::GetState() const {
 }
 
 bool MediaEngine::IsEnded() const {
+    std::lock_guard<std::recursive_mutex> lock(m_mediaMutex);
     if (!m_mp) return false;
     if (fn_libvlc_media_player_get_state) {
         int state = fn_libvlc_media_player_get_state(m_mp);
@@ -277,6 +285,7 @@ bool MediaEngine::IsEnded() const {
 }
 
 void MediaEngine::Restart() {
+    std::lock_guard<std::recursive_mutex> lock(m_mediaMutex);
     if (!m_mp) return;
     if (fn_libvlc_media_player_stop) fn_libvlc_media_player_stop(m_mp);
     if (fn_libvlc_media_player_play) fn_libvlc_media_player_play(m_mp);
@@ -285,6 +294,7 @@ void MediaEngine::Restart() {
 }
 
 void MediaEngine::Play() {
+    std::lock_guard<std::recursive_mutex> lock(m_mediaMutex);
     if (!m_mp) return;
     if (IsEnded()) {
         Restart();
@@ -294,10 +304,12 @@ void MediaEngine::Play() {
 }
 
 void MediaEngine::Pause() {
+    std::lock_guard<std::recursive_mutex> lock(m_mediaMutex);
     if (m_mp && fn_libvlc_media_player_pause) fn_libvlc_media_player_pause(m_mp);
 }
 
 void MediaEngine::TogglePlayPause() {
+    std::lock_guard<std::recursive_mutex> lock(m_mediaMutex);
     if (m_mp) {
         if (IsEnded()) {
             Restart();
@@ -310,10 +322,12 @@ void MediaEngine::TogglePlayPause() {
 }
 
 void MediaEngine::Stop() {
+    std::lock_guard<std::recursive_mutex> lock(m_mediaMutex);
     if (m_mp && fn_libvlc_media_player_stop) fn_libvlc_media_player_stop(m_mp);
 }
 
 void MediaEngine::Seek(float fraction) {
+    std::lock_guard<std::recursive_mutex> lock(m_mediaMutex);
     if (!m_mp) return;
     fraction = std::clamp(fraction, 0.0f, 1.0f);
     if (IsEnded()) {
@@ -327,6 +341,7 @@ void MediaEngine::Seek(float fraction) {
 }
 
 void MediaEngine::SeekSeconds(int deltaSeconds) {
+    std::lock_guard<std::recursive_mutex> lock(m_mediaMutex);
     if (!m_mp) return;
     libvlc_time_t length = GetLength();
     if (length <= 0) return;
@@ -355,6 +370,7 @@ void MediaEngine::SeekSeconds(int deltaSeconds) {
 }
 
 int MediaEngine::GetVolume() const {
+    std::lock_guard<std::recursive_mutex> lock(m_mediaMutex);
     if (m_mp && fn_libvlc_audio_get_volume) {
         return fn_libvlc_audio_get_volume(m_mp);
     }
@@ -362,6 +378,7 @@ int MediaEngine::GetVolume() const {
 }
 
 void MediaEngine::SetVolume(int volume) {
+    std::lock_guard<std::recursive_mutex> lock(m_mediaMutex);
     if (volume < 0) volume = 0;
     if (volume > 100) volume = 100;
     m_lastVolume = volume;
@@ -371,6 +388,7 @@ void MediaEngine::SetVolume(int volume) {
 }
 
 void MediaEngine::ToggleMute() {
+    std::lock_guard<std::recursive_mutex> lock(m_mediaMutex);
     if (m_mp && fn_libvlc_audio_toggle_mute) {
         fn_libvlc_audio_toggle_mute(m_mp);
         m_isMuted = fn_libvlc_audio_get_mute ? fn_libvlc_audio_get_mute(m_mp) != 0 : !m_isMuted;
@@ -378,6 +396,7 @@ void MediaEngine::ToggleMute() {
 }
 
 bool MediaEngine::IsMuted() const {
+    std::lock_guard<std::recursive_mutex> lock(m_mediaMutex);
     if (m_mp && fn_libvlc_audio_get_mute) {
         return fn_libvlc_audio_get_mute(m_mp) != 0;
     }
@@ -385,6 +404,7 @@ bool MediaEngine::IsMuted() const {
 }
 
 bool MediaEngine::IsPlaying() const {
+    std::lock_guard<std::recursive_mutex> lock(m_mediaMutex);
     if (m_mp && fn_libvlc_media_player_is_playing) {
         CheckPendingSeek();
         int playing = fn_libvlc_media_player_is_playing(m_mp);
@@ -397,6 +417,7 @@ bool MediaEngine::IsPlaying() const {
 }
 
 libvlc_time_t MediaEngine::GetTime() const {
+    std::lock_guard<std::recursive_mutex> lock(m_mediaMutex);
     CheckPendingSeek();
     if (m_pendingSeek >= 0.0f) {
         return (libvlc_time_t)(m_pendingSeek * (float)GetLength());
@@ -411,6 +432,7 @@ libvlc_time_t MediaEngine::GetTime() const {
 }
 
 libvlc_time_t MediaEngine::GetLength() const {
+    std::lock_guard<std::recursive_mutex> lock(m_mediaMutex);
     if (m_mp && fn_libvlc_media_player_get_length) {
         return fn_libvlc_media_player_get_length(m_mp);
     }
@@ -418,6 +440,7 @@ libvlc_time_t MediaEngine::GetLength() const {
 }
 
 float MediaEngine::GetPosition() const {
+    std::lock_guard<std::recursive_mutex> lock(m_mediaMutex);
     CheckPendingSeek();
     if (m_pendingSeek >= 0.0f) {
         return m_pendingSeek;
@@ -444,6 +467,7 @@ void MediaEngine::ShowVideoWindow(bool show) {
 }
 
 bool MediaEngine::GetVideoDimensions(unsigned int* outWidth, unsigned int* outHeight) {
+    std::lock_guard<std::recursive_mutex> lock(m_mediaMutex);
     if (m_mp && fn_libvlc_video_get_size) {
         return fn_libvlc_video_get_size(m_mp, 0, outWidth, outHeight) == 0;
     }
@@ -467,6 +491,7 @@ std::wstring MediaEngine::FormatTime(libvlc_time_t ms) const {
 }
 
 void MediaEngine::ApplyLogTransform() {
+    std::lock_guard<std::recursive_mutex> lock(m_mediaMutex);
     if (!m_mp || !fn_libvlc_video_set_adjust_int) return;
 
     if (m_logProfile == LogTransformProfile::None) {
