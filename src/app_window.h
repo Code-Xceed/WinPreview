@@ -615,6 +615,7 @@ private:
     static const UINT IDM_TRAY_AUTOSTART = 2002;
     static const UINT IDM_TRAY_EXIT = 2003;
     static const UINT IDM_TRAY_SETTINGS = 2004;
+    static const UINT IDM_TRAY_CHECK_UPDATES = 2005;
 
     void InitTrayIcon(bool showNotification = false);
     void RemoveTrayIcon();

@@ -44,6 +44,7 @@ public:
     static const UINT WM_WINPREVIEW_QUERY_PATH = WM_USER + 103;
     static const UINT WM_WINPREVIEW_EXPLORER_SPACE = WM_USER + 104;
     static const UINT WM_WINPREVIEW_CLOSE = WM_USER + 105;
+    static const UINT WM_WINPREVIEW_NOTIFY_RUNNING = WM_USER + 106;
     static const UINT HOTKEY_ID = 9001;
 };
 

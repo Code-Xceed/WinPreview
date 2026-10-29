@@ -120,10 +120,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
                     WinPreview::ExplorerHook::ForwardFileToExistingInstance(fileToOpen);
                     LogTime("ForwardFileToExistingInstance done");
                 } else if (!isBackground) {
-                    DWORD existingPid = 0;
-                    GetWindowThreadProcessId(hExisting, &existingPid);
-                    if (existingPid) AllowSetForegroundWindow(existingPid);
-                    PostMessageW(hExisting, WM_COMMAND, MAKEWPARAM(2001 /* IDM_TRAY_OPEN */, 0), 0);
+                    PostMessageW(hExisting, WinPreview::ExplorerHook::WM_WINPREVIEW_NOTIFY_RUNNING, 0, 0);
                 }
                 if (argv) LocalFree(argv);
                 if (hMutex) CloseHandle(hMutex);
@@ -152,10 +149,11 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     }
     LogTime("COM initialized");
 
-    // Performance optimization: If a specific file is being opened on launch or capturing screenshot,
-    // suppress initial empty state window rendering. Show window only after the target document is loaded.
-    int initialShow = (isBackground || !fileToOpen.empty() || !screenshotPath.empty()) ? SW_HIDE : nCmdShow;
-    bool showTrayBalloon = false; // Start background resident completely silently without notification lag or shell stalls
+    // Background-first service architecture (QuickLook / Peek model):
+    // When launched without a file argument, WinPreview always starts silently hidden in the system tray.
+    // The default empty screen is never shown. Launching manually displays a friendly tray balloon.
+    int initialShow = (!fileToOpen.empty() && screenshotPath.empty()) ? (isBackground ? SW_HIDE : nCmdShow) : SW_HIDE;
+    bool showTrayBalloon = (!isBackground && fileToOpen.empty() && screenshotPath.empty());
 
     int exitCode = 0;
     {

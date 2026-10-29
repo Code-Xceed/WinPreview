@@ -6044,6 +6044,10 @@ void AppWindow::ToggleSettings() {
         }
     } else {
         m_settingsModalRect = {};
+        if (m_currentFilePath.empty()) {
+            HideMainWindow();
+            return;
+        }
     }
     InvalidateRect(m_hwnd, NULL, FALSE);
 }
@@ -6686,6 +6690,7 @@ void AppWindow::HideMainWindow() {
             m_media.Pause();
         }
         m_media.ShowVideoWindow(false);
+        m_media.CloseMedia();
     }
     m_isScrubbing = false;
     m_isVolDragging = false;
@@ -8484,6 +8489,11 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             return 0;
         }
 
+        case ExplorerHook::WM_WINPREVIEW_NOTIFY_RUNNING: {
+            ShowTrayNotification(L"WinPreview is Running", L"WinPreview is active in the background. Press Spacebar on any file in File Explorer to preview.");
+            return 0;
+        }
+
         case WM_WTSSESSION_CHANGE: {
             if (wParam == 7 /* WTS_SESSION_LOCK */) {
                 HideMainWindow();
@@ -8629,9 +8639,8 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 POINT pt;
                 GetCursorPos(&pt);
                 HMENU hMenu = CreatePopupMenu();
-                AppendMenuW(hMenu, MF_STRING, IDM_TRAY_OPEN, L"Open WinPreview");
-                AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
                 AppendMenuW(hMenu, MF_STRING, IDM_TRAY_SETTINGS, L"Settings...\tCtrl+,");
+                AppendMenuW(hMenu, MF_STRING, IDM_TRAY_CHECK_UPDATES, L"Check for Updates...");
                 AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
                 bool autoStart = IsAutoStartEnabled();
                 AppendMenuW(hMenu, MF_STRING | (autoStart ? MF_CHECKED : MF_UNCHECKED), IDM_TRAY_AUTOSTART, L"Start with Windows");
@@ -8642,12 +8651,7 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 TrackPopupMenu(hMenu, TPM_RIGHTBUTTON | TPM_BOTTOMALIGN, pt.x, pt.y, 0, m_hwnd, NULL);
                 DestroyMenu(hMenu);
             } else if (lParam == WM_LBUTTONDBLCLK || lParam == WM_LBUTTONUP) {
-                if (IsWindowVisible(m_hwnd)) {
-                    HideMainWindow();
-                } else {
-                    ShowWindow(m_hwnd, SW_SHOW);
-                    SetForegroundWindow(m_hwnd);
-                }
+                SendMessage(m_hwnd, WM_COMMAND, MAKEWPARAM(IDM_TRAY_SETTINGS, 0), 0);
             }
             return 0;
         }
@@ -8671,14 +8675,18 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 BringWindowToTop(m_hwnd);
                 SetFocus(m_hwnd);
             } else if (cmdId == IDM_TRAY_SETTINGS) {
+                if (!IsWindowVisible(m_hwnd)) {
+                    ShowWindow(m_hwnd, SW_SHOW);
+                }
                 if (IsIconic(m_hwnd)) ShowWindow(m_hwnd, SW_RESTORE);
-                else ShowWindow(m_hwnd, SW_SHOW);
                 SetForegroundWindow(m_hwnd);
                 BringWindowToTop(m_hwnd);
                 SetFocus(m_hwnd);
                 if (!m_showSettings) {
                     ToggleSettings();
                 }
+            } else if (cmdId == IDM_TRAY_CHECK_UPDATES) {
+                CheckForUpdates(true);
             } else if (cmdId == IDM_TRAY_AUTOSTART) {
                 SetAutoStartEnabled(!IsAutoStartEnabled());
             } else if (cmdId == IDM_TRAY_EXIT) {
@@ -10322,15 +10330,7 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         }
 
         case WM_CLOSE: {
-            if (m_keepInMemory) {
-                HideMainWindow();
-            } else {
-                RemoveTrayIcon();
-                ExplorerHook::UninstallHook();
-                DestroyHudWindow();
-                DestroyUpdatePopupWindow();
-                PostQuitMessage(0);
-            }
+            HideMainWindow();
             return 0;
         }
 
