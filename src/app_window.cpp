@@ -1842,6 +1842,9 @@ bool AppWindow::SaveScreenshot(const std::wstring& outPath) {
     if (!m_d2d.GetRenderTarget()) {
         m_d2d.CreateDeviceResources(m_hwnd);
     }
+    m_dockOpacity = 1.0f;
+    m_dockTargetOpacity = 1.0f;
+    m_guiVisible = true;
     UpdateLayout();
     ID2D1HwndRenderTarget* rt = m_d2d.GetRenderTarget();
     if (!rt) return false;
@@ -2158,9 +2161,9 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
         else dockW = 136.0f;
     } else if (m_docType == DocumentType::Pdf) {
         if (showPdfNav) {
-            if (availW >= 560.0f) dockW = 504.0f;
-            else if (availW >= 380.0f) dockW = 322.0f;
-            else dockW = 194.0f;
+            if (availW >= 580.0f) dockW = 563.0f;
+            else if (availW >= 400.0f) dockW = 382.0f;
+            else dockW = 244.0f;
         } else {
             if (availW >= 460.0f) dockW = 393.0f;
             else if (availW >= 320.0f) dockW = 210.0f;
@@ -2183,10 +2186,9 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
         else dockW = 88.0f;
     } else if (m_docType == DocumentType::Font) {
         if (availW >= 280.0f) dockW = 138.0f;
-        else dockW = 74.0f;
+        else dockW = 82.0f;
     }
 
-    if (dockW > availW - 16.0f) dockW = availW - 16.0f;
     float dockX = availLeft + (availW - dockW) / 2.0f;
     if (dockX < availLeft + 8.0f) dockX = availLeft + 8.0f;
     dockX = std::floor(dockX + 0.5f);
@@ -2375,8 +2377,8 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
     // DOCK RENDERING: PDF MODE
     // =========================================================================
     else if (m_docType == DocumentType::Pdf) {
-        bool isFull = showPdfNav ? (availW >= 620.0f) : (availW >= 540.0f);
-        bool isCompact = (availW < 420.0f);
+        bool isFull = showPdfNav ? (availW >= 580.0f) : (availW >= 460.0f);
+        bool isCompact = showPdfNav ? (availW < 400.0f) : (availW < 320.0f);
 
         if (showPdfNav) {
             if (!isCompact) {
