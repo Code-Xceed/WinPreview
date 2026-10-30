@@ -108,6 +108,7 @@ public:
 
     bool Create(HINSTANCE hInstance, int nCmdShow, bool showTrayNotification = false);
     bool OpenFile(const std::wstring& filePath);
+    void CloseCurrentPreview();
     bool SaveScreenshot(const std::wstring& outPath);
     void SetShowOverflowMenu(bool show) { m_showOverflowMenu = show; m_overflowMenuAnim = show ? 1.0f : 0.0f; }
     void SetShowInspector(bool show) { m_showInspector = show; m_inspectorAnim = show ? 1.0f : 0.0f; }

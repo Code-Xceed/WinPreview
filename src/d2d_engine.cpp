@@ -1570,6 +1570,17 @@ void D2DEngine::DrawIconSun(float cx, float cy, float size, ID2D1Brush* brush, I
     }
 }
 
+void D2DEngine::DrawIconClose(float cx, float cy, float size, ID2D1Brush* brush, ID2D1RenderTarget* rt) {
+    ID2D1RenderTarget* target = rt ? rt : m_renderTarget;
+    if (!target || !brush) return;
+    float s = (size > 0.0f ? size : 14.0f) / 24.0f;
+    float strokeW = 1.6f * (size / 16.0f);
+    if (strokeW < 1.4f) strokeW = 1.4f;
+    float arm = 5.2f * s;
+    target->DrawLine(D2D1::Point2F(cx - arm, cy - arm), D2D1::Point2F(cx + arm, cy + arm), brush, strokeW, RoundStrokeStyle);
+    target->DrawLine(D2D1::Point2F(cx + arm, cy - arm), D2D1::Point2F(cx - arm, cy + arm), brush, strokeW, RoundStrokeStyle);
+}
+
 // =========================================================================
 // ZEN EDITORIAL TECH DRAWING HELPERS
 // =========================================================================

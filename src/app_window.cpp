@@ -412,6 +412,9 @@ bool AppWindow::OpenFile(const std::wstring& filePath) {
     if (m_hudHwnd) ShowWindow(m_hudHwnd, SW_HIDE);
 
     // Reset feature states
+    m_showSettings = false;
+    m_settingsAnim = 0.0f;
+    m_settingsModalRect = {};
     m_showSearch = false;
     m_searchAnim = 0.0f;
     m_showOverflowMenu = false;
@@ -2151,44 +2154,70 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
     float btnH = 30.0f;
     float btnY = dockY + (dockH - btnH) / 2.0f;
 
-    // Dynamic width calculation based on active mode and responsive tier
-    float dockW = 0.0f;
+    // Content-derived dynamic width calculation with symmetric inner padding
+    const float kDockPaddingX = 8.0f;
+    float contentW = 0.0f;
     bool showPdfNav = (m_docType == DocumentType::Pdf && m_totalPages > 1);
 
     if (m_docType == DocumentType::Image) {
-        if (availW >= 460.0f) dockW = 393.0f;
-        else if (availW >= 320.0f) dockW = 210.0f;
-        else dockW = 136.0f;
+        bool isFull = (availW >= 420.0f);
+        bool isCompact = (availW < 250.0f);
+        if (!isCompact) {
+            contentW = isFull ? 375.0f : 200.0f;
+        } else {
+            contentW = 126.0f;
+        }
     } else if (m_docType == DocumentType::Pdf) {
         if (showPdfNav) {
-            if (availW >= 580.0f) dockW = 563.0f;
-            else if (availW >= 400.0f) dockW = 382.0f;
-            else dockW = 244.0f;
+            bool isFull = (availW >= 600.0f);
+            bool isCompact = (availW < 420.0f);
+            if (!isCompact) {
+                contentW = isFull ? 553.0f : 372.0f;
+            } else {
+                contentW = 234.0f;
+            }
         } else {
-            if (availW >= 460.0f) dockW = 393.0f;
-            else if (availW >= 320.0f) dockW = 210.0f;
-            else dockW = 136.0f;
+            bool isFull = (availW >= 420.0f);
+            bool isCompact = (availW < 250.0f);
+            if (!isCompact) {
+                contentW = isFull ? 375.0f : 200.0f;
+            } else {
+                contentW = 126.0f;
+            }
         }
     } else if (m_docType == DocumentType::Text) {
-        if (availW >= 560.0f) dockW = 480.0f;
-        else if (availW >= 420.0f) dockW = 364.0f;
-        else dockW = 232.0f;
+        bool isFull = (availW >= 510.0f);
+        bool isCompact = (availW < 390.0f);
+        if (!isCompact) {
+            contentW = isFull ? 469.0f : 354.0f;
+        } else {
+            contentW = 222.0f;
+        }
     } else if (m_docType == DocumentType::Spreadsheet) {
-        if (availW >= 560.0f) dockW = 480.0f;
-        else if (availW >= 420.0f) dockW = 364.0f;
-        else dockW = 232.0f;
+        bool isFull = (availW >= 480.0f);
+        bool isCompact = (availW < 390.0f);
+        if (!isCompact) {
+            contentW = isFull ? 439.0f : 354.0f;
+        } else {
+            contentW = 222.0f;
+        }
     } else if (m_docType == DocumentType::Office || m_docType == DocumentType::Svg) {
-        if (availW >= 440.0f) dockW = 359.0f;
-        else if (availW >= 320.0f) dockW = 210.0f;
-        else dockW = 136.0f;
+        bool isFull = (availW >= 390.0f);
+        bool isCompact = (availW < 240.0f);
+        if (!isCompact) {
+            contentW = isFull ? 347.0f : 200.0f;
+        } else {
+            contentW = 126.0f;
+        }
     } else if (m_docType == DocumentType::Markdown || m_docType == DocumentType::Notebook) {
-        if (availW >= 320.0f) dockW = 184.0f;
-        else dockW = 88.0f;
+        bool isFull = (availW >= 200.0f);
+        contentW = isFull ? 145.0f : 77.0f;
     } else if (m_docType == DocumentType::Font) {
-        if (availW >= 280.0f) dockW = 138.0f;
-        else dockW = 82.0f;
+        bool isFull = (availW >= 160.0f);
+        contentW = isFull ? 98.0f : 70.0f;
     }
 
+    float dockW = contentW + kDockPaddingX * 2.0f;
     float dockX = availLeft + (availW - dockW) / 2.0f;
     if (dockX < availLeft + 8.0f) dockX = availLeft + 8.0f;
     dockX = std::floor(dockX + 0.5f);
@@ -2225,14 +2254,14 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
         );
     };
 
-    float curX = dockX + 5.0f;
+    float curX = dockX + kDockPaddingX;
 
     // =========================================================================
     // DOCK RENDERING: IMAGE MODE
     // =========================================================================
     if (m_docType == DocumentType::Image) {
-        bool isFull = (availW >= 460.0f);
-        bool isCompact = (availW < 320.0f);
+        bool isFull = (availW >= 420.0f);
+        bool isCompact = (availW < 250.0f);
 
         if (!isCompact) {
             // Segment 1: Inset Zoom Capsule [ - | 100% | + ]
@@ -2377,8 +2406,8 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
     // DOCK RENDERING: PDF MODE
     // =========================================================================
     else if (m_docType == DocumentType::Pdf) {
-        bool isFull = showPdfNav ? (availW >= 580.0f) : (availW >= 460.0f);
-        bool isCompact = showPdfNav ? (availW < 400.0f) : (availW < 320.0f);
+        bool isFull = showPdfNav ? (availW >= 600.0f) : (availW >= 420.0f);
+        bool isCompact = showPdfNav ? (availW < 420.0f) : (availW < 250.0f);
 
         if (showPdfNav) {
             if (!isCompact) {
@@ -2765,8 +2794,8 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
     // DOCK RENDERING: TEXT & CODE MODE
     // =========================================================================
     else if (m_docType == DocumentType::Text) {
-        bool isFull = (availW >= 560.0f);
-        bool isCompact = (availW < 420.0f);
+        bool isFull = (availW >= 510.0f);
+        bool isCompact = (availW < 390.0f);
 
         if (!isCompact) {
             // Save, Undo, Redo
@@ -2946,8 +2975,8 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
     // DOCK RENDERING: SPREADSHEET MODE
     // =========================================================================
     else if (m_docType == DocumentType::Spreadsheet) {
-        bool isFull = (availW >= 560.0f);
-        bool isCompact = (availW < 420.0f);
+        bool isFull = (availW >= 480.0f);
+        bool isCompact = (availW < 390.0f);
 
         if (!isCompact) {
             // Save, Undo, Redo
@@ -3119,8 +3148,8 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
     // DOCK RENDERING: OFFICE / PRESENTATION SLIDE MODE
     // =========================================================================
     else if (m_docType == DocumentType::Office || m_docType == DocumentType::Svg) {
-        bool isFull = (availW >= 440.0f);
-        bool isCompact = (availW < 320.0f);
+        bool isFull = (availW >= 390.0f);
+        bool isCompact = (availW < 240.0f);
 
         if (!isCompact) {
             float capH = 28.0f;
@@ -3251,7 +3280,7 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
     // DOCK RENDERING: MARKDOWN & NOTEBOOK MODE
     // =========================================================================
     else if (m_docType == DocumentType::Markdown || m_docType == DocumentType::Notebook) {
-        bool isFull = (availW >= 320.0f);
+        bool isFull = (availW >= 200.0f);
 
         m_btnCopyTextRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
         DrawIconButton(m_btnCopyTextRect, ICON_COPY, BTN_COPY_TEXT, true);
@@ -3283,7 +3312,7 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
     // DOCK RENDERING: FONT MODE
     // =========================================================================
     else if (m_docType == DocumentType::Font) {
-        bool isFull = (availW >= 280.0f);
+        bool isFull = (availW >= 160.0f);
 
         if (isFull) {
             m_btnInfoRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
@@ -4307,7 +4336,11 @@ void AppWindow::RenderToast(const D2D1_RECT_F& rect) {
     float cornerR = toastH / 2.0f;
 
     float cx = rect.left + (rect.right - rect.left) / 2.0f;
-    float toastY = rect.bottom - 48.0f * dpiScale + slideY;
+    float bottomMargin = 48.0f * dpiScale;
+    if (m_hudHwnd && IsWindowVisible(m_hudHwnd) && m_docType == DocumentType::Media) {
+        bottomMargin = (54.0f + 36.0f) * dpiScale;
+    }
+    float toastY = rect.bottom - bottomMargin + slideY;
     D2D1_RECT_F toastRect = D2D1::RectF(cx - toastW / 2.0f, toastY - toastH / 2.0f, cx + toastW / 2.0f, toastY + toastH / 2.0f);
     D2D1_ROUNDED_RECT rToast = D2D1::RoundedRect(toastRect, cornerR, cornerR);
 
@@ -4516,18 +4549,34 @@ void AppWindow::RenderUpdateBanner(const D2D1_RECT_F& rect) {
     float dpiScale = (m_dpiScale > 0.05f) ? m_dpiScale : 1.0f;
     const UpdateInfo info = m_updater.GetUpdateInfo();
 
-    // Sleek minimal side pill dimensions (matches toast styling)
-    float bannerW = 276.0f * dpiScale;
+    // Sleek minimal bottom-centered pill dimensions (matches toast styling and responsive layout)
+    float clientW = rect.right - rect.left;
+    float clientH = rect.bottom - rect.top;
+
+    float bannerWDip = 280.0f;
+    float clientWDip = clientW / dpiScale;
+    if (clientWDip < 340.0f) {
+        bannerWDip = 150.0f;
+    } else if (clientWDip < 520.0f) {
+        bannerWDip = 210.0f;
+    }
+
+    float bannerW = bannerWDip * dpiScale;
     float bannerH = 38.0f * dpiScale;
     float cornerR = bannerH / 2.0f; // Pill radius
 
-    float rightMargin = 18.0f * dpiScale;
-    float topMargin = 50.0f * dpiScale;
+    float bottomMargin = 24.0f * dpiScale;
+    if (m_hudHwnd && IsWindowVisible(m_hudHwnd) && m_docType == DocumentType::Media) {
+        bottomMargin = (54.0f + 32.0f) * dpiScale;
+    }
+
+    float cx = rect.left + clientW / 2.0f;
+    float bannerY = rect.bottom - bottomMargin - bannerH / 2.0f;
     m_updateBannerRect = D2D1::RectF(
-        rect.right - rightMargin - bannerW,
-        rect.top + topMargin,
-        rect.right - rightMargin,
-        rect.top + topMargin + bannerH
+        cx - bannerW / 2.0f,
+        bannerY - bannerH / 2.0f,
+        cx + bannerW / 2.0f,
+        bannerY + bannerH / 2.0f
     );
 
     // 1. Layered Ambient Drop Shadow
@@ -4607,18 +4656,19 @@ void AppWindow::RenderUpdateBanner(const D2D1_RECT_F& rect) {
             rt->DrawText(btnLabel.c_str(), (UINT32)btnLabel.length(), m_d2d.FontButton, m_updateActionBtnRect, m_d2d.BrushText);
         }
 
-        // Dismiss Button: [ ✕ ]
+        // Dismiss Button (Vector Icon)
         m_updateDismissBtnRect = D2D1::RectF(
             m_updateBannerRect.right - 25.0f * dpiScale,
             m_updateBannerRect.top + 7.0f * dpiScale,
             m_updateBannerRect.right - 8.0f * dpiScale,
             m_updateBannerRect.bottom - 7.0f * dpiScale
         );
-        std::wstring closeLabel = L"✕";
+        float closeCx = m_updateDismissBtnRect.left + (m_updateDismissBtnRect.right - m_updateDismissBtnRect.left) / 2.0f;
+        float closeCy = m_updateDismissBtnRect.top + (m_updateDismissBtnRect.bottom - m_updateDismissBtnRect.top) / 2.0f;
         ID2D1SolidColorBrush* closeBrush = nullptr;
         rt->CreateSolidColorBrush(m_updateDismissBtnHover ? D2D1::ColorF(0.95f, 0.95f, 0.95f) : D2D1::ColorF(0.55f, 0.55f, 0.58f), &closeBrush);
-        if (closeBrush && m_d2d.FontButton) {
-            rt->DrawText(closeLabel.c_str(), (UINT32)closeLabel.length(), m_d2d.FontButton, m_updateDismissBtnRect, closeBrush);
+        if (closeBrush) {
+            m_d2d.DrawIconClose(closeCx, closeCy, 12.0f * dpiScale, closeBrush, rt);
             closeBrush->Release();
         }
     } else if (state == UpdateState::Downloading) {
@@ -6736,13 +6786,33 @@ void AppWindow::UpdateHudPosition() {
     }
 }
 
-void AppWindow::HideMainWindow() {
-    if (m_hudHwnd) {
-        ShowWindow(m_hudHwnd, SW_HIDE);
-    }
-    HideUpdatePopup();
-    m_hudOpacity = 0.0f;
-    m_hudTargetOpacity = 0.0f;
+void AppWindow::CloseCurrentPreview() {
+    // 1. Reset all transient modals, menus, and drawers
+    m_showSettings = false;
+    m_settingsAnim = 0.0f;
+    m_settingsModalRect = {};
+    m_showInspector = false;
+    m_inspectorAnim = 0.0f;
+    m_inspectorRect = {};
+    m_showSearch = false;
+    m_searchAnim = 0.0f;
+    m_searchBarRect = {};
+    m_searchQuery.clear();
+    m_searchMatches.clear();
+    m_currentMatchIndex = -1;
+    m_isCropActive = false;
+    m_cropDragHandle = 0;
+    m_showOverflowMenu = false;
+    m_overflowMenuAnim = 0.0f;
+    m_overflowMenuRect = {};
+    m_toastOpacity = 0.0f;
+    m_toastMessage.clear();
+    m_dockOpacity = 0.0f;
+    m_dockTargetOpacity = 0.0f;
+    m_guiVisible = false;
+    ExplorerHook::SetSuppressSpaceClose(false);
+
+    // 2. Unload media / documents and release memory immediately
     if (m_docType == DocumentType::Media) {
         if (m_media.IsPlaying()) {
             m_media.Pause();
@@ -6750,14 +6820,71 @@ void AppWindow::HideMainWindow() {
         m_media.ShowVideoWindow(false);
         m_media.CloseMedia();
     }
+    m_pdf.CloseDocument();
+    SafeRelease(m_pdfPageBitmap);
+    SafeRelease(m_imageBitmap);
+    SafeRelease(m_audioAlbumArt);
+    SafeRelease(m_audioAlbumBrush);
+    SafeRelease(m_officeBitmap);
+    m_svg.Close();
+    m_font.Close();
+    m_folder.Close();
+    m_md.Close();
+    m_text.Close();
+    m_system.Close();
+    ClearThumbnails();
+    SafeRelease(m_unsupportedIconBitmap);
+    m_unsupportedTypeName.clear();
+    m_unsupportedSizeStr.clear();
+    m_unsupportedDateStr.clear();
+    m_unsupportedHexDump.clear();
+
+    // 3. Reset document metadata & transform state
+    m_docType = DocumentType::None;
+    m_currentFilePath.clear();
+    m_fileName.clear();
+    m_isAudioOnly = false;
+    m_hasAdaptedVideoWindow = false;
+    m_videoWidth = 0;
+    m_videoHeight = 0;
+    m_zoom = 1.0f;
+    m_panX = 0.0f;
+    m_panY = 0.0f;
+    m_rotation = 0;
+    m_flipH = false;
+    m_flipV = false;
+    m_isDragging = false;
+    m_isMomentumActive = false;
+    m_dragVelX = 0.0f;
+    m_dragVelY = 0.0f;
+    m_isSelectingText = false;
+    m_selStartIndex = -1;
+    m_selEndIndex = -1;
     m_isScrubbing = false;
     m_isVolDragging = false;
     m_isWaveformSeeking = false;
+    m_pressedButtonId = BTN_NONE;
+    m_hoveredButtonId = BTN_NONE;
+
+    UpdateWindowTitle();
+    SetCursorVisibility(true);
+}
+
+void AppWindow::HideMainWindow() {
+    if (m_hudHwnd) {
+        ShowWindow(m_hudHwnd, SW_HIDE);
+    }
+    HideUpdatePopup();
+    m_hudOpacity = 0.0f;
+    m_hudTargetOpacity = 0.0f;
     if (GetCapture() == m_hwnd || (m_hudHwnd && GetCapture() == m_hudHwnd)) {
         ReleaseCapture();
     }
     KillTimer(m_hwnd, 1);
     m_lastHideTime = GetTickCount();
+
+    CloseCurrentPreview();
+
     ShowWindow(m_hwnd, SW_HIDE);
 }
 
@@ -7465,23 +7592,32 @@ void AppWindow::UpdatePopupPosition() {
     int clientW = rc.right - rc.left;
     int clientH = rc.bottom - rc.top;
 
-    float notifWDip = 248.0f;
+    float notifWDip = 260.0f;
     float clientWDip = PxToDip(clientW);
-    if (clientWDip < 480.0f) {
-        notifWDip = 110.0f; // Mini compact badge
-    } else if (clientWDip < 660.0f) {
-        notifWDip = 180.0f; // Medium compact pill
+    if (clientWDip < 340.0f) {
+        notifWDip = 140.0f; // Mini compact badge
+    } else if (clientWDip < 520.0f) {
+        notifWDip = 200.0f; // Medium compact pill
     }
 
-    float notifHDip = 34.0f;
+    float notifHDip = 36.0f;
     int notifW = (int)(notifWDip * m_dpiScale + 0.5f);
     int notifH = (int)(notifHDip * m_dpiScale + 0.5f);
-    int cornerR = (int)(17.0f * m_dpiScale + 0.5f);
+    int cornerR = (int)(18.0f * m_dpiScale + 0.5f);
 
-    int marginX = (int)(16.0f * m_dpiScale + 0.5f);
-    int marginY = (int)(14.0f * m_dpiScale + 0.5f);
+    int marginY = (int)(24.0f * m_dpiScale + 0.5f);
+    if (m_hudHwnd && IsWindowVisible(m_hudHwnd) && m_docType == DocumentType::Media) {
+        RECT hudRc = {};
+        GetWindowRect(m_hudHwnd, &hudRc);
+        int hudH = hudRc.bottom - hudRc.top;
+        marginY = hudH + (int)(32.0f * m_dpiScale + 0.5f);
+    }
 
-    POINT pt = { clientW - notifW - marginX, marginY };
+    int posX = (clientW - notifW) / 2;
+    int posY = clientH - notifH - marginY;
+    if (posY < 10) posY = 10;
+
+    POINT pt = { posX, posY };
     ClientToScreen(m_hwnd, &pt);
 
     RECT curRc;
@@ -7609,14 +7745,15 @@ void AppWindow::RenderUpdatePopup() {
             m_updateRenderTarget->DrawText(btnLabel.c_str(), (UINT32)btnLabel.length(), m_d2d.FontButton, m_updateBtnRect, m_updateBrushText);
         }
 
-        // Dismiss Button [ ✕ ]
+        // Dismiss Button (Vector Icon)
         float closeLeft = (wDip >= 220.0f) ? (wDip - 24.0f) : ((wDip >= 160.0f) ? (wDip - 22.0f) : (wDip - 18.0f));
         float closeRight = (wDip >= 220.0f) ? (wDip - 6.0f) : ((wDip >= 160.0f) ? (wDip - 4.0f) : (wDip - 4.0f));
         m_updateCloseBtnRect = D2D1::RectF(closeLeft, 5.0f, closeRight, hDip - 5.0f);
-        std::wstring closeLabel = L"✕";
+        float closeCx = m_updateCloseBtnRect.left + (m_updateCloseBtnRect.right - m_updateCloseBtnRect.left) / 2.0f;
+        float closeCy = m_updateCloseBtnRect.top + (m_updateCloseBtnRect.bottom - m_updateCloseBtnRect.top) / 2.0f;
         ID2D1SolidColorBrush* cBrush = m_updateCloseHover ? m_updateBrushText : m_updateBrushTextMuted;
-        if (cBrush && m_d2d.FontButton) {
-            m_updateRenderTarget->DrawText(closeLabel.c_str(), (UINT32)closeLabel.length(), m_d2d.FontButton, m_updateCloseBtnRect, cBrush);
+        if (cBrush) {
+            m_d2d.DrawIconClose(closeCx, closeCy, 12.0f, cBrush, m_updateRenderTarget);
         }
     } else if (state == UpdateState::Downloading) {
         int pct = m_updater.GetDownloadProgress();
@@ -7666,14 +7803,15 @@ void AppWindow::RenderUpdatePopup() {
             m_updateRenderTarget->DrawText(btnLabel.c_str(), (UINT32)btnLabel.length(), m_d2d.FontButton, m_updateBtnRect, m_updateBrushText);
         }
 
-        // Dismiss Button [ ✕ ]
+        // Dismiss Button (Vector Icon)
         float closeLeft = (wDip >= 220.0f) ? (wDip - 24.0f) : ((wDip >= 160.0f) ? (wDip - 22.0f) : (wDip - 18.0f));
         float closeRight = (wDip >= 220.0f) ? (wDip - 6.0f) : ((wDip >= 160.0f) ? (wDip - 4.0f) : (wDip - 4.0f));
         m_updateCloseBtnRect = D2D1::RectF(closeLeft, 5.0f, closeRight, hDip - 5.0f);
-        std::wstring closeLabel = L"✕";
+        float closeCx = m_updateCloseBtnRect.left + (m_updateCloseBtnRect.right - m_updateCloseBtnRect.left) / 2.0f;
+        float closeCy = m_updateCloseBtnRect.top + (m_updateCloseBtnRect.bottom - m_updateCloseBtnRect.top) / 2.0f;
         ID2D1SolidColorBrush* cBrush = m_updateCloseHover ? m_updateBrushText : m_updateBrushTextMuted;
-        if (cBrush && m_d2d.FontButton) {
-            m_updateRenderTarget->DrawText(closeLabel.c_str(), (UINT32)closeLabel.length(), m_d2d.FontButton, m_updateCloseBtnRect, cBrush);
+        if (cBrush) {
+            m_d2d.DrawIconClose(closeCx, closeCy, 12.0f, cBrush, m_updateRenderTarget);
         }
     } else if (state == UpdateState::Failed) {
         std::wstring label = (wDip >= 220.0f) ? L"Download failed" : (wDip >= 160.0f ? L"Failed" : L"!");
@@ -7699,14 +7837,15 @@ void AppWindow::RenderUpdatePopup() {
             m_updateRenderTarget->DrawText(btnLabel.c_str(), (UINT32)btnLabel.length(), m_d2d.FontButton, m_updateBtnRect, m_updateBrushText);
         }
 
-        // Dismiss Button [ ✕ ]
+        // Dismiss Button (Vector Icon)
         float closeLeft = (wDip >= 220.0f) ? (wDip - 24.0f) : ((wDip >= 160.0f) ? (wDip - 22.0f) : (wDip - 18.0f));
         float closeRight = (wDip >= 220.0f) ? (wDip - 6.0f) : ((wDip >= 160.0f) ? (wDip - 4.0f) : (wDip - 4.0f));
         m_updateCloseBtnRect = D2D1::RectF(closeLeft, 5.0f, closeRight, hDip - 5.0f);
-        std::wstring closeLabel = L"✕";
+        float closeCx = m_updateCloseBtnRect.left + (m_updateCloseBtnRect.right - m_updateCloseBtnRect.left) / 2.0f;
+        float closeCy = m_updateCloseBtnRect.top + (m_updateCloseBtnRect.bottom - m_updateCloseBtnRect.top) / 2.0f;
         ID2D1SolidColorBrush* cBrush = m_updateCloseHover ? m_updateBrushText : m_updateBrushTextMuted;
-        if (cBrush && m_d2d.FontButton) {
-            m_updateRenderTarget->DrawText(closeLabel.c_str(), (UINT32)closeLabel.length(), m_d2d.FontButton, m_updateCloseBtnRect, cBrush);
+        if (cBrush) {
+            m_d2d.DrawIconClose(closeCx, closeCy, 12.0f, cBrush, m_updateRenderTarget);
         }
     }
 
@@ -9462,17 +9601,10 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                     if (m_hudHwnd) InvalidateRect(m_hudHwnd, NULL, FALSE);
                     return 0;
                 }
-                if (m_cleanShowcaseMode) {
-                    ToggleGuiVisibility();
-                    return 0;
-                } else {
-                    WakeHudAndCursor();
-                    m_media.TogglePlayPause();
-                    EnsureAnimTimer();
-                    InvalidateRect(m_hwnd, NULL, FALSE);
-                    if (m_hudHwnd) InvalidateRect(m_hudHwnd, NULL, FALSE);
-                    return 0;
-                }
+                // Single touch / click anywhere on media canvas reveals/hides GUI
+                // No accidental play/pause on background click - playback is exclusively controlled via HUD or Spacebar
+                ToggleGuiVisibility();
+                return 0;
             }
 
             // 3b. Text & Spreadsheet scrollbar, status bar, and canvas text interaction
@@ -9834,7 +9966,7 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             };
 
             // If it was a clean click without dragging movement on the canvas (Image, Svg, PDF, Office, etc.):
-            if (m_cleanShowcaseMode && !wasDraggingDistance && !wasCropDragging && !wasSelectingText && !wasScrubbing &&
+            if (!wasDraggingDistance && !wasCropDragging && !wasSelectingText && !wasScrubbing &&
                 !m_showSettings && !m_showSearch && !m_showInspector && !m_showOverflowMenu &&
                 m_docType != DocumentType::Text && m_docType != DocumentType::Spreadsheet && m_docType != DocumentType::None &&
                 m_docType != DocumentType::Media) {
@@ -9881,16 +10013,9 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 m_text.HandleDoubleClick(pt.x, pt.y, canvasRect, m_dpiScale);
                 InvalidateRect(m_hwnd, NULL, FALSE);
                 return 0;
-            } else if (m_docType == DocumentType::Media) {
-                ToggleFullscreen();
-            } else {
-                if (std::abs(m_zoom - 1.0f) < 0.1f) {
-                    FitToWindow();
-                } else {
-                    ResetZoom();
-                }
-                InvalidateRect(m_hwnd, NULL, FALSE);
             }
+            // Touch/click-based function activations (double-click zoom / fullscreen) removed per design spec.
+            // Rapid double-clicks are treated as safe interactions without unexpected zooms or playback interruptions.
             return 0;
         }
 
