@@ -1,6 +1,6 @@
 {
-  "version": "1.2.9",
+  "version": "1.3.0",
   "release_date": "2026-10-29",
   "download_url": "https://github.com/Code-Xceed/WinPreview/releases/latest/download/WinPreview-Setup-x64.exe",
-  "changelog": "WinPreview v1.2.9 - Clean Media Showcase & Click-to-Toggle GUI: Immersive full-screen media viewing where controls (dock and HUD) start cleanly hidden and smoothly toggle on click across all media types (video, audio, image, SVG, PDF, office), mouse movement wakes cursor arrow without forcing GUI popups, 3-second auto-hide timeout, drag-pan detection deadzone, double-click fullscreen toggle, and customizable 'Clean Media Showcase' preference in Settings."
+  "changelog": "WinPreview v1.3.0 - Toolbar Sizing Precision & UX Polish: Content-derived dynamic toolbar dock sizing with symmetric padding across all document types, eliminating icon clipping/overflow; complete state persistence wipe on dismiss (clean startup); elimination of accidental touch/canvas function activations; and bottom-centered minimalist notifications with vector close icons."
 }
