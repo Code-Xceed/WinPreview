@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>Ultra-Fast Native C++20 QuickLook & Apple Preview for Windows.</strong><br>
-  Instant cold launches (&lt;35ms), ultra-low memory (&lt;20MB RAM), and pure Direct2D/Direct3D 11 hardware-accelerated rendering with zero runtime dependencies.
+  Instant background-service launch (~40 ms) and a ~150 ms path from a cold start to a previewed file, with a small native footprint and pure Direct2D/Direct3D 11 hardware-accelerated rendering. No .NET, Electron or WebView2 runtime is required; the native PDFium and LibHEIF components ship in the package.
 </p>
 
 <p align="center">
@@ -41,13 +41,14 @@ Tested on Windows 11 Pro 64-bit (Intel Core i7 / 16GB RAM / NVMe SSD):
 
 | Metric | Legacy Managed Frameworks | WinPreview Native C++20 | Performance Advantage |
 | :--- | :--- | :--- | :--- |
-| **Cold Launch Time** | 1,240 ms – 2,100 ms | **< 35 ms** | **🚀 35× faster** |
-| **Image Opening Latency** | 350 ms – 600 ms | **18 ms** | **⚡ 25× faster** |
-| **PDF Opening Latency** | 580 ms – 900 ms | **93 ms** | **📄 8× faster** |
-| **Video Playback Latency** | 900 ms – 1,800 ms | **57 ms** | **🎬 20× faster** |
-| **Idle Memory Footprint** | 140 MB – 260 MB RAM | **19 MB – 28 MB RAM** | **📉 85% less RAM** |
-| **Installer Size** | 51.5 MB Setup | **5.3 MB Setup (1.89 MB EXE)** | **📦 90% smaller** |
-| **Dependencies** | .NET 8 + WinUI 3 + WebView2 | **Zero (Native Win32)** | Standalone |
+| **Background Service Launch** | 1,240 ms – 2,100 ms | **~40 ms** | **30–50× faster** |
+| **Cold Launch → File Previewed** | 1,240 ms – 2,100 ms | **~150 ms** | **8–14× faster** |
+| **Image Opening Latency** | 350 ms – 600 ms | **~18 ms** | **20× faster** |
+| **PDF Opening Latency** | 580 ms – 900 ms | **~10 ms** (first page raster follows asynchronously) | **60× faster to first paint** |
+| **Video Playback Latency** | 900 ms – 1,800 ms | **~60 ms** (requires VLC) | **15–30× faster** |
+| **Idle Memory Footprint** | 140 MB – 260 MB RAM | **~25–40 MB private** (working set additionally maps GPU driver pages) | **~75–85% less private memory** |
+| **Installer Size** | 51.5 MB Setup | **8.7 MB Setup (1.49 MB EXE)** | **📦 83% smaller** |
+| **Dependencies** | .NET 8 + WinUI 3 + WebView2 | **No managed runtime (native Win32)** | Standalone |
 
 ---
 
@@ -57,7 +58,7 @@ Tested on Windows 11 Pro 64-bit (Intel Core i7 / 16GB RAM / NVMe SSD):
 | :--- | :--- | :--- |
 | **Documents & PDFs** | `.pdf` | Chromium PDFium vector rendering, multi-page sidebar, smooth zoom |
 | **Images & RAW Photos** | `.heic`, `.heif`, `.avif`, `.webp`, `.png`, `.jpg`, `.jpeg`, `.tiff`, `.bmp`, `.ico`, `.cr2`, `.cr3`, `.nef`, `.arw`, `.dng`, `.raw`, `.orf`, `.rw2`, `.pef`, `.raf` | Multi-tier LibHEIF + WIC hardware decoding, embedded Camera RAW preview extraction, Display P3 wide-gamut, EXIF inspector metadata |
-| **Cinema Video & Audio** | `.mov`, `.mp4`, `.mxf`, `.prores`, `.braw`, `.r3d`, `.mkv`, `.m4v`, `.webm`, `.avi`, `.wmv`, `.flv`, `.ts`, `.mts`, `.m2ts`, `.mp3`, `.wav`, `.flac`, `.m4a`, `.aac` | LibVLC multi-threaded decoding, real-time Log-to-Rec.709 Cinema Tone-Mapping (Apple Log, Sony S-Log3, Canon C-Log3, DJI D-Log M, V-Log), acrylic transport HUD |
+| **Cinema Video & Audio** | `.mov`, `.mp4`, `.mxf`, `.prores`, `.braw`, `.r3d`, `.mkv`, `.m4v`, `.webm`, `.avi`, `.wmv`, `.flv`, `.ts`, `.mts`, `.m2ts`, `.mp3`, `.wav`, `.flac`, `.m4a`, `.aac` | LibVLC playback when VLC 3.x is installed (or a portable `libvlc` folder is placed next to the EXE); real-time Log-to-Rec.709 Cinema Tone-Mapping, acrylic transport HUD. File metadata still previews without VLC. |
 | **Programming Languages** | `.cpp`, `.c`, `.h`, `.hpp`, `.cs`, `.py`, `.rs`, `.go`, `.js`, `.ts`, `.tsx`, `.jsx`, `.swift`, `.kt`, `.zig`, `.lua`, `.php`, `.rb`, `.java`, `.r`, `.sql`, `.dart` | DirectWrite hardware text rendering, fast keyword/string/comment tinting, line numbers, caret navigation, editing & save (`Ctrl+S`) |
 | **Scripts & Shells** | `.ps1`, `.bat`, `.cmd`, `.sh`, `.bash`, `.zsh` | Shell syntax highlighting, line wrapping toggle |
 | **Web & Stylesheets** | `.html`, `.htm`, `.css`, `.scss`, `.less` | Semantic tag & property coloring |
@@ -148,6 +149,20 @@ powershell -ExecutionPolicy Bypass -File publish.ps1
 ```
 
 The compiled binaries will be placed in `dist\WinPreview\` and the self-contained installer will be generated at `dist\Installer\WinPreview-Setup-x64.exe`.
+
+`publish.ps1` is the single release entry point. It synchronises the version from `version.json` into `src\version.h` and `installer\WinPreview.iss`, stages every runtime DLL, runs the production verification suite, builds the portable ZIP and installer, and writes `dist\Installer\version.json` with the installer SHA-256 used by the in-app updater.
+
+### Production Verification
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tests\production_check.ps1 -PackageDir dist\WinPreview
+```
+
+The suite checks version consistency across `version.json`, `version.h`, the installer script and the release manifest; validates the x64 PE and every required runtime library; renders 16 representative documents through the real Direct2D pipeline (`--screenshot` mode), plus Settings, Inspector and update-banner states; and fails on a new crash log or an orphaned process. CI runs the same suite on every push and pull request.
+
+### Update Integrity
+
+Automatic checks run at most once every two hours (manual checks via `F5` / `Ctrl+U`). The updater downloads the installer over HTTPS and verifies it against the SHA-256 and byte size published in the release manifest before executing it, rejects non-HTTPS download URLs, and validates the PE headers and Authenticode status as a second layer. A dismissed release is remembered so it cannot nag again, while a newer release re-arms normally.
 
 ---
 

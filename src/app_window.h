@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #include "d2d_engine.h"
 #include "wic_decoder.h"
 #include "pdf_engine.h"
@@ -13,6 +13,9 @@
 #include "update_engine.h"
 #include <string>
 #include <vector>
+#include <atomic>
+#include <memory>
+#include <mutex>
 
 namespace WinPreview {
 
@@ -40,6 +43,7 @@ struct ThumbnailItem {
     std::wstring label;
     ID2D1Bitmap* bitmap = nullptr;
     D2D1_RECT_F rect = {};
+    bool attempted = false; // a failed pdfium thumbnail must not re-rasterize every paint
 };
 
 enum IconType {
@@ -132,7 +136,6 @@ private:
     FolderEngine m_folder;
     MarkdownEngine m_md;
     SystemEngine m_system;
-    bool m_markdownRichMode = true;
 
     // Current State
     DocumentType m_docType = DocumentType::None;
@@ -189,6 +192,7 @@ private:
     void RenderToast(const D2D1_RECT_F& rect);
     void UpdateWindowTitle();
     void SaveCurrentTextFile();
+    void SyncSpaceSuppression();
 
     // In-App Auto-Update System
     UpdateEngine m_updater;
@@ -205,13 +209,13 @@ private:
     void SaveLoopPref();
     void SavePdfSidebarPref();
     void SaveGeneralSettings();
-    ULONGLONG m_lastUpdateCheckTick = 0;
     static const UINT UPDATE_CHECK_INTERVAL_MS = 2 * 60 * 60 * 1000; // 2 hours
     static const wchar_t* REG_VAL_LAST_UPDATE_CHECK;
+    static const wchar_t* REG_VAL_DISMISSED_UPDATE;
     void RegWriteUpdateCheckTick();
     void RenderUpdateBanner(const D2D1_RECT_F& rect);
     void CheckForUpdates(bool isUserInitiated);
-    void CheckUpdateOnPreviewOpen();
+    void DismissUpdateNag();
     bool ShouldAutoCheckForUpdates();
 
     // Update-engine results are marshaled to the UI thread with these messages.
@@ -237,6 +241,7 @@ private:
     // thread; only the cheap CreateBitmap hop happens on the UI thread, so page
     // flips and zoom re-rasterization never block input.
     static const UINT TIMER_PDF_RASTER    = 7003;
+    static const UINT TIMER_SEARCH_DEBOUNCE = 7004;
     static const UINT WM_PDF_RASTER_DONE  = WM_USER + 559;
     struct PdfRasterPayload {
         unsigned int gen = 0;
@@ -254,6 +259,19 @@ private:
     unsigned int m_pdfRasterGen = 0;     // bump to cancel stale renders
     int m_pdfRasterPendingPage = -1;     // debounced request
     float m_pdfRasterPendingScale = 1.0f;
+
+    // Shared lifetime token for detached raster workers. The worker only holds
+    // this object (never `this`), so window/app teardown can serialize against an
+    // in-flight render instead of racing a freed PdfEngine.
+    struct PdfRasterContext {
+        std::mutex mutex;
+        PdfEngine* engine = nullptr;
+        HWND hwnd = nullptr;
+        bool alive = true;
+        std::atomic<unsigned int> requestedGen{ 0 }; // newest requested raster
+    };
+    std::shared_ptr<PdfRasterContext> m_pdfRasterCtx;
+
     void RequestPdfRaster(int page, float sampleScale, UINT delayMs = 0);
     void RenderPdfPageAsync(int page, float sampleScale);
     void EnsurePdfSharpness();
@@ -261,6 +279,8 @@ private:
     // Viewport transform
     float m_zoom = 1.0f;
     float m_targetZoom = 1.0f;
+    bool m_isFitMode = true; // true while "Fit to Window" is the active view state
+    bool m_modalDialogOpen = false; // native file dialog owns focus; never auto-hide
     float m_panX = 0.0f;
     float m_panY = 0.0f;
     float m_targetPanX = 0.0f;
@@ -273,8 +293,11 @@ private:
 
     // Sidebar & Layout
     bool m_showSidebar = true;
+    bool m_hasPdfSidebarPref = false; // false until the user explicitly toggles it
+    bool m_pdfSidebarPref = true;
     int m_sidebarTab = 0; // 0: Thumbnails, 1: Outline
     float m_sidebarWidth = 220.0f;
+    bool m_sidebarAutoCollapsed = false; // transient narrow-window collapse (not persisted)
     float m_sidebarScrollY = 0.0f;
     float m_targetSidebarScrollY = 0.0f;
     float m_outlineScrollY = 0.0f;
@@ -610,7 +633,6 @@ private:
     D2D1_POINT_2F CanvasToPageCoords(float canvasX, float canvasY, const D2D1_RECT_F& canvasRect);
 
     // System Tray & Background Residency
-    UINT m_timerInterval = 30;
 
     // Idle animation timer management: the 30ms render-pump timer is parked (killed)
     // whenever nothing is animating, and re-armed by any input that can start an
@@ -635,6 +657,7 @@ private:
 
     NOTIFYICONDATAW m_nid = {};
     bool m_hasTrayIcon = false;
+    HICON m_trayIconOwned = nullptr; // handle from LoadImage (must be DestroyIcon'd)
     HICON m_hIconBig = NULL;
     HICON m_hIconSmall = NULL;
 

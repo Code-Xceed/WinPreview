@@ -202,7 +202,7 @@ bool FolderEngine::LoadFromZipArchive(const std::wstring& zipPath) {
     if (hFile == INVALID_HANDLE_VALUE) return false;
 
     LARGE_INTEGER liSize;
-    if (!GetFileSizeEx(hFile, &liSize) || liSize.QuadPart < sizeof(ZipEocd)) {
+    if (!GetFileSizeEx(hFile, &liSize) || liSize.QuadPart < (LONGLONG)sizeof(ZipEocd)) {
         CloseHandle(hFile);
         return false;
     }
@@ -224,20 +224,23 @@ bool FolderEngine::LoadFromZipArchive(const std::wstring& zipPath) {
     // Find EOCD signature from end of buffer
     int eocdPos = -1;
     for (int i = (int)bytesRead - (int)sizeof(ZipEocd); i >= 0; --i) {
-        if (*(uint32_t*)(buf.data() + i) == 0x06054b50) {
+        uint32_t sig = 0;
+        memcpy(&sig, buf.data() + i, sizeof(sig)); // packed/unaligned-safe
+        if (sig == 0x06054b50) {
             eocdPos = i;
             break;
         }
     }
 
-    if (eocdPos < 0) {
+    if (eocdPos < 0 || (size_t)eocdPos + sizeof(ZipEocd) > bytesRead) {
         CloseHandle(hFile);
         return false;
     }
 
-    ZipEocd* pEocd = (ZipEocd*)(buf.data() + eocdPos);
-    uint32_t totalEntries = pEocd->totalEntries;
-    uint32_t cdOffset = pEocd->centralDirOffset;
+    ZipEocd eocd = {};
+    memcpy(&eocd, buf.data() + eocdPos, sizeof(eocd));
+    uint32_t totalEntries = eocd.totalEntries;
+    uint32_t cdOffset = eocd.centralDirOffset;
 
     if (totalEntries == 0 || (UINT64)cdOffset >= fileSize) {
         CloseHandle(hFile);
@@ -255,7 +258,10 @@ bool FolderEngine::LoadFromZipArchive(const std::wstring& zipPath) {
 
         std::string rawName(cd.fileNameLength, '\0');
         if (cd.fileNameLength > 0) {
-            ReadFile(hFile, &rawName[0], cd.fileNameLength, &bytesRead, NULL);
+            if (!ReadFile(hFile, &rawName[0], cd.fileNameLength, &bytesRead, NULL) ||
+                bytesRead != cd.fileNameLength) {
+                break;
+            }
         }
 
         if (cd.extraFieldLength > 0 || cd.fileCommentLength > 0) {
@@ -351,7 +357,6 @@ void FolderEngine::Render(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D1_RECT
     if (!rt || !m_isLoaded) return;
 
     float clientW = targetRect.right - targetRect.left;
-    float clientH = targetRect.bottom - targetRect.top;
     float marginX = (std::max)(36.0f, (clientW - 920.0f) / 2.0f);
     float contentW = clientW - marginX * 2.0f;
 

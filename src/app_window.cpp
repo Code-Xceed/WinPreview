@@ -1,4 +1,4 @@
-#include "app_window.h"
+﻿#include "app_window.h"
 #include <algorithm>
 #include <cmath>
 #include <fstream>
@@ -120,12 +120,22 @@ LRESULT CALLBACK AppWindow::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
     return DefWindowProc(hwnd, msg, wParam, lParam);
 }
 
-AppWindow::AppWindow() {}
+AppWindow::AppWindow() {
+    m_pdfRasterCtx = std::make_shared<PdfRasterContext>();
+    m_pdfRasterCtx->engine = &m_pdf;
+}
 
 static UINT g_wmTaskbarCreated = 0;
 static HMODULE g_hWtsApi32 = NULL;
 
 AppWindow::~AppWindow() {
+    // Stop and serialize with any in-flight PDF raster before members are freed.
+    if (m_pdfRasterCtx) {
+        std::lock_guard<std::mutex> lock(m_pdfRasterCtx->mutex);
+        m_pdfRasterCtx->alive = false;
+        m_pdfRasterCtx->hwnd = nullptr;
+        m_pdfRasterCtx->engine = nullptr;
+    }
     if (g_hWtsApi32 && m_hwnd) {
         typedef BOOL (WINAPI *PFN_WTSUnRegisterSessionNotification)(HWND);
         auto fnWtsUnreg = (PFN_WTSUnRegisterSessionNotification)GetProcAddress(g_hWtsApi32, "WTSUnRegisterSessionNotification");
@@ -169,7 +179,9 @@ bool AppWindow::Create(HINSTANCE hInstance, int nCmdShow, bool showTrayNotificat
     m_hIconSmall = (HICON)LoadImageW(hInstance, MAKEINTRESOURCEW(101), IMAGE_ICON,
                                      GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR);
 
-    WNDCLASSEXW wc = { sizeof(WNDCLASSEXW) };
+    WNDCLASSEXW wc{};
+
+    wc.cbSize = sizeof(wc);
     wc.lpfnWndProc = WndProc;
     wc.hInstance = hInstance;
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
@@ -321,23 +333,17 @@ bool AppWindow::Create(HINSTANCE hInstance, int nCmdShow, bool showTrayNotificat
     // HWND + D2D render target + brush set at every startup for an update that may never come.
     LogTime("Update popup deferred (lazy)");
 
-    // Periodic safety-net update timer (the real throttle lives in ShouldAutoCheckForUpdates)
+    // Initial auto-check on startup (non-blocking background worker thread) —
+    // gated by the same persisted 2h throttle as every later check.
     SetTimer(m_hwnd, TIMER_PERIODIC_UPDATE, UPDATE_CHECK_INTERVAL_MS, NULL);
 
-    // Initial auto-check on startup (non-blocking background worker thread)
-    if (m_autoCheckUpdates) {
-        std::thread([this]() {
-            Sleep(400);
-            m_lastUpdateCheckTick = GetTickCount64();
-            RegWriteUpdateCheckTick();
-            m_updater.CheckForUpdatesAsync([this](const UpdateInfo& info) {
-                if (info.isAvailable && m_hwnd && IsWindow(m_hwnd)) {
-                    PostMessageW(m_hwnd, WM_USER + 555, 0, 0);
-                }
-            });
-        }).detach();
+    if (ShouldAutoCheckForUpdates()) {
+        // Synchronous throttle write inside CheckForUpdates prevents a second
+        // request from WM_SHOWWINDOW; the network work is queued on the updater's
+        // own worker, so there is no detached thread touching `this`.
+        CheckForUpdates(false);
     }
-    LogTime("AutoCheck thread detached");
+    LogTime("AutoCheck queued");
 
     return true;
 }
@@ -365,7 +371,14 @@ bool AppWindow::OpenFile(const std::wstring& filePath) {
         m_d2d.CreateDeviceResources(m_hwnd);
     }
 
+    // Persist unsaved editor changes before the current document is torn down.
+    if ((m_docType == DocumentType::Text || m_docType == DocumentType::Spreadsheet) && m_text.IsModified()) {
+        m_text.SaveFile();
+    }
+
     // Close previous
+    ++m_pdfRasterGen; // a queued raster from the old PDF must never land on the new one
+    if (m_pdfRasterCtx) m_pdfRasterCtx->requestedGen.store(m_pdfRasterGen, std::memory_order_release);
     m_media.CloseMedia();
     m_pdf.CloseDocument();
     SafeRelease(m_imageBitmap);
@@ -412,6 +425,7 @@ bool AppWindow::OpenFile(const std::wstring& filePath) {
     if (m_hudHwnd) ShowWindow(m_hudHwnd, SW_HIDE);
 
     // Reset feature states
+    m_sidebarAutoCollapsed = false; // a transient narrow-window collapse is not a user preference
     m_showSettings = false;
     m_settingsAnim = 0.0f;
     m_settingsModalRect = {};
@@ -608,7 +622,7 @@ bool AppWindow::OpenFile(const std::wstring& filePath) {
             WCHAR badge[64];
             swprintf_s(badge, L"PDF • %d PAGES", m_totalPages);
             m_formatBadgeText = badge;
-            m_showSidebar = (m_totalPages > 1);
+            m_showSidebar = m_hasPdfSidebarPref ? m_pdfSidebarPref : (m_totalPages > 1);
             if (m_hudHwnd) ShowWindow(m_hudHwnd, SW_HIDE);
             success = true;
         }
@@ -1011,8 +1025,13 @@ bool AppWindow::OpenFile(const std::wstring& filePath) {
         } else {
             WakeAllUiAndCursor();
         }
-        ExplorerHook::SetSuppressSpaceClose(m_docType == DocumentType::Text);
-        CheckUpdateOnPreviewOpen();
+        // Space must type a space in both the code editor and the table editor,
+        // not close the preview through the global QuickLook hook.
+        SyncSpaceSuppression();
+        if ((m_docType == DocumentType::Text || m_docType == DocumentType::Spreadsheet) &&
+            m_text.IsReadOnly()) {
+            ShowToast(L"Large file opened read-only: editing is disabled above the 16 MB safety limit.");
+        }
         InvalidateRect(m_hwnd, NULL, FALSE);
     }
 
@@ -1058,17 +1077,42 @@ void AppWindow::RequestPdfRaster(int page, float sampleScale, UINT delayMs) {
 void AppWindow::RenderPdfPageAsync(int page, float sampleScale) {
     if (page < 0 || page >= m_totalPages) return;
 
+    if (!m_pdfRasterCtx) {
+        m_pdfRasterCtx = std::make_shared<PdfRasterContext>();
+        m_pdfRasterCtx->engine = &m_pdf;
+        m_pdfRasterCtx->hwnd = m_hwnd;
+    }
+    auto ctx = m_pdfRasterCtx;
+    // The context's engine/hwnd are immutable for the window's lifetime; only the
+    // generation changes, and it is atomic.
+    if (!ctx->hwnd) ctx->hwnd = m_hwnd;
+
     const unsigned int gen = ++m_pdfRasterGen;
-    std::thread([this, page, sampleScale, gen]() {
+    ctx->requestedGen.store(gen, std::memory_order_release);
+    std::thread([ctx, page, sampleScale, gen]() {
         PdfRasterPayload* payload = new PdfRasterPayload();
         payload->gen = gen;
         payload->page = page;
         payload->sampleScale = sampleScale;
 
+        // The context lock serializes this render with window/app teardown; the
+        // worker never dereferences AppWindow itself.
+        std::lock_guard<std::mutex> lock(ctx->mutex);
+        if (!ctx->alive || !ctx->engine) {
+            delete payload;
+            return;
+        }
+        // A newer page/zoom was requested while this job waited for the lock:
+        // do not burn a full-page raster on an abandoned frame.
+        if (ctx->requestedGen.load(std::memory_order_acquire) != gen) {
+            delete payload;
+            return;
+        }
+
         // Worker render: the winding order is BGRA top-down, matching what the
         // UI thread creates its bitmap from. All pdfium access is serialized by
         // PdfEngine's internal mutex.
-        payload->ok = m_pdf.GetPageSize(page, &payload->pageWidth, &payload->pageHeight);
+        payload->ok = ctx->engine->GetPageSize(page, &payload->pageWidth, &payload->pageHeight);
         if (payload->ok) {
             int pxW = (int)(payload->pageWidth * sampleScale + 0.5f);
             int pxH = (int)(payload->pageHeight * sampleScale + 0.5f);
@@ -1085,15 +1129,17 @@ void AppWindow::RenderPdfPageAsync(int page, float sampleScale) {
             if (pxW > 0 && pxH > 0) {
                 payload->width = pxW;
                 payload->height = pxH;
-                payload->ok = m_pdf.RenderPageToMemory(page, pxW, pxH, payload->pixels, payload->stride);
+                payload->ok = ctx->engine->RenderPageToMemory(page, pxW, pxH, payload->pixels, payload->stride);
             } else {
                 payload->ok = false;
             }
         }
 
-        if (m_hwnd && IsWindow(m_hwnd)) {
-            PostMessageW(m_hwnd, WM_PDF_RASTER_DONE, (WPARAM)payload, 0);
-        } else {
+        if (!ctx->alive || !ctx->hwnd || !IsWindow(ctx->hwnd)) {
+            delete payload;
+            return;
+        }
+        if (!PostMessageW(ctx->hwnd, WM_PDF_RASTER_DONE, (WPARAM)payload, 0)) {
             delete payload;
         }
     }).detach();
@@ -1182,7 +1228,6 @@ static bool BuildFolderPeerList(
 }
 
 void AppWindow::NavigateFolder(int delta) {
-    if (!m_arrowKeyNavEnabled && delta != 0) return;
     if (m_currentFilePath.empty() || m_docType == DocumentType::None) return;
 
     DWORD now = GetTickCount();
@@ -1190,12 +1235,14 @@ void AppWindow::NavigateFolder(int delta) {
     // Throttle keyboard repeat to at most 1 navigation every 40ms to keep UI responsive
     if (delta != 0 && now - s_lastNavTime < 40) {
         return;
-    }
-    s_lastNavTime = now;
+    }    s_lastNavTime = now;
 
     // Auto-save modified text or spreadsheet files before navigating away so edits are never lost
     if ((m_docType == DocumentType::Text || m_docType == DocumentType::Spreadsheet) && m_text.IsModified()) {
-        m_text.SaveFile();
+        if (!m_text.SaveFile()) {
+            ShowToast(L"Could not save your edits — navigation cancelled to protect the file.");
+            return;
+        }
     }
 
     std::wstring current = m_currentFilePath;
@@ -1306,6 +1353,7 @@ void AppWindow::PrevPage() {
 
 void AppWindow::Rotate(int delta) {
     m_rotation = (m_rotation + delta + 360) % 360;
+    if (m_isFitMode) FitToWindow();
     InvalidateRect(m_hwnd, NULL, FALSE);
 }
 
@@ -1352,12 +1400,23 @@ void AppWindow::FitToWindow() {
 
     m_panX = 0.0f;
     m_panY = 0.0f;
+
+    // Height-constrained tall documents otherwise fill the window from y=0 and
+    // slide underneath the floating toolbar pill. When the dock is visible and
+    // the height axis is the binding constraint, bias the vertical centering
+    // down into the free band below the dock (62dip band → +31dip shift).
+    const float kDockBand = 62.0f;
+    if (scaleY < scaleX && m_dockOpacity > 0.1f && !m_isFullscreen) {
+        m_panY += kDockBand * 0.5f;
+    }
+
     m_targetZoom = m_zoom;
     m_targetPanX = m_panX;
     m_targetPanY = m_panY;
     m_isMomentumActive = false;
     m_dragVelX = 0.0f;
     m_dragVelY = 0.0f;
+    m_isFitMode = true;
 
     EnsurePdfSharpness();
 }
@@ -1367,7 +1426,8 @@ void AppWindow::AdaptWindowToMedia(int mediaW, int mediaH) {
     if (mediaW <= 0 || mediaH <= 0 || m_isFullscreen) return;
 
     HMONITOR hMon = MonitorFromWindow(m_hwnd, MONITOR_DEFAULTTONEAREST);
-    MONITORINFO mi = { sizeof(mi) };
+    MONITORINFO mi{};
+    mi.cbSize = sizeof(mi);
     if (!GetMonitorInfo(hMon, &mi)) return;
 
     RECT work = mi.rcWork;
@@ -1463,6 +1523,7 @@ void AppWindow::ZoomIn() {
         m_targetZoom = m_zoom;
         m_targetPanX = m_panX;
         m_targetPanY = m_panY;
+        m_isFitMode = false;
         EnsurePdfSharpness();
     }
     InvalidateRect(m_hwnd, NULL, FALSE);
@@ -1480,6 +1541,7 @@ void AppWindow::ZoomOut() {
         m_targetZoom = m_zoom;
         m_targetPanX = m_panX;
         m_targetPanY = m_panY;
+        m_isFitMode = false;
         EnsurePdfSharpness();
     }
     InvalidateRect(m_hwnd, NULL, FALSE);
@@ -1492,6 +1554,7 @@ void AppWindow::ResetZoom() {
     m_targetZoom = 1.0f;
     m_targetPanX = 0.0f;
     m_targetPanY = 0.0f;
+    m_isFitMode = false;
     EnsurePdfSharpness();
     InvalidateRect(m_hwnd, NULL, FALSE);
 }
@@ -1504,7 +1567,8 @@ void AppWindow::ToggleFullscreen() {
         SetWindowLong(m_hwnd, GWL_STYLE, m_preFullscreenStyle & ~(WS_CAPTION | WS_THICKFRAME));
 
         HMONITOR hMon = MonitorFromWindow(m_hwnd, MONITOR_DEFAULTTONEAREST);
-        MONITORINFO mi = { sizeof(mi) };
+        MONITORINFO mi{};
+        mi.cbSize = sizeof(mi);
         GetMonitorInfo(hMon, &mi);
 
         SetWindowPos(m_hwnd, HWND_TOP,
@@ -1616,6 +1680,33 @@ void AppWindow::UpdateLayout() {
     int height = rc.bottom - rc.top;
 
     m_d2d.Resize(width, height);
+
+    // Responsive PDF sidebar: the fixed 220dip panel is fine on normal windows, but on
+    // a narrow one it must never crowd out the page canvas. Below 360dip of client
+    // width it auto-collapses (transiently — restores when space returns) and never
+    // touches the persisted preference. While shown, it is capped at half the window
+    // so the canvas always keeps workable room.
+    if (m_docType == DocumentType::Pdf) {
+        float scale = (m_dpiScale > 0.05f) ? m_dpiScale : 1.0f;
+        float clientWDip = (float)width / scale;
+        if (m_showSidebar) {
+            m_sidebarWidth = (std::min)(220.0f, clientWDip * 0.5f);
+            if (clientWDip < 360.0f) {
+                m_sidebarAutoCollapsed = true;
+                m_showSidebar = false;
+                m_sidebarWidth = 220.0f;
+            }
+        } else if (m_sidebarAutoCollapsed) {
+            m_sidebarWidth = 220.0f;
+            if (clientWDip >= 420.0f) {
+                m_sidebarAutoCollapsed = false;
+                m_showSidebar = true;
+                m_sidebarWidth = (std::min)(220.0f, clientWDip * 0.5f);
+            }
+        } else {
+            m_sidebarWidth = 220.0f;
+        }
+    }
 
     if (m_docType == DocumentType::Media) {
         if (m_isAudioOnly) {
@@ -2048,8 +2139,7 @@ void AppWindow::Render(HDC outHdc) {
     bool isDockBtn = (m_hoveredButtonId >= BTN_SIDEBAR && m_hoveredButtonId <= BTN_TOOLBAR_FS) ||
                      m_hoveredButtonId == BTN_SEARCH || m_hoveredButtonId == BTN_CROP ||
                      m_hoveredButtonId == BTN_INFO || m_hoveredButtonId == BTN_OPEN_WITH ||
-                     m_hoveredButtonId == BTN_SETTINGS || m_hoveredButtonId == BTN_OVERFLOW_MENU ||
-                     (m_hoveredButtonId >= BTN_SAVE_FILE && m_hoveredButtonId <= BTN_TABLE_VIEW);
+                     m_hoveredButtonId == BTN_SETTINGS || m_hoveredButtonId == BTN_OVERFLOW_MENU;
 
     if (m_tooltipAlpha > 0.05f && m_hoveredButtonId != BTN_NONE && (!isDockBtn || m_dockOpacity > 0.5f)) {
         const WCHAR* tipText = GetButtonTooltip(m_hoveredButtonId);
@@ -2099,8 +2189,22 @@ void AppWindow::Render(HDC outHdc) {
         SafeRelease(m_searchLayer);
         SafeRelease(m_overflowMenuLayer);
         SafeRelease(m_settingsLayer);
+        // Every cached bitmap belonged to the old device; drawing them against the
+        // recreated target fails with D2DERR_WRONG_RESOURCE_DOMAIN.
         SafeRelease(m_imageBitmap);
         SafeRelease(m_pdfPageBitmap);
+        SafeRelease(m_audioAlbumArt);
+        SafeRelease(m_audioAlbumBrush);
+        SafeRelease(m_officeBitmap);
+        SafeRelease(m_unsupportedIconBitmap);
+        SafeRelease(m_appLogoBitmap);
+        for (auto& item : m_thumbnails) {
+            SafeRelease(item.bitmap);
+            item.attempted = false;
+        }
+        if (!m_currentFilePath.empty()) {
+            PostMessageW(m_hwnd, WM_APP + 300, 0, 0); // re-open once the stack unwinds
+        }
     }
 }
 
@@ -2218,6 +2322,16 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
     }
 
     float dockW = contentW + kDockPaddingX * 2.0f;
+
+    // Hard overflow guard: no matter how the tiers chose, the pill can never be wider
+    // than the space right of the PDF sidebar minus a small margin on each side.
+    const float kDockMinSpace = 16.0f;
+    if (availW - kDockMinSpace <= kDockMinSpace) {
+        m_topDockRect = {};
+        return; // Too narrow to host any dock; ShowToast/empty states cover this case.
+    }
+    if (dockW > availW - kDockMinSpace) dockW = availW - kDockMinSpace;
+
     float dockX = availLeft + (availW - dockW) / 2.0f;
     if (dockX < availLeft + 8.0f) dockX = availLeft + 8.0f;
     dockX = std::floor(dockX + 0.5f);
@@ -3434,6 +3548,14 @@ void AppWindow::RenderOverflowMenu(const D2D1_RECT_F& canvasRect) {
     float padY = 5.0f;
     float menuW = 230.0f;
 
+    // A zero-width anchor means the toolbar's current tier has no overflow button
+    // (full sizes render every action inline). Rendering here would clamp the menu
+    // to the window's left corner and overlap the PDF sidebar — suppress instead.
+    if (m_btnOverflowRect.right <= m_btnOverflowRect.left) {
+        m_overflowMenuRect = {};
+        return;
+    }
+
     float totalMenuH = padY * 2.0f;
     for (const auto& it : items) {
         if (it.isDivider) totalMenuH += dividerH;
@@ -3560,6 +3682,10 @@ void AppWindow::RenderOverflowMenu(const D2D1_RECT_F& canvasRect) {
         m_d2d.BrushBorderSubtle->SetOpacity(0.85f);
         rt->FillRoundedRectangle(thumbR, m_d2d.BrushBorderSubtle);
         m_d2d.BrushBorderSubtle->SetOpacity(1.0f);
+    }
+
+    if (pushLayer && m_overflowMenuLayer) {
+        rt->PopLayer();
     }
 }
 
@@ -3785,13 +3911,17 @@ void AppWindow::RenderSidebar(const D2D1_RECT_F& rect) {
                 }
 
                 // Lazy load thumbnail bitmap on demand if visible in viewport!
-                if (!item.bitmap) {
+                if (!item.bitmap && !item.attempted) {
+                    item.attempted = true;
                     m_pdf.RenderThumbnail(item.pageIndex, 160.0f, m_d2d.GetRenderTarget(), &item.bitmap);
                 }
 
                 // Draw thumbnail bitmap
                 if (item.bitmap) {
                     D2D1_SIZE_F bmpSize = item.bitmap->GetSize();
+                    if (bmpSize.width <= 0.0f || bmpSize.height <= 0.0f) {
+                        SafeRelease(item.bitmap);
+                    } else {
                     float bmpAspect = bmpSize.width / bmpSize.height;
                     float thumbMaxW = cardW - 16.0f;
                     float thumbMaxH = cardH - 32.0f;
@@ -3813,6 +3943,7 @@ void AppWindow::RenderSidebar(const D2D1_RECT_F& rect) {
 
                     rt->DrawBitmap(item.bitmap, thumbRect, 1.0f, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
                     rt->DrawRectangle(thumbRect, m_d2d.BrushBorderSubtle, 1.0f);
+                    }
                 }
 
                 // Page label pill badge
@@ -3835,6 +3966,7 @@ void AppWindow::RenderSidebar(const D2D1_RECT_F& rect) {
                 // Memory optimization: if far offscreen, free bitmap to keep RAM usage minimal
                 if (item.bitmap && (cardRect.bottom < rect.top - 600.0f || cardRect.top > rect.bottom + 600.0f)) {
                     SafeRelease(item.bitmap);
+                    item.attempted = false; // allow a re-render when scrolled back into view
                 }
             }
 
@@ -3972,7 +4104,7 @@ void AppWindow::RenderEmptyState(const D2D1_RECT_F& rect) {
     // Card Header Row: Section Label + Crimson Status Dot
     float metaY = cardY + 12.0f;
     D2D1_RECT_F metaLabelR = D2D1::RectF(cardLeft + 16.0f, metaY, cardLeft + 220.0f, metaY + 16.0f);
-    const WCHAR* metaLabel = L"FAST PREVIEW WORKFLOW ⌵";
+    const WCHAR* metaLabel = L"FAST PREVIEW WORKFLOW";
     rt->DrawText(metaLabel, (UINT32)wcslen(metaLabel), m_d2d.FontUtilityMono ? m_d2d.FontUtilityMono : m_d2d.FontCaption, metaLabelR, m_d2d.BrushTextDim ? m_d2d.BrushTextDim : m_d2d.BrushTextMuted);
 
     D2D1_RECT_F statusDotR = D2D1::RectF(centerCard.right - 90.0f, metaY, centerCard.right - 16.0f, metaY + 16.0f);
@@ -4306,13 +4438,12 @@ void AppWindow::RenderToast(const D2D1_RECT_F& rect) {
     ID2D1HwndRenderTarget* rt = m_d2d.GetRenderTarget();
     if (!rt) return;
 
-    float dpiScale = (m_dpiScale > 0.05f) ? m_dpiScale : 1.0f;
     ULONGLONG elapsed = GetTickCount64() - m_toastStartTime;
 
     // Smooth spring ease-out entrance (0..220ms)
     float enterProgress = std::clamp((float)elapsed / 220.0f, 0.0f, 1.0f);
     float easeOut = 1.0f - std::pow(1.0f - enterProgress, 3.0f);
-    float slideY = (1.0f - easeOut) * 12.0f * dpiScale;
+    float slideY = (1.0f - easeOut) * 12.0f;
     float currentAlpha = m_toastOpacity * std::min(1.0f, enterProgress * 1.5f);
 
     // Dynamic width calculation based on exact message measurement
@@ -4328,17 +4459,26 @@ void AppWindow::RenderToast(const D2D1_RECT_F& rect) {
         }
     }
     if (textW <= 1.0f) {
-        textW = (float)m_toastMessage.length() * 8.2f * dpiScale;
+        textW = (float)m_toastMessage.length() * 8.2f;
     }
 
-    float toastW = std::max(160.0f * dpiScale, textW + 44.0f * dpiScale);
-    float toastH = 36.0f * dpiScale;
+    float toastW = std::max(160.0f, textW + 44.0f);
+    float toastH = 36.0f;
     float cornerR = toastH / 2.0f;
 
     float cx = rect.left + (rect.right - rect.left) / 2.0f;
-    float bottomMargin = 48.0f * dpiScale;
+    float bottomMargin = 48.0f;
     if (m_hudHwnd && IsWindowVisible(m_hudHwnd) && m_docType == DocumentType::Media) {
-        bottomMargin = (54.0f + 36.0f) * dpiScale;
+        bottomMargin = (54.0f + 36.0f);
+    }
+
+    // The update banner lives at 24dip (pill H 38): when it is on screen, float the
+    // toast on top of it instead of letting both bottom-centered pills collide.
+    UpdateState updState = m_updater.GetState();
+    if (updState == UpdateState::UpdateAvailable ||
+        updState == UpdateState::Downloading ||
+        updState == UpdateState::Downloaded) {
+        bottomMargin += (38.0f + 12.0f);
     }
     float toastY = rect.bottom - bottomMargin + slideY;
     D2D1_RECT_F toastRect = D2D1::RectF(cx - toastW / 2.0f, toastY - toastH / 2.0f, cx + toastW / 2.0f, toastY + toastH / 2.0f);
@@ -4346,7 +4486,7 @@ void AppWindow::RenderToast(const D2D1_RECT_F& rect) {
 
     // 1. Ambient soft shadow
     D2D1_ROUNDED_RECT rShadowAmbient = D2D1::RoundedRect(
-        D2D1::RectF(toastRect.left - 2.0f * dpiScale, toastRect.top + 3.0f * dpiScale, toastRect.right + 2.0f * dpiScale, toastRect.bottom + 9.0f * dpiScale),
+        D2D1::RectF(toastRect.left - 2.0f, toastRect.top + 3.0f, toastRect.right + 2.0f, toastRect.bottom + 9.0f),
         cornerR, cornerR
     );
     m_d2d.BrushShadowDark->SetOpacity(currentAlpha * 0.38f);
@@ -4354,7 +4494,7 @@ void AppWindow::RenderToast(const D2D1_RECT_F& rect) {
 
     // 2. Direct edge shadow
     D2D1_ROUNDED_RECT rShadowEdge = D2D1::RoundedRect(
-        D2D1::RectF(toastRect.left, toastRect.top + 1.0f * dpiScale, toastRect.right, toastRect.bottom + 3.0f * dpiScale),
+        D2D1::RectF(toastRect.left, toastRect.top + 1.0f, toastRect.right, toastRect.bottom + 3.0f),
         cornerR, cornerR
     );
     m_d2d.BrushShadowDark->SetOpacity(currentAlpha * 0.22f);
@@ -4379,19 +4519,13 @@ void AppWindow::RenderToast(const D2D1_RECT_F& rect) {
     m_d2d.BrushText->SetOpacity(1.0f);
 }
 
-void AppWindow::CheckUpdateOnPreviewOpen() {
-    // Re-arm the already-known update popup so it stays reachable on top of previews;
-    // NEVER hit the network here — a preview utility must not call home on every open.
-    if (m_updater.GetState() == UpdateState::UpdateAvailable) {
-        m_updater.ResetToAvailable();
-        ShowUpdatePopup();
-    }
-}
-
-// Update checks are user consent-friendly: at most one automatic network call per 24h,
-// timestamp persisted in the registry so restarts do not re-trigger it.
+// Update checks are user consent-friendly: at most one automatic network call per 2h,
+// timestamp persisted in the registry so restarts do not re-trigger it. A dismissed
+// remote version is persisted too, so a dismissed release never nags again (but a
+// NEWER release does).
 static const wchar_t* REG_KEY_SETTINGS_APP = L"Software\\WinPreview\\Settings";
 const wchar_t* AppWindow::REG_VAL_LAST_UPDATE_CHECK = L"LastUpdateCheckMs64";
+const wchar_t* AppWindow::REG_VAL_DISMISSED_UPDATE = L"DismissedUpdateVersion";
 
 static bool RegReadU64(const wchar_t* valueName, ULONGLONG& outValue) {
     HKEY hKey = NULL;
@@ -4411,6 +4545,25 @@ static void RegWriteU64(const wchar_t* valueName, ULONGLONG value) {
     RegCloseKey(hKey);
 }
 
+static bool RegReadString(const wchar_t* valueName, wchar_t* outValue, DWORD cchMax) {
+    HKEY hKey = NULL;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, REG_KEY_SETTINGS_APP, 0, KEY_READ, &hKey) != ERROR_SUCCESS) return false;
+    DWORD type = 0, size = cchMax * sizeof(wchar_t);
+    bool ok = RegQueryValueExW(hKey, valueName, NULL, &type, (LPBYTE)outValue, &size) == ERROR_SUCCESS &&
+              type == REG_SZ && size >= sizeof(wchar_t);
+    RegCloseKey(hKey);
+    if (ok) outValue[(size / sizeof(wchar_t)) - 1] = L'\0';
+    return ok;
+}
+
+static void RegWriteString(const wchar_t* valueName, const wchar_t* value) {
+    HKEY hKey = NULL;
+    DWORD dwDisp = 0;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, REG_KEY_SETTINGS_APP, 0, NULL, 0, KEY_WRITE, NULL, &hKey, &dwDisp) != ERROR_SUCCESS) return;
+    RegSetValueExW(hKey, valueName, 0, REG_SZ, (const BYTE*)value, (DWORD)((wcslen(value) + 1) * sizeof(wchar_t)));
+    RegCloseKey(hKey);
+}
+
 // ---------------------------------------------------------------------------
 // Persisted UI preferences: media loop and the PDF sidebar default. Stored in
 // HKCU\Software\WinPreview\Settings next to the update throttle timestamp.
@@ -4424,7 +4577,9 @@ void AppWindow::LoadPersistedUiState() {
         m_isLooping = (v != 0);
     }
     if (RegReadU64(REG_VAL_UI_PDF_SIDEBAR, v)) {
-        m_showSidebar = (v != 0);
+        m_pdfSidebarPref = (v != 0);
+        m_hasPdfSidebarPref = true;
+        m_showSidebar = m_pdfSidebarPref;
     }
     if (RegReadU64(L"CloseOnFocusLoss", v)) {
         m_closeOnFocusLoss = (v != 0);
@@ -4479,6 +4634,8 @@ void AppWindow::SaveLoopPref() {
 void AppWindow::SavePdfSidebarPref() {
     // The pref is a PDF-only default; toggles in other doc types don't save it.
     if (m_docType == DocumentType::Pdf) {
+        m_pdfSidebarPref = m_showSidebar;
+        m_hasPdfSidebarPref = true;
         RegWriteU64(REG_VAL_UI_PDF_SIDEBAR, m_showSidebar ? 1 : 0);
     }
 }
@@ -4490,6 +4647,13 @@ void AppWindow::RegWriteUpdateCheckTick() {
     RegWriteU64(REG_VAL_LAST_UPDATE_CHECK, ((ULONGLONG)ft.dwHighDateTime << 32) | ft.dwLowDateTime);
 }
 
+void AppWindow::DismissUpdateNag() {
+    // “Don't ask again for THIS release”: the remote version is persisted alongside the
+    // throttle; only a newer release re-arms the popup (see WM_UPDATE_UI_RESULT).
+    m_updater.Dismiss();
+    RegWriteString(REG_VAL_DISMISSED_UPDATE, m_updater.GetUpdateInfo().remoteVersion.c_str());
+}
+
 bool AppWindow::ShouldAutoCheckForUpdates() {
     if (!m_autoCheckUpdates) return false;
     ULONGLONG lastCheckFileTime = 0;
@@ -4497,7 +4661,7 @@ bool AppWindow::ShouldAutoCheckForUpdates() {
         FILETIME ft;
         GetSystemTimeAsFileTime(&ft);
         ULONGLONG nowFileTime = ((ULONGLONG)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
-        // 24h in 100ns FILETIME units
+        // 2h in 100ns FILETIME units
         if (nowFileTime > lastCheckFileTime &&
             (nowFileTime - lastCheckFileTime) < (ULONGLONG)UPDATE_CHECK_INTERVAL_MS * 10000ULL) {
             return false;
@@ -4510,10 +4674,9 @@ void AppWindow::CheckForUpdates(bool isUserInitiated) {
     if (isUserInitiated) {
         ShowToast(L"Checking for updates...");
     }
-    m_lastUpdateCheckTick = GetTickCount64();
-    if (!isUserInitiated) {
-        RegWriteUpdateCheckTick();
-    }
+    // Every network check (auto or user-initiated) fronts the 2h throttle; a manual
+    // check must not leave the auto-checker free to run again minutes later.
+    RegWriteUpdateCheckTick();
     m_updater.CheckForUpdatesAsync([this, isUserInitiated](const UpdateInfo& info) {
         if (m_hwnd && IsWindow(m_hwnd)) {
             // Marshal to the UI thread: this callback runs on the update worker thread.
@@ -4546,28 +4709,26 @@ void AppWindow::RenderUpdateBanner(const D2D1_RECT_F& rect) {
     ID2D1HwndRenderTarget* rt = m_d2d.GetRenderTarget();
     if (!rt) return;
 
-    float dpiScale = (m_dpiScale > 0.05f) ? m_dpiScale : 1.0f;
     const UpdateInfo info = m_updater.GetUpdateInfo();
 
     // Sleek minimal bottom-centered pill dimensions (matches toast styling and responsive layout)
     float clientW = rect.right - rect.left;
-    float clientH = rect.bottom - rect.top;
 
     float bannerWDip = 280.0f;
-    float clientWDip = clientW / dpiScale;
+    float clientWDip = clientW;
     if (clientWDip < 340.0f) {
         bannerWDip = 150.0f;
     } else if (clientWDip < 520.0f) {
         bannerWDip = 210.0f;
     }
 
-    float bannerW = bannerWDip * dpiScale;
-    float bannerH = 38.0f * dpiScale;
+    float bannerW = bannerWDip;
+    float bannerH = 38.0f;
     float cornerR = bannerH / 2.0f; // Pill radius
 
-    float bottomMargin = 24.0f * dpiScale;
+    float bottomMargin = 24.0f;
     if (m_hudHwnd && IsWindowVisible(m_hudHwnd) && m_docType == DocumentType::Media) {
-        bottomMargin = (54.0f + 32.0f) * dpiScale;
+        bottomMargin = (54.0f + 32.0f);
     }
 
     float cx = rect.left + clientW / 2.0f;
@@ -4581,8 +4742,8 @@ void AppWindow::RenderUpdateBanner(const D2D1_RECT_F& rect) {
 
     // 1. Layered Ambient Drop Shadow
     D2D1_ROUNDED_RECT rShadow = D2D1::RoundedRect(
-        D2D1::RectF(m_updateBannerRect.left - 2.0f * dpiScale, m_updateBannerRect.top + 2.0f * dpiScale,
-                    m_updateBannerRect.right + 2.0f * dpiScale, m_updateBannerRect.bottom + 8.0f * dpiScale),
+        D2D1::RectF(m_updateBannerRect.left - 2.0f, m_updateBannerRect.top + 2.0f,
+                    m_updateBannerRect.right + 2.0f, m_updateBannerRect.bottom + 8.0f),
         cornerR, cornerR
     );
     if (m_d2d.BrushShadowDark) {
@@ -4611,14 +4772,14 @@ void AppWindow::RenderUpdateBanner(const D2D1_RECT_F& rect) {
     }
 
     // 4. Glowing Status Indicator Dot
-    D2D1_POINT_2F dotCenter = D2D1::Point2F(m_updateBannerRect.left + 16.0f * dpiScale, m_updateBannerRect.top + bannerH / 2.0f);
+    D2D1_POINT_2F dotCenter = D2D1::Point2F(m_updateBannerRect.left + 16.0f, m_updateBannerRect.top + bannerH / 2.0f);
     ID2D1SolidColorBrush* dotBrush = nullptr;
     D2D1_COLOR_F dotColor = (state == UpdateState::Downloaded)
         ? D2D1::ColorF(0.12f, 0.85f, 0.45f, 1.0f)
         : ((state == UpdateState::Downloading) ? D2D1::ColorF(0.95f, 0.65f, 0.15f, 1.0f) : D2D1::ColorF(0.25f, 0.65f, 1.0f, 1.0f));
     rt->CreateSolidColorBrush(dotColor, &dotBrush);
     if (dotBrush) {
-        rt->FillEllipse(D2D1::Ellipse(dotCenter, 4.0f * dpiScale, 4.0f * dpiScale), dotBrush);
+        rt->FillEllipse(D2D1::Ellipse(dotCenter, 4.0f, 4.0f), dotBrush);
         dotBrush->Release();
     }
 
@@ -4626,10 +4787,10 @@ void AppWindow::RenderUpdateBanner(const D2D1_RECT_F& rect) {
     if (state == UpdateState::UpdateAvailable) {
         std::wstring title = L"Update v" + info.remoteVersion;
         D2D1_RECT_F textRect = D2D1::RectF(
-            m_updateBannerRect.left + 28.0f * dpiScale,
-            m_updateBannerRect.top + 9.0f * dpiScale,
-            m_updateBannerRect.right - 96.0f * dpiScale,
-            m_updateBannerRect.bottom - 9.0f * dpiScale
+            m_updateBannerRect.left + 28.0f,
+            m_updateBannerRect.top + 9.0f,
+            m_updateBannerRect.right - 96.0f,
+            m_updateBannerRect.bottom - 9.0f
         );
         if (m_d2d.BrushText && m_d2d.FontButton) {
             rt->DrawText(title.c_str(), (UINT32)title.length(), m_d2d.FontButton, textRect, m_d2d.BrushText);
@@ -4637,12 +4798,12 @@ void AppWindow::RenderUpdateBanner(const D2D1_RECT_F& rect) {
 
         // Action Pill Button: [ Update ]
         m_updateActionBtnRect = D2D1::RectF(
-            m_updateBannerRect.right - 92.0f * dpiScale,
-            m_updateBannerRect.top + 6.0f * dpiScale,
-            m_updateBannerRect.right - 30.0f * dpiScale,
-            m_updateBannerRect.bottom - 6.0f * dpiScale
+            m_updateBannerRect.right - 92.0f,
+            m_updateBannerRect.top + 6.0f,
+            m_updateBannerRect.right - 30.0f,
+            m_updateBannerRect.bottom - 6.0f
         );
-        D2D1_ROUNDED_RECT rBtn = D2D1::RoundedRect(m_updateActionBtnRect, 13.0f * dpiScale, 13.0f * dpiScale);
+        D2D1_ROUNDED_RECT rBtn = D2D1::RoundedRect(m_updateActionBtnRect, 13.0f, 13.0f);
         ID2D1SolidColorBrush* btnBrush = nullptr;
         D2D1_COLOR_F btnColor = m_updateActionBtnHover ? D2D1::ColorF(0.24f, 0.52f, 0.98f, 1.0f) : D2D1::ColorF(0.14f, 0.40f, 0.90f, 1.0f);
         rt->CreateSolidColorBrush(btnColor, &btnBrush);
@@ -4658,27 +4819,27 @@ void AppWindow::RenderUpdateBanner(const D2D1_RECT_F& rect) {
 
         // Dismiss Button (Vector Icon)
         m_updateDismissBtnRect = D2D1::RectF(
-            m_updateBannerRect.right - 25.0f * dpiScale,
-            m_updateBannerRect.top + 7.0f * dpiScale,
-            m_updateBannerRect.right - 8.0f * dpiScale,
-            m_updateBannerRect.bottom - 7.0f * dpiScale
+            m_updateBannerRect.right - 25.0f,
+            m_updateBannerRect.top + 7.0f,
+            m_updateBannerRect.right - 8.0f,
+            m_updateBannerRect.bottom - 7.0f
         );
         float closeCx = m_updateDismissBtnRect.left + (m_updateDismissBtnRect.right - m_updateDismissBtnRect.left) / 2.0f;
         float closeCy = m_updateDismissBtnRect.top + (m_updateDismissBtnRect.bottom - m_updateDismissBtnRect.top) / 2.0f;
         ID2D1SolidColorBrush* closeBrush = nullptr;
         rt->CreateSolidColorBrush(m_updateDismissBtnHover ? D2D1::ColorF(0.95f, 0.95f, 0.95f) : D2D1::ColorF(0.55f, 0.55f, 0.58f), &closeBrush);
         if (closeBrush) {
-            m_d2d.DrawIconClose(closeCx, closeCy, 12.0f * dpiScale, closeBrush, rt);
+            m_d2d.DrawIconClose(closeCx, closeCy, 12.0f, closeBrush, rt);
             closeBrush->Release();
         }
     } else if (state == UpdateState::Downloading) {
         int pct = m_updater.GetDownloadProgress();
         std::wstring dlText = L"Downloading... " + std::to_wstring(pct) + L"%";
         D2D1_RECT_F textRect = D2D1::RectF(
-            m_updateBannerRect.left + 28.0f * dpiScale,
-            m_updateBannerRect.top + 6.0f * dpiScale,
-            m_updateBannerRect.right - 18.0f * dpiScale,
-            m_updateBannerRect.top + 22.0f * dpiScale
+            m_updateBannerRect.left + 28.0f,
+            m_updateBannerRect.top + 6.0f,
+            m_updateBannerRect.right - 18.0f,
+            m_updateBannerRect.top + 22.0f
         );
         if (m_d2d.BrushText && m_d2d.FontButton) {
             rt->DrawText(dlText.c_str(), (UINT32)dlText.length(), m_d2d.FontButton, textRect, m_d2d.BrushText);
@@ -4686,12 +4847,12 @@ void AppWindow::RenderUpdateBanner(const D2D1_RECT_F& rect) {
 
         // Inset Progress Bar Track
         D2D1_RECT_F trackRect = D2D1::RectF(
-            m_updateBannerRect.left + 18.0f * dpiScale,
-            m_updateBannerRect.bottom - 9.0f * dpiScale,
-            m_updateBannerRect.right - 18.0f * dpiScale,
-            m_updateBannerRect.bottom - 6.0f * dpiScale
+            m_updateBannerRect.left + 18.0f,
+            m_updateBannerRect.bottom - 9.0f,
+            m_updateBannerRect.right - 18.0f,
+            m_updateBannerRect.bottom - 6.0f
         );
-        D2D1_ROUNDED_RECT rTrack = D2D1::RoundedRect(trackRect, 1.5f * dpiScale, 1.5f * dpiScale);
+        D2D1_ROUNDED_RECT rTrack = D2D1::RoundedRect(trackRect, 1.5f, 1.5f);
         ID2D1SolidColorBrush* trackBrush = nullptr;
         rt->CreateSolidColorBrush(D2D1::ColorF(0.20f, 0.20f, 0.25f, 1.0f), &trackBrush);
         if (trackBrush) {
@@ -4701,7 +4862,7 @@ void AppWindow::RenderUpdateBanner(const D2D1_RECT_F& rect) {
 
         float fillW = (trackRect.right - trackRect.left) * (std::max(1, pct) / 100.0f);
         D2D1_RECT_F fillRect = D2D1::RectF(trackRect.left, trackRect.top, trackRect.left + fillW, trackRect.bottom);
-        D2D1_ROUNDED_RECT rFill = D2D1::RoundedRect(fillRect, 1.5f * dpiScale, 1.5f * dpiScale);
+        D2D1_ROUNDED_RECT rFill = D2D1::RoundedRect(fillRect, 1.5f, 1.5f);
         ID2D1SolidColorBrush* fillBrush = nullptr;
         rt->CreateSolidColorBrush(D2D1::ColorF(0.24f, 0.55f, 0.98f, 1.0f), &fillBrush);
         if (fillBrush) {
@@ -4711,10 +4872,10 @@ void AppWindow::RenderUpdateBanner(const D2D1_RECT_F& rect) {
     } else if (state == UpdateState::Downloaded) {
         std::wstring title = L"Update Ready";
         D2D1_RECT_F textRect = D2D1::RectF(
-            m_updateBannerRect.left + 28.0f * dpiScale,
-            m_updateBannerRect.top + 9.0f * dpiScale,
-            m_updateBannerRect.left + 140.0f * dpiScale,
-            m_updateBannerRect.bottom - 9.0f * dpiScale
+            m_updateBannerRect.left + 28.0f,
+            m_updateBannerRect.top + 9.0f,
+            m_updateBannerRect.left + 140.0f,
+            m_updateBannerRect.bottom - 9.0f
         );
         if (m_d2d.BrushText && m_d2d.FontButton) {
             rt->DrawText(title.c_str(), (UINT32)title.length(), m_d2d.FontButton, textRect, m_d2d.BrushText);
@@ -4722,12 +4883,12 @@ void AppWindow::RenderUpdateBanner(const D2D1_RECT_F& rect) {
 
         // Action Pill Button: [ Restart ]
         m_updateActionBtnRect = D2D1::RectF(
-            m_updateBannerRect.right - 100.0f * dpiScale,
-            m_updateBannerRect.top + 6.0f * dpiScale,
-            m_updateBannerRect.right - 14.0f * dpiScale,
-            m_updateBannerRect.bottom - 6.0f * dpiScale
+            m_updateBannerRect.right - 100.0f,
+            m_updateBannerRect.top + 6.0f,
+            m_updateBannerRect.right - 14.0f,
+            m_updateBannerRect.bottom - 6.0f
         );
-        D2D1_ROUNDED_RECT rBtn = D2D1::RoundedRect(m_updateActionBtnRect, 13.0f * dpiScale, 13.0f * dpiScale);
+        D2D1_ROUNDED_RECT rBtn = D2D1::RoundedRect(m_updateActionBtnRect, 13.0f, 13.0f);
         ID2D1SolidColorBrush* btnBrush = nullptr;
         D2D1_COLOR_F btnColor = m_updateActionBtnHover ? D2D1::ColorF(0.12f, 0.75f, 0.42f, 1.0f) : D2D1::ColorF(0.08f, 0.62f, 0.35f, 1.0f);
         rt->CreateSolidColorBrush(btnColor, &btnBrush);
@@ -4760,8 +4921,19 @@ void AppWindow::UpdateWindowTitle() {
     SetWindowTextW(m_hwnd, title.c_str());
 }
 
-void AppWindow::SaveCurrentTextFile() {
-    if (m_docType != DocumentType::Text && m_docType != DocumentType::Spreadsheet) return;
+void AppWindow::SyncSpaceSuppression() {
+    // The global QuickLook hook must not steal Space while the user is typing in
+    // the editor or while a modal owns the keyboard.
+    const bool editing = (m_docType == DocumentType::Text || m_docType == DocumentType::Spreadsheet) &&
+                         m_text.IsLoaded();
+    ExplorerHook::SetSuppressSpaceClose(m_showSettings || m_isRecordingKeybind || editing);
+}
+
+void AppWindow::SaveCurrentTextFile() {    if (m_docType != DocumentType::Text && m_docType != DocumentType::Spreadsheet) return;
+    if (m_text.IsReadOnly()) {
+        ShowToast(L"This file is read-only (over the 16 MB editing limit).");
+        return;
+    }
     if (m_text.SaveFile()) {
         ShowToast(L"Saved successfully (Ctrl+S)");
         UpdateWindowTitle();
@@ -5694,7 +5866,7 @@ void AppWindow::RenderInspector(const D2D1_RECT_F& canvasRect) {
 
     // Header bar (Zen Editorial Tech title with Amber accent dot)
     D2D1_RECT_F headerR = D2D1::RectF(cardX + 16.0f, cardY + 12.0f, cardX + cardW - 44.0f, cardY + 36.0f);
-    rt->DrawText(L"METADATA INSPECTOR ⌵", 20, m_d2d.FontUtilityMono ? m_d2d.FontUtilityMono : (m_d2d.FontTitle ? m_d2d.FontTitle : m_d2d.FontBody), headerR, m_d2d.BrushText);
+    rt->DrawText(L"METADATA INSPECTOR", 20, m_d2d.FontUtilityMono ? m_d2d.FontUtilityMono : (m_d2d.FontTitle ? m_d2d.FontTitle : m_d2d.FontBody), headerR, m_d2d.BrushText);
 
     // Close button (24x24 hit area, optical center)
     float closeX = cardX + cardW - 24.0f;
@@ -5742,6 +5914,32 @@ void AppWindow::RenderInspector(const D2D1_RECT_F& canvasRect) {
     float valX = cardX + 16.0f + labelW;
     float valW = cardW - 32.0f - labelW;
 
+    // Middle-elide long paths: keep the drive and the deepest components, collapse the
+    // middle with an ellipsis. DirectWrite has no middle-ellipsis trim, so we cut the
+    // string ourselves to a char budget measured from the value-cell width.
+    auto MiddleElidePath = [](const std::wstring& path, float cellW) {
+        // ~6.2 dip per glyph at the caption size; leaves room before the cell edge.
+        int maxChars = (int)((cellW - 8.0f) / 6.2f);
+        if (maxChars < 8) maxChars = 8;
+        if ((int)path.length() <= maxChars) return path;
+
+        // Head: drive root ("C:\\") or first component. Tail: deepest two components.
+        std::wstring head = path.substr(0, path.find_first_of(L"\\/") + 1);
+        size_t lastSep = path.find_last_of(L"\\/");
+        size_t prevSep = (lastSep != std::wstring::npos) ? path.find_last_of(L"\\/", lastSep - 1) : std::wstring::npos;
+        std::wstring tail = path;
+        if (prevSep != std::wstring::npos) tail = path.substr(prevSep + 1);
+
+        std::wstring result = head + L"..." + tail;
+        // Grow the tail (walk up components) while it still fits the char budget.
+        while ((int)(head.length() + tail.length() + 3) < maxChars && prevSep != std::wstring::npos) {
+            prevSep = (prevSep > 0) ? path.find_last_of(L"\\/", prevSep - 1) : std::wstring::npos;
+            tail = (prevSep != std::wstring::npos) ? path.substr(prevSep + 1) : path;
+            result = head + L"..." + tail;
+        }
+        return result;
+    };
+
     auto drawRow = [&](const WCHAR* label, const std::wstring& val) {
         if (val.empty() || rowY + rowH > copyBtnY - 4.0f) return;
         D2D1_RECT_F lblR = D2D1::RectF(cardX + 16.0f, rowY, cardX + 16.0f + labelW, rowY + rowH);
@@ -5754,12 +5952,12 @@ void AppWindow::RenderInspector(const D2D1_RECT_F& canvasRect) {
 
     drawRow(L"File Name", m_fileName);
 
-    // Location directory
+    // Location directory — middle-elided so it never hard-clips mid-word.
     if (!m_currentFilePath.empty()) {
         size_t slash = m_currentFilePath.find_last_of(L"\\/");
         std::wstring dirPath = (slash != std::wstring::npos) ? m_currentFilePath.substr(0, slash) : L"";
         if (!dirPath.empty()) {
-            drawRow(L"Location", dirPath);
+            drawRow(L"Location", MiddleElidePath(dirPath, valW));
         }
     }
 
@@ -5977,6 +6175,7 @@ void AppWindow::ToggleSearch() {
         m_searchMatches.clear();
         m_currentMatchIndex = -1;
     } else {
+        KillTimer(m_hwnd, TIMER_SEARCH_DEBOUNCE);
         m_searchBarRect = {};
         m_searchPrevBtn = {};
         m_searchNextBtn = {};
@@ -6069,7 +6268,9 @@ void AppWindow::SaveImageFile(bool promptSaveAs) {
         }
         wcsncpy_s(szFile, defaultName.c_str(), MAX_PATH - 1);
 
-        OPENFILENAMEW ofn = { sizeof(OPENFILENAMEW) };
+        OPENFILENAMEW ofn{};
+
+        ofn.lStructSize = sizeof(ofn);
         ofn.hwndOwner = m_hwnd;
         ofn.lpstrFilter = L"PNG Image (*.png)\0*.png\0JPEG Image (*.jpg;*.jpeg)\0*.jpg;*.jpeg\0Bitmap (*.bmp)\0*.bmp\0TIFF Image (*.tif;*.tiff)\0*.tif;*.tiff\0All Files (*.*)\0*.*\0";
         ofn.lpstrFile = szFile;
@@ -6077,7 +6278,10 @@ void AppWindow::SaveImageFile(bool promptSaveAs) {
         ofn.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST;
         ofn.lpstrDefExt = L"png";
 
-        if (!GetSaveFileNameW(&ofn)) return;
+        m_modalDialogOpen = true;
+        BOOL picked = GetSaveFileNameW(&ofn);
+        m_modalDialogOpen = false;
+        if (!picked) return;
     } else {
         wcsncpy_s(szFile, m_currentFilePath.c_str(), MAX_PATH - 1);
     }
@@ -6108,6 +6312,9 @@ void AppWindow::SaveImageFile(bool promptSaveAs) {
         m_isCropActive = false;
         m_cropDragHandle = 0;
         OpenFile(destPath);
+        ShowToast(L"Image saved successfully.");
+    } else {
+        ShowToast(L"Could not save image — the original file was left untouched.");
     }
 }
 
@@ -6128,7 +6335,7 @@ void AppWindow::ToggleSettings() {
     m_showSettings = !m_showSettings;
     EnsureAnimTimer();
     m_isRecordingKeybind = false;
-    ExplorerHook::SetSuppressSpaceClose(m_showSettings);
+    SyncSpaceSuppression();
     if (m_showSettings) {
         RECT rc = {};
         GetWindowRect(m_hwnd, &rc);
@@ -6163,7 +6370,6 @@ void AppWindow::DrawToggleSwitch(const D2D1_RECT_F& rect, bool isOn, int buttonI
     ID2D1HwndRenderTarget* rt = m_d2d.GetRenderTarget();
     if (!rt) return;
 
-    float swW = rect.right - rect.left;
     float swH = rect.bottom - rect.top;
     float r = swH * 0.5f;
 
@@ -6281,7 +6487,7 @@ void AppWindow::RenderSettingsModal(const D2D1_RECT_F& canvasRect) {
 
     // Title & Subtitle (Monospace Section Header)
     D2D1_RECT_F titleR = D2D1::RectF(iconCx + 18.0f, curY, m_settingsModalRect.right - 60.0f, curY + 22.0f);
-    const WCHAR* titleText = L"PREFERENCES & SETTINGS ⌵";
+    const WCHAR* titleText = L"PREFERENCES & SETTINGS";
     rt->DrawText(titleText, (UINT32)wcslen(titleText), m_d2d.FontButton ? m_d2d.FontButton : m_d2d.FontCaption, titleR, m_d2d.BrushText);
 
     D2D1_RECT_F subR = D2D1::RectF(iconCx + 18.0f, curY + 22.0f, m_settingsModalRect.right - 60.0f, curY + 38.0f);
@@ -6349,8 +6555,8 @@ void AppWindow::RenderSettingsModal(const D2D1_RECT_F& canvasRect) {
         D2D1_RECT_F dR = D2D1::RectF(rowX + 16.0f, rowY + 28.0f, rowX + rowW - 68.0f, rowY + rowH - 4.0f);
         rt->DrawText(desc, (UINT32)wcslen(desc), m_d2d.FontBadge ? m_d2d.FontBadge : m_d2d.FontCaption, dR, m_d2d.BrushTextMuted);
 
-        float swW = 42.0f;
         float swH = 22.0f;
+        float swW = 42.0f;
         float swX = rowX + rowW - swW - 16.0f;
         float swY = rowY + (rowH - swH) / 2.0f;
         DrawToggleSwitch(D2D1::RectF(swX, swY, swX + swW, swY + swH), isOn, buttonId);
@@ -6365,12 +6571,15 @@ void AppWindow::RenderSettingsModal(const D2D1_RECT_F& canvasRect) {
 
     // TAB 0: GENERAL
     if (m_settingsActiveTab == 0) {
-        float cardH = 248.0f;
-        D2D1_RECT_F groupCard = D2D1::RectF(contentX, curY, contentX + contentW, curY + cardH);
-        rt->FillRoundedRectangle(D2D1::RoundedRect(groupCard, 8.0f, 8.0f), m_d2d.BrushSidebar);
-        rt->DrawRoundedRectangle(D2D1::RoundedRect(groupCard, 8.0f, 8.0f), m_d2d.BrushBorderSubtle, 1.0f);
-
+        // Four rows at the fixed pitch can graze the Done footer on short
+        // windows; compress the pitch until the card clears the footer line.
+        float contentLimitGen = m_settingsModalRect.bottom - 56.0f;
         float rH = 62.0f;
+        float cardH = 4 * rH;
+        if (curY + cardH > contentLimitGen && contentLimitGen - curY > 160.0f) {
+            rH = (contentLimitGen - curY) / 4.0f;
+            cardH = 4 * rH;
+        }
         drawSettingRow(contentX, curY + 0 * rH, contentW, rH,
                        L"Start WinPreview with Windows", L"Launch minimized on boot so file previewing is instantly ready.",
                        IsAutoStartEnabled(), BTN_SETTINGS_AUTOSTART, m_settingsAutostartBtn, false);
@@ -6384,7 +6593,7 @@ void AppWindow::RenderSettingsModal(const D2D1_RECT_F& canvasRect) {
                        m_keepInMemory, BTN_SETTINGS_TOGGLE_KEEP_MEMORY, m_settingsToggleKeepMemoryRect, false);
 
         drawSettingRow(contentX, curY + 3 * rH, contentW, rH,
-                       L"Automatic Update Checks", L"Silently check for newer versions in background once every 24 hours.",
+                       L"Automatic Update Checks", L"Silently check for newer versions in background once every 2 hours.",
                        m_autoCheckUpdates, BTN_SETTINGS_TOGGLE_UPDATE_CHECK, m_settingsToggleUpdateCheckRect, true);
     }
     // TAB 1: HOTKEYS & NAV
@@ -6492,14 +6701,19 @@ void AppWindow::RenderSettingsModal(const D2D1_RECT_F& canvasRect) {
                          isCurrent ? (ID2D1Brush*)m_d2d.BrushAccent : (ID2D1Brush*)m_d2d.BrushText);
         }
 
-        // Navigation Grouped Card
+        // Navigation Grouped Card — keep the bottom row clear of the Done footer
+        // on short windows by trimming the card first, then the row pitch.
+        float contentLimitNav = m_settingsModalRect.bottom - 56.0f;
         float navCardY = presetY + pH + 16.0f;
         float navCardH = 124.0f;
+        if (navCardY + navCardH > contentLimitNav && contentLimitNav - navCardY > 70.0f) {
+            navCardH = contentLimitNav - navCardY;
+        }
         D2D1_RECT_F navCard = D2D1::RectF(contentX, navCardY, contentX + contentW, navCardY + navCardH);
         rt->FillRoundedRectangle(D2D1::RoundedRect(navCard, 8.0f, 8.0f), m_d2d.BrushSidebar);
         rt->DrawRoundedRectangle(D2D1::RoundedRect(navCard, 8.0f, 8.0f), m_d2d.BrushBorderSubtle, 1.0f);
 
-        float rH = 62.0f;
+        float rH = std::min(62.0f, navCardH * 0.5f);
         drawSettingRow(contentX, navCardY + 0 * rH, contentW, rH,
                        L"Arrow Keys Navigate Files", L"Press Left / Right arrow keys to preview adjacent files in the folder.",
                        m_arrowKeyNavEnabled, BTN_SETTINGS_TOGGLE_ARROW_NAV, m_settingsToggleArrowNavRect, false);
@@ -6510,7 +6724,12 @@ void AppWindow::RenderSettingsModal(const D2D1_RECT_F& canvasRect) {
     }
     // TAB 2: VIEWER & MEDIA
     else if (m_settingsActiveTab == 2) {
+        // Six rows at the fixed pitch can overlap the Done footer on short
+        // windows; compress the row pitch until the card clears the footer line.
+        float contentLimit = m_settingsModalRect.bottom - 56.0f;
         float rH = 50.0f;
+        float maxCardH = contentLimit - curY;
+        if (6 * rH > maxCardH && maxCardH > 240.0f) rH = maxCardH / 6.0f;
         float cardH = 6 * rH;
         D2D1_RECT_F groupCard = D2D1::RectF(contentX, curY, contentX + contentW, curY + cardH);
         rt->FillRoundedRectangle(D2D1::RoundedRect(groupCard, 8.0f, 8.0f), m_d2d.BrushSidebar);
@@ -6575,13 +6794,20 @@ void AppWindow::RenderSettingsModal(const D2D1_RECT_F& canvasRect) {
         };
 
         float rowY = divY + 14.0f;
-        drawDiagRow(rowY, L"Explorer Integration", L"● Low-Level Keyboard Hook Active (Global)", true);
+        bool hookOk = ExplorerHook::IsHookInstalled();
+        drawDiagRow(rowY, L"Explorer Integration",
+                    hookOk ? L"● Low-Level Keyboard Hook Active (Global)" : L"● Keyboard Hook Inactive",
+                    hookOk);
         rowY += 24.0f;
         drawDiagRow(rowY, L"Rendering Engine", L"Direct2D 1.1 + Direct3D 11 Hardware Compositor", false);
         rowY += 24.0f;
-        drawDiagRow(rowY, L"Memory Footprint", L"~16 MB Working Set (Zero Memory Leaks)", false);
+        drawDiagRow(rowY, L"Memory Footprint", L"~25–40 MB Private Working Set", false);
         rowY += 24.0f;
-        drawDiagRow(rowY, L"Media Subsystem", L"LibVLC 3.0 Hardware Decoding & Log Color Pipeline", false);
+        bool vlcOk = m_media.IsAvailable() || m_media.Initialize(m_hwnd);
+        drawDiagRow(rowY, L"Media Subsystem",
+                    vlcOk ? L"LibVLC 3.0 (hardware decoding active)"
+                          : L"VLC not found — playback disabled",
+                    false);
 
         float div2Y = rowY + 32.0f;
         rt->DrawLine(D2D1::Point2F(contentX + 16.0f, div2Y), D2D1::Point2F(contentX + contentW - 16.0f, div2Y), m_d2d.BrushBorderSubtle, 1.0f);
@@ -6660,7 +6886,9 @@ void AppWindow::RenderSettingsModal(const D2D1_RECT_F& canvasRect) {
 bool AppWindow::CreateHudWindow() {
     if (m_hudHwnd) return true;
 
-    WNDCLASSEXW wc = { sizeof(WNDCLASSEXW) };
+    WNDCLASSEXW wc{};
+
+    wc.cbSize = sizeof(wc);
     wc.lpfnWndProc = HudWndProc;
     wc.hInstance = m_hInstance;
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
@@ -6797,6 +7025,7 @@ void AppWindow::CloseCurrentPreview() {
     m_showSearch = false;
     m_searchAnim = 0.0f;
     m_searchBarRect = {};
+    KillTimer(m_hwnd, TIMER_SEARCH_DEBOUNCE);
     m_searchQuery.clear();
     m_searchMatches.clear();
     m_currentMatchIndex = -1;
@@ -6820,6 +7049,13 @@ void AppWindow::CloseCurrentPreview() {
         m_media.ShowVideoWindow(false);
         m_media.CloseMedia();
     }
+    // Save editor work before the document buffers disappear. Previously only
+    // folder navigation saved, so Esc / Alt+F4 / focus loss discarded edits.
+    if ((m_docType == DocumentType::Text || m_docType == DocumentType::Spreadsheet) && m_text.IsModified()) {
+        m_text.SaveFile();
+    }
+    ++m_pdfRasterGen; // invalidate any in-flight raster payload
+    if (m_pdfRasterCtx) m_pdfRasterCtx->requestedGen.store(m_pdfRasterGen, std::memory_order_release);
     m_pdf.CloseDocument();
     SafeRelease(m_pdfPageBitmap);
     SafeRelease(m_imageBitmap);
@@ -7322,7 +7558,22 @@ void AppWindow::RenderHud() {
         }
     }
 
-    m_hudRenderTarget->EndDraw();
+    HRESULT hudHr = m_hudRenderTarget->EndDraw();
+    if (hudHr == D2DERR_RECREATE_TARGET) {
+        SafeRelease(m_hudBrushBg);
+        SafeRelease(m_hudBrushBorder);
+        SafeRelease(m_hudBrushText);
+        SafeRelease(m_hudBrushTextMuted);
+        SafeRelease(m_hudBrushAccent);
+        SafeRelease(m_hudBrushAccentGlow);
+        SafeRelease(m_hudBrushHover);
+        SafeRelease(m_hudBrushActive);
+        SafeRelease(m_hudBrushTrack);
+        SafeRelease(m_hudBrushTooltipBg);
+        SafeRelease(m_hudBrushTooltipBorder);
+        SafeRelease(m_hudRenderTarget);
+        PostMessageW(m_hwnd, WM_APP + 301, 0, 0); // recreate outside this paint
+    }
 }
 
 LRESULT CALLBACK AppWindow::HudWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -7497,7 +7748,9 @@ LRESULT AppWindow::HandleHudMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
 bool AppWindow::CreateUpdatePopupWindow() {
     if (m_updateHwnd) return true;
 
-    WNDCLASSEXW wc = { sizeof(WNDCLASSEXW) };
+    WNDCLASSEXW wc{};
+
+    wc.cbSize = sizeof(wc);
     wc.lpfnWndProc = UpdatePopupWndProc;
     wc.hInstance = m_hInstance;
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
@@ -7849,7 +8102,10 @@ void AppWindow::RenderUpdatePopup() {
         }
     }
 
-    m_updateRenderTarget->EndDraw();
+    HRESULT popupHr = m_updateRenderTarget->EndDraw();
+    if (popupHr == D2DERR_RECREATE_TARGET) {
+        PostMessageW(m_hwnd, WM_APP + 302, 0, 0); // recreate outside this paint
+    }
 }
 
 LRESULT CALLBACK AppWindow::UpdatePopupWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -7946,7 +8202,7 @@ LRESULT CALLBACK AppWindow::UpdatePopupWndProc(HWND hwnd, UINT msg, WPARAM wPara
 
             if (xDip >= self->m_updateCloseBtnRect.left && xDip <= self->m_updateCloseBtnRect.right &&
                 yDip >= self->m_updateCloseBtnRect.top && yDip <= self->m_updateCloseBtnRect.bottom) {
-                self->m_updater.Dismiss();
+                self->DismissUpdateNag();
                 self->HideUpdatePopup();
                 return 0;
             }
@@ -7974,22 +8230,66 @@ LRESULT CALLBACK AppWindow::UpdatePopupWndProc(HWND hwnd, UINT msg, WPARAM wPara
 
 LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
-        case WM_USER + 555: {
-            ShowUpdatePopup();
-            return 0;
-        }
-
         case WM_UPDATE_UI_RESULT: {
             PendingUpdateResult* res = (PendingUpdateResult*)wParam;
             if (res) {
                 if (res->available) {
-                    ShowUpdatePopup();
-                    ShowToast(L"Update v" + m_updater.GetUpdateInfo().remoteVersion + L" is ready! Click Update in popup.");
+                    UpdateInfo info = m_updater.GetUpdateInfo();
+                    // A persisted dismissal for this exact release suppresses both popup
+                    // and toast; a NEWER release (or cleared dismissal) nags once.
+                    wchar_t dismissedVer[96] = {};
+                    bool alreadyDismissed = RegReadString(REG_VAL_DISMISSED_UPDATE, dismissedVer, 96) &&
+                                            info.remoteVersion == dismissedVer;
+                    if (alreadyDismissed) {
+                        // “No update for me” — drop stale engine state silently.
+                        m_updater.Dismiss();
+                    } else {
+                        ShowUpdatePopup();
+                        ShowToast(L"Update v" + info.remoteVersion + L" is ready! Click Update in popup.");
+                    }
+                } else if (!res->failed) {
+                    // Server reports up to date: a previous dismissal is obsolete.
+                    HKEY hKey = NULL;
+                    if (RegOpenKeyExW(HKEY_CURRENT_USER, REG_KEY_SETTINGS_APP, 0, KEY_WRITE | KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
+                        RegDeleteValueW(hKey, REG_VAL_DISMISSED_UPDATE);
+                        RegCloseKey(hKey);
+                    }
                 }
                 if (res->userInitiated && !res->message.empty()) {
                     ShowToast(res->message);
                 }
                 delete res;
+            }
+            return 0;
+        }
+
+        case WM_APP + 300: {
+            // Device loss recovery: re-open the current document into fresh resources.
+            std::wstring path = m_currentFilePath;
+            if (!path.empty()) OpenFile(path);
+            return 0;
+        }
+
+        case WM_APP + 301: {
+            if (m_hudHwnd) {
+                DestroyHudWindow();
+                if (CreateHudWindow()) {
+                    UpdateHudPosition();
+                    if (m_docType == DocumentType::Media) {
+                        ShowWindow(m_hudHwnd, SW_SHOWNOACTIVATE);
+                    }
+                }
+            }
+            return 0;
+        }
+
+        case WM_APP + 302: {
+            HideUpdatePopup();
+            DestroyUpdatePopupWindow();
+            if (m_updater.GetState() == UpdateState::UpdateAvailable ||
+                m_updater.GetState() == UpdateState::Downloading ||
+                m_updater.GetState() == UpdateState::Downloaded) {
+                ShowUpdatePopup();
             }
             return 0;
         }
@@ -8219,9 +8519,12 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 if (m_docType == DocumentType::Media && m_media.IsPlaying()) {
                     m_media.Pause();
                 }
+                // Stop the 60 Hz render pump; restoring re-arms it via WM_SHOWWINDOW.
+                KillTimer(m_hwnd, 1);
+                m_animTimerRunning = false;
                 return 0;
             }
-            if (m_panX == 0.0f && m_panY == 0.0f) {
+            if (m_isFitMode) {
                 FitToWindow();
             }
             UpdateLayout();
@@ -8269,7 +8572,8 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 if (hNewActive != m_hudHwnd && m_hudHwnd && IsWindowVisible(m_hudHwnd)) {
                     SetWindowPos(m_hudHwnd, m_hwnd, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
                 }
-                if (m_closeOnFocusLoss && !m_showSettings && hNewActive != m_hudHwnd && hNewActive != m_updateHwnd) {
+                if (m_closeOnFocusLoss && !m_showSettings && !m_modalDialogOpen &&
+                    hNewActive != m_hudHwnd && hNewActive != m_updateHwnd) {
                     HideMainWindow();
                 }
             } else {
@@ -8306,6 +8610,26 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             return (LRESULT)m_inactivityMs;
         }
 
+        case WM_APP + 203: /* Diagnostic: is the 16ms render pump armed? */ {
+            return (LRESULT)(m_animTimerRunning ? 1 : 0);
+        }
+
+        case WM_APP + 204: /* Diagnostic: dock opacity (milli) */ {
+            return (LRESULT)(m_dockOpacity * 1000.0f);
+        }
+
+        case WM_APP + 205: /* Diagnostic: editor dirty flag */ {
+            return (LRESULT)(m_text.IsModified() ? 1 : 0);
+        }
+
+        case WM_APP + 206: /* Diagnostic: explorer keyboard hook active */ {
+            return (LRESULT)(ExplorerHook::IsHookInstalled() ? 1 : 0);
+        }
+
+        case WM_APP + 207: /* Diagnostic: fullscreen state */ {
+            return (LRESULT)(m_isFullscreen ? 1 : 0);
+        }
+
         case WM_TIMER: {
             if (wParam == TIMER_PERIODIC_UPDATE) {
                 if (ShouldAutoCheckForUpdates()) {
@@ -8322,6 +8646,12 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 if (page >= 0 && m_docType == DocumentType::Pdf) {
                     RenderPdfPageAsync(page, scale);
                 }
+                return 0;
+            }
+
+            if (wParam == TIMER_SEARCH_DEBOUNCE) {
+                KillTimer(m_hwnd, TIMER_SEARCH_DEBOUNCE);
+                if (m_showSearch) ExecuteSearch();
                 return 0;
             }
 
@@ -8349,8 +8679,7 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             bool isDockBtn = (m_hoveredButtonId >= BTN_SIDEBAR && m_hoveredButtonId <= BTN_TOOLBAR_FS) ||
                              m_hoveredButtonId == BTN_SEARCH || m_hoveredButtonId == BTN_CROP ||
                              m_hoveredButtonId == BTN_INFO || m_hoveredButtonId == BTN_OPEN_WITH ||
-                             m_hoveredButtonId == BTN_SETTINGS || m_hoveredButtonId == BTN_OVERFLOW_MENU ||
-                             (m_hoveredButtonId >= BTN_SAVE_FILE && m_hoveredButtonId <= BTN_TABLE_VIEW);
+                             m_hoveredButtonId == BTN_SETTINGS || m_hoveredButtonId == BTN_OVERFLOW_MENU;
             bool canShowTooltip = (m_hoveredButtonId != BTN_NONE) && (!isDockBtn || m_dockOpacity > 0.5f);
 
             if (canShowTooltip) {
@@ -8587,7 +8916,6 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 }
             }
 
-            bool isAnimating = false;
             float dt = (float)elapsedMs / 1000.0f;
             if (dt < 0.001f) dt = 0.001f;
             if (dt > 0.1f) dt = 0.033f;
@@ -8731,10 +9059,10 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 if (m_docType == DocumentType::Media) {
                     UpdateHudPosition();
                 }
-                if (m_updater.GetState() == UpdateState::UpdateAvailable) {
-                    ShowUpdatePopup();
-                } else if (ShouldAutoCheckForUpdates()) {
-                    // Respects the 24h persisted throttle; never calls home on every show.
+                // Respects the 2h persisted throttle; never calls home on every show.
+                // The only-show-once popup logic lives in WM_UPDATE_UI_RESULT, so a
+                // known-but-dismissed update never re-nags here.
+                if (ShouldAutoCheckForUpdates()) {
                     CheckForUpdates(false);
                 }
             }
@@ -8743,8 +9071,12 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
 
         case WM_COPYDATA: {
             COPYDATASTRUCT* cds = (COPYDATASTRUCT*)lParam;
-            if (cds && cds->dwData == 1 && cds->lpData) {
-                const wchar_t* path = (const wchar_t*)cds->lpData;
+            if (cds && cds->dwData == 1 && cds->lpData && cds->cbData >= sizeof(wchar_t)) {
+                // Never trust the sender's NUL termination: copy a bounded prefix.
+                size_t maxChars = cds->cbData / sizeof(wchar_t);
+                std::wstring path(static_cast<const wchar_t*>(cds->lpData),
+                                  wcsnlen(static_cast<const wchar_t*>(cds->lpData), maxChars));
+                if (path.empty()) return FALSE;
                 OpenFile(path);
                 if (IsIconic(m_hwnd)) ShowWindow(m_hwnd, SW_RESTORE);
                 else ShowWindow(m_hwnd, SW_SHOW);
@@ -8947,7 +9279,14 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 TrackPopupMenu(hMenu, TPM_RIGHTBUTTON | TPM_BOTTOMALIGN, pt.x, pt.y, 0, m_hwnd, NULL);
                 DestroyMenu(hMenu);
             } else if (lParam == WM_LBUTTONDBLCLK || lParam == WM_LBUTTONUP) {
-                SendMessage(m_hwnd, WM_COMMAND, MAKEWPARAM(IDM_TRAY_SETTINGS, 0), 0);
+                // Left click: reveal the app in its neutral state (empty home or the
+                // last preview). Settings stays a deliberate action via the right-click
+                // menu or Ctrl+, — never the automatic response to a tray click.
+                if (IsIconic(m_hwnd)) ShowWindow(m_hwnd, SW_RESTORE);
+                else ShowWindow(m_hwnd, SW_SHOW);
+                SetForegroundWindow(m_hwnd);
+                BringWindowToTop(m_hwnd);
+                SetFocus(m_hwnd);
             }
             return 0;
         }
@@ -9121,6 +9460,7 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             m_panY = pt.y - canvasCenterY - cursorDocY * m_zoom;
             m_targetPanX = m_panX;
             m_targetPanY = m_panY;
+            m_isFitMode = false;
             m_isMomentumActive = false;
             m_dragVelX = 0.0f;
             m_dragVelY = 0.0f;
@@ -9183,7 +9523,7 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                     return 0;
                 }
                 if (hit(m_updateDismissBtnRect)) {
-                    m_updater.Dismiss();
+                    DismissUpdateNag();
                     InvalidateRect(m_hwnd, NULL, FALSE);
                     return 0;
                 }
@@ -9433,6 +9773,7 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 if (hit(m_btnSidebarRect)) {
                     m_pressedButtonId = BTN_SIDEBAR;
                     m_showSidebar = !m_showSidebar;
+                    SavePdfSidebarPref();
                     UpdateLayout();
                     InvalidateRect(m_hwnd, NULL, FALSE);
                 } else if (hit(m_btnPrevPageRect)) {
@@ -9926,6 +10267,7 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 m_panY += dy;
                 m_targetPanX = m_panX;
                 m_targetPanY = m_panY;
+                m_isFitMode = false;
                 m_lastMousePos = pt;
                 InvalidateRect(m_hwnd, NULL, FALSE);
             }
@@ -10054,64 +10396,34 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
 
         case WM_CHAR: {
             WakeAllUiAndCursor();
+            // The settings modal and keybind recorder own the keyboard; keystrokes
+            // must never leak into the document behind them.
+            if (m_showSettings || m_isRecordingKeybind) return 0;
+
             if (m_showSearch) {
                 if (wParam == VK_BACK) {
                     if (!m_searchQuery.empty()) {
                         m_searchQuery.pop_back();
-                        ExecuteSearch();
+                        SetTimer(m_hwnd, TIMER_SEARCH_DEBOUNCE, 220, NULL);
                     }
                 } else if (wParam == VK_RETURN || wParam == VK_ESCAPE) {
                     // Handled in WM_KEYDOWN
                 } else if (wParam >= 32) {
                     m_searchQuery.push_back((WCHAR)wParam);
-                    ExecuteSearch();
+                    // Debounce: scanning a large PDF on every keystroke blocks the UI.
+                    SetTimer(m_hwnd, TIMER_SEARCH_DEBOUNCE, 220, NULL);
                 }
                 return 0;
             }
 
             if (m_docType == DocumentType::Text || (m_docType == DocumentType::Spreadsheet && !m_text.IsTableView())) {
                 wchar_t ch = (wchar_t)wParam;
-                if (ch == 19) { // Ctrl+S
-                    SaveCurrentTextFile();
-                    return 0;
-                } else if (ch == 26) { // Ctrl+Z
-                    bool isShift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
-                    if (isShift ? m_text.Redo() : m_text.Undo()) {
-                        UpdateWindowTitle();
-                        InvalidateRect(m_hwnd, NULL, FALSE);
-                    }
-                    return 0;
-                } else if (ch == 25) { // Ctrl+Y
-                    if (m_text.Redo()) {
-                        UpdateWindowTitle();
-                        InvalidateRect(m_hwnd, NULL, FALSE);
-                    }
-                    return 0;
-                } else if (ch == 1) { // Ctrl+A
-                    m_text.SelectAll();
-                    InvalidateRect(m_hwnd, NULL, FALSE);
-                    return 0;
-                } else if (ch == 24) { // Ctrl+X
-                    if (m_text.Cut(m_hwnd)) {
-                        UpdateWindowTitle();
-                        ShowToast(L"Cut to clipboard");
-                        InvalidateRect(m_hwnd, NULL, FALSE);
-                    }
-                    return 0;
-                } else if (ch == 3) { // Ctrl+C
-                    if (m_text.Copy(m_hwnd)) {
-                        ShowToast(m_text.HasSelection() ? L"Copied selection" : L"Copied line");
-                        InvalidateRect(m_hwnd, NULL, FALSE);
-                    }
-                    return 0;
-                } else if (ch == 22) { // Ctrl+V
-                    if (m_text.Paste(m_hwnd)) {
-                        UpdateWindowTitle();
-                        ShowToast(L"Pasted");
-                        InvalidateRect(m_hwnd, NULL, FALSE);
-                    }
-                    return 0;
-                } else if (ch >= 32 || ch == L'\t') {
+                // Control characters are handled once in WM_KEYDOWN (Ctrl+X/V/Z/...).
+                // TranslateMessage also emits WM_CHAR for them; processing here made
+                // every shortcut run twice (Ctrl+X cut a selection and then a line).
+                if (ch < 32 && ch != L'\t') return 0;
+                if (m_text.IsReadOnly()) return 0;
+                if (ch >= 32 || ch == L'\t') {
                     if (m_text.InsertChar(ch)) {
                         UpdateWindowTitle();
                         InvalidateRect(m_hwnd, NULL, FALSE);
@@ -10127,6 +10439,24 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             WakeAllUiAndCursor();
             // Any key can start an animation (play/pause, page turns, scrolling).
             EnsureAnimTimer();
+
+            // The PDF search box is a text field: only its own navigation keys may
+            // reach the global shortcut switch (Space used to flip the page while
+            // typing, 'S' hid the sidebar, 'F' toggled fullscreen, ...).
+            if (m_showSearch) {
+                if (wParam == VK_ESCAPE ||
+                    ((wParam == 'F' || wParam == 'f') && (GetKeyState(VK_CONTROL) & 0x8000))) {
+                    ToggleSearch();
+                    return 0;
+                }
+                if (wParam == VK_RETURN) {
+                    bool shiftDown = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+                    if (shiftDown) PrevSearchMatch(); else NextSearchMatch();
+                    return 0;
+                }
+                if (wParam == VK_BACK) return 0; // WM_CHAR performs the deletion
+                return 0; // swallow every other shortcut while typing
+            }
 
             bool isCtrl = ((GetKeyState(VK_CONTROL) & 0x8000) != 0) || ((GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0);
             bool isShift = ((GetKeyState(VK_SHIFT) & 0x8000) != 0) || ((GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0);
@@ -10364,29 +10694,19 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 } else if (wParam == VK_LEFT) {
                     if (isCtrl) {
                         m_text.MoveWord(-1, isShift);
-                        InvalidateRect(m_hwnd, NULL, FALSE);
-                        return 0;
-                    } else if (isShift) {
-                        m_text.MoveCursor(0, -1, true);
-                        InvalidateRect(m_hwnd, NULL, FALSE);
-                        return 0;
                     } else {
-                        NavigateFolder(-1);
-                        return 0;
+                        m_text.MoveCursor(0, -1, isShift);
                     }
+                    InvalidateRect(m_hwnd, NULL, FALSE);
+                    return 0;
                 } else if (wParam == VK_RIGHT) {
                     if (isCtrl) {
                         m_text.MoveWord(1, isShift);
-                        InvalidateRect(m_hwnd, NULL, FALSE);
-                        return 0;
-                    } else if (isShift) {
-                        m_text.MoveCursor(0, 1, true);
-                        InvalidateRect(m_hwnd, NULL, FALSE);
-                        return 0;
                     } else {
-                        NavigateFolder(1);
-                        return 0;
+                        m_text.MoveCursor(0, 1, isShift);
                     }
+                    InvalidateRect(m_hwnd, NULL, FALSE);
+                    return 0;
                 } else if (wParam == VK_UP) {
                     m_text.MoveCursor(-1, 0, isShift);
                     InvalidateRect(m_hwnd, NULL, FALSE);
@@ -10430,6 +10750,21 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                         return 0;
                     }
                     HideMainWindow();
+                    return 0;
+                }
+
+                // Anything that produces a character must reach WM_CHAR, not the
+                // global single-key shortcuts below (typing "f" used to toggle
+                // fullscreen, Space paged the document, digits zoomed, ...).
+                const bool isTypingKey =
+                    wParam == VK_SPACE ||
+                    (wParam >= '0' && wParam <= '9') ||
+                    (wParam >= 'A' && wParam <= 'Z') ||
+                    (wParam >= VK_NUMPAD0 && wParam <= VK_DIVIDE) ||
+                    (wParam >= VK_OEM_1 && wParam <= VK_OEM_3) ||
+                    (wParam >= VK_OEM_4 && wParam <= VK_OEM_7) ||
+                    wParam == VK_OEM_102;
+                if (isTypingKey && !isCtrl && !isAlt) {
                     return 0;
                 }
             } else if (m_docType == DocumentType::Spreadsheet && m_text.IsTableView()) {
@@ -10514,7 +10849,7 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                         if (m_hudHwnd) InvalidateRect(m_hudHwnd, NULL, FALSE);
                         return 0;
                     }
-                    NavigateFolder(-1);
+                    if (m_arrowKeyNavEnabled) NavigateFolder(-1);
                     return 0;
                 case VK_RIGHT:
                     if (isCtrl && m_docType == DocumentType::Media) {
@@ -10523,7 +10858,7 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                         if (m_hudHwnd) InvalidateRect(m_hudHwnd, NULL, FALSE);
                         return 0;
                     }
-                    NavigateFolder(1);
+                    if (m_arrowKeyNavEnabled) NavigateFolder(1);
                     return 0;
                 case VK_PRIOR: // Page Up
                     if (m_docType == DocumentType::Text || m_docType == DocumentType::Spreadsheet) {
@@ -10677,6 +11012,16 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         }
 
         case WM_CLOSE: {
+            if (!m_keepInMemory) {
+                // "Keep resident in background" is off: actually exit instead of
+                // silently ignoring the close request forever.
+                if ((m_docType == DocumentType::Text || m_docType == DocumentType::Spreadsheet) &&
+                    m_text.IsModified()) {
+                    m_text.SaveFile();
+                }
+                DestroyWindow(m_hwnd);
+                return 0;
+            }
             HideMainWindow();
             return 0;
         }
@@ -10698,6 +11043,20 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
 
         case WM_DESTROY: {
             timeEndPeriod(1);
+            // Stop raster workers before the window handle can be reused, and drain
+            // any posted payloads that will never be handled now.
+            if (m_pdfRasterCtx) {
+                std::lock_guard<std::mutex> lock(m_pdfRasterCtx->mutex);
+                m_pdfRasterCtx->alive = false;
+                m_pdfRasterCtx->hwnd = nullptr;
+            }
+            MSG pending;
+            while (PeekMessageW(&pending, m_hwnd, WM_PDF_RASTER_DONE, WM_PDF_RASTER_DONE, PM_REMOVE)) {
+                delete (PdfRasterPayload*)pending.wParam;
+            }
+            while (PeekMessageW(&pending, m_hwnd, WM_UPDATE_UI_RESULT, WM_UPDATE_UI_RESULT, PM_REMOVE)) {
+                delete (PendingUpdateResult*)pending.wParam;
+            }
             RemoveTrayIcon();
             ExplorerHook::UninstallHook();
             DestroyHudWindow();
@@ -10717,6 +11076,10 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
 }
 
 void AppWindow::InitTrayIcon(bool showNotification) {
+    if (m_trayIconOwned) {
+        DestroyIcon(m_trayIconOwned);
+        m_trayIconOwned = nullptr;
+    }
     ZeroMemory(&m_nid, sizeof(m_nid));
     m_nid.cbSize = sizeof(NOTIFYICONDATAW);
     m_nid.hWnd = m_hwnd;
@@ -10725,9 +11088,13 @@ void AppWindow::InitTrayIcon(bool showNotification) {
     m_nid.uCallbackMessage = WM_TRAYICON;
     m_nid.hIcon = (HICON)LoadImageW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(101), IMAGE_ICON,
                                     GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR);
-    if (!m_nid.hIcon) m_nid.hIcon = (HICON)GetClassLongPtrW(m_hwnd, GCLP_HICONSM);
-    if (!m_nid.hIcon) m_nid.hIcon = (HICON)GetClassLongPtrW(m_hwnd, GCLP_HICON);
-    if (!m_nid.hIcon) m_nid.hIcon = LoadIconW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(101));
+    if (m_nid.hIcon) {
+        m_trayIconOwned = m_nid.hIcon; // only destroy handles we loaded ourselves
+    } else {
+        m_nid.hIcon = (HICON)GetClassLongPtrW(m_hwnd, GCLP_HICONSM);
+        if (!m_nid.hIcon) m_nid.hIcon = (HICON)GetClassLongPtrW(m_hwnd, GCLP_HICON);
+        if (!m_nid.hIcon) m_nid.hIcon = LoadIconW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(101));
+    }
     wcscpy_s(m_nid.szTip, L"WinPreview (Spacebar to preview)");
     if (showNotification) {
         wcscpy_s(m_nid.szInfoTitle, L"WinPreview Ready");
@@ -10744,6 +11111,11 @@ void AppWindow::RemoveTrayIcon() {
     if (m_hasTrayIcon) {
         Shell_NotifyIconW(NIM_DELETE, &m_nid);
         m_hasTrayIcon = false;
+    }
+    if (m_trayIconOwned) {
+        DestroyIcon(m_trayIconOwned);
+        m_trayIconOwned = nullptr;
+        m_nid.hIcon = nullptr;
     }
 }
 
@@ -10784,3 +11156,4 @@ void AppWindow::SetAutoStartEnabled(bool enable) {
 }
 
 } // namespace WinPreview
+

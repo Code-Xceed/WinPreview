@@ -1,24 +1,57 @@
 <#
 .SYNOPSIS
-    Compiles, packages, and produces a professional, self-contained Windows installer for WinPreview (Native C++20).
+    Compiles, validates, packages, and produces a self-contained Windows installer for WinPreview (Native C++20).
+
+.DESCRIPTION
+    Single entry point for local releases and CI:
+      1. Synchronises src/version.h + installer/WinPreview.iss from version.json.
+      2. Builds the native binary.
+      3. Stages the EXE plus every required runtime DLL (PDFium, LibHEIF stack).
+      4. Runs the production checks (unless -SkipTests).
+      5. Builds the Inno Setup installer and a portable ZIP.
+      6. Writes dist\Installer\version.json (release manifest with SHA-256) for the updater.
+
+.EXAMPLE
+    powershell -ExecutionPolicy Bypass -File publish.ps1
+    powershell -ExecutionPolicy Bypass -File publish.ps1 -SkipTests -NoLaunch
 #>
 param(
     [string]$Configuration = "Release",
     [string]$OutputDir = "dist\WinPreview",
-    [switch]$NoLaunch
+    [switch]$NoLaunch,
+    [switch]$SkipTests,
+    [switch]$SkipInstaller
 )
 
 $ErrorActionPreference = "Stop"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
+function Fail([string]$Message) {
+    Write-Host "[ERROR] $Message" -ForegroundColor Red
+    exit 1
+}
+
+function Get-Sha256([string]$Path) {
+    (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+}
+
 Write-Host "==========================================================" -ForegroundColor Cyan
 Write-Host "  WinPreview - Native C++20 Ultra-Fast Windows Publisher   " -ForegroundColor Cyan
 Write-Host "==========================================================" -ForegroundColor Cyan
 
+if ($Configuration -ne "Release") {
+    Write-Host "[WARN] Only the Release configuration is supported by this pipeline; continuing with Release." -ForegroundColor Yellow
+}
+
+# ---------------------------------------------------------------------------
 # Step 0: Single source of truth for the version.
-# version.json is authoritative; src/version.h and installer/WinPreview.iss are ALWAYS rewritten
-# from it so a release can never ship with mismatched updater/installer/file-version numbers.
-$versionJson = Get-Content (Join-Path $ScriptDir "version.json") -Raw | ConvertFrom-Json
+# version.json is authoritative; src/version.h and installer/WinPreview.iss are
+# ALWAYS rewritten from it so a release can never ship with mismatched updater,
+# installer, or file-version numbers.
+# ---------------------------------------------------------------------------
+$versionJsonPath = Join-Path $ScriptDir "version.json"
+if (-not (Test-Path $versionJsonPath)) { Fail "version.json not found at $versionJsonPath" }
+$versionJson = Get-Content $versionJsonPath -Raw | ConvertFrom-Json
 $releaseVersion = ([string]$versionJson.version).Trim() -replace '^v', ''
 if ($releaseVersion -notmatch '^\d+\.\d+\.\d+(\.\d+)?$') {
     throw "version.json contains an invalid version string: '$releaseVersion'"
@@ -28,6 +61,7 @@ $verMajor = [int]$parts[0]
 $verMinor = if ($parts.Count -gt 1) { [int]$parts[1] } else { 0 }
 $verPatch = if ($parts.Count -gt 2) { [int]$parts[2] } else { 0 }
 $verBuild = if ($parts.Count -gt 3) { [int]$parts[3] } else { 0 }
+$verQuad = "$verMajor.$verMinor.$verPatch.$verBuild"
 
 $versionHeader = @"
 #ifndef WINPREVIEW_VERSION_H
@@ -47,107 +81,204 @@ $versionHeader = @"
 Set-Content -Path (Join-Path $ScriptDir "src\version.h") -Value $versionHeader -Encoding ASCII
 
 $issPath = Join-Path $ScriptDir "installer\WinPreview.iss"
+if (-not (Test-Path $issPath)) { Fail "Installer script not found: $issPath" }
 $issContent = Get-Content $issPath -Raw
 $issContent = [regex]::Replace($issContent, '(?m)^#define\s+MyAppVersion\s+".*"$', "#define MyAppVersion `"$releaseVersion`"")
+$issContent = [regex]::Replace($issContent, '(?m)^VersionInfoVersion=.*$', "VersionInfoVersion=$verQuad")
 Set-Content -Path $issPath -Value $issContent -Encoding UTF8
 
-Write-Host "[0/3] Version sync: version.json ($releaseVersion) -> src/version.h + installer/WinPreview.iss" -ForegroundColor Yellow
+Write-Host "[0/5] Version sync: version.json ($releaseVersion) -> src/version.h + installer/WinPreview.iss" -ForegroundColor Yellow
 
-# Terminate running instances before compiling
+# Terminate running instances before compiling/staging (holds locks on the EXE/DLLs).
 Get-Process WinPreview -ErrorAction SilentlyContinue | Stop-Process -Force
-Start-Sleep -Milliseconds 100
+Start-Sleep -Milliseconds 150
 
-# Step 1: Compile Native Engine
-Write-Host "`n[1/3] Compiling Native C++20 Direct2D/D3D11 Engine..." -ForegroundColor Yellow
+# ---------------------------------------------------------------------------
+# Step 1: Compile the native engine.
+# ---------------------------------------------------------------------------
+Write-Host "`n[1/5] Compiling Native C++20 Direct2D/D3D11 Engine..." -ForegroundColor Yellow
 $buildBat = Join-Path $ScriptDir "src\build.bat"
-if (-not (Test-Path $buildBat)) {
-    throw "Build script not found: $buildBat"
-}
+if (-not (Test-Path $buildBat)) { Fail "Build script not found: $buildBat" }
 
 $proc = Start-Process -FilePath "cmd.exe" -ArgumentList "/c `"$buildBat`"" -WorkingDirectory (Join-Path $ScriptDir "src") -NoNewWindow -Wait -PassThru
-if ($proc.ExitCode -ne 0) {
-    throw "Native compilation failed with exit code $($proc.ExitCode)"
-}
+if ($proc.ExitCode -ne 0) { Fail "Native compilation failed with exit code $($proc.ExitCode)" }
 
 $builtExe = Join-Path $ScriptDir "src\WinPreview.exe"
-if (-not (Test-Path $builtExe)) {
-    throw "Expected binary was not produced: $builtExe"
-}
+if (-not (Test-Path $builtExe)) { Fail "Expected binary was not produced: $builtExe" }
 
-# Step 2: Package Release Directory
-Write-Host "`n[2/3] Staging release artifacts into $OutputDir..." -ForegroundColor Yellow
+# ---------------------------------------------------------------------------
+# Step 2: Stage the release directory. Runtime DLLs are REQUIRED: without the
+# LibHEIF stack the advertised HEIC/HEIF/AVIF support silently disappears.
+# ---------------------------------------------------------------------------
+Write-Host "`n[2/5] Staging release artifacts into $OutputDir..." -ForegroundColor Yellow
 $targetPublishDir = Join-Path $ScriptDir $OutputDir
-if (-not (Test-Path $targetPublishDir)) {
+if (Test-Path $targetPublishDir) {
+    # Generated staging directory: always start clean so stale binaries can never ship.
+    Get-ChildItem -LiteralPath $targetPublishDir -Force | Remove-Item -Recurse -Force
+} else {
     New-Item -ItemType Directory -Path $targetPublishDir -Force | Out-Null
 }
 
 Copy-Item -LiteralPath $builtExe -Destination (Join-Path $targetPublishDir "WinPreview.exe") -Force
-$pdfium = Join-Path $ScriptDir "src\pdfium.dll"
-if (Test-Path $pdfium) {
-    Copy-Item -LiteralPath $pdfium -Destination (Join-Path $targetPublishDir "pdfium.dll") -Force
-}
 
-$appIco = Join-Path $ScriptDir "src\app.ico"
-if (Test-Path $appIco) {
-    Copy-Item -LiteralPath $appIco -Destination (Join-Path $targetPublishDir "app.ico") -Force
-}
-$appLogo = Join-Path $ScriptDir "src\app_logo.png"
-if (Test-Path $appLogo) {
-    Copy-Item -LiteralPath $appLogo -Destination (Join-Path $targetPublishDir "app_logo.png") -Force
-}
-
-$exeSizeMb = [math]::Round((Get-Item (Join-Path $targetPublishDir "WinPreview.exe")).Length / 1MB, 2)
-Write-Host "  Staged WinPreview.exe ($exeSizeMb MB standalone native binary)" -ForegroundColor Green
-
-# Step 3: Compile Inno Setup Installer
-Write-Host "`n[3/3] Building standalone Windows Setup Installer (WinPreview-Setup-x64.exe)..." -ForegroundColor Yellow
-$isccPaths = @(
-    (Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 6\ISCC.exe"),
-    (Join-Path $env:ProgramFiles "Inno Setup 6\ISCC.exe"),
-    (Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"),
-    "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
-    "C:\Program Files\Inno Setup 6\ISCC.exe"
+$requiredDlls = @(
+    "pdfium.dll",
+    "libheif-*.dll",
+    "libde265-*.dll",
+    "libx265-*.dll",
+    "libstdc++-*.dll",
+    "libgcc_s_*.dll",
+    "libwinpthread-*.dll"
 )
-
-$iscc = $null
-foreach ($p in $isccPaths) {
-    if (Test-Path $p) {
-        $iscc = $p
-        break
+$stagedDlls = @()
+foreach ($pattern in $requiredDlls) {
+    $found = @(Get-ChildItem -Path (Join-Path $ScriptDir "src") -Filter $pattern -File -ErrorAction SilentlyContinue)
+    if ($found.Count -eq 0) {
+        Fail "Required runtime file missing in src: $pattern. HEIC/PDF/media decoding would not work in the packaged app."
+    }
+    foreach ($m in $found) {
+        Copy-Item -LiteralPath $m.FullName -Destination (Join-Path $targetPublishDir $m.Name) -Force
+        $stagedDlls += $m.Name
     }
 }
-if (-not $iscc) {
-    $cmd = Get-Command "ISCC.exe" -ErrorAction SilentlyContinue
-    if ($cmd) { $iscc = $cmd.Source }
+
+foreach ($asset in @("app.ico", "app_logo.png")) {
+    $assetPath = Join-Path $ScriptDir "src\$asset"
+    if (Test-Path $assetPath) {
+        Copy-Item -LiteralPath $assetPath -Destination (Join-Path $targetPublishDir $asset) -Force
+    }
 }
 
-if ($iscc) {
-    $issFile = Join-Path $ScriptDir "installer\WinPreview.iss"
-    $isccProc = Start-Process -FilePath $iscc -ArgumentList "`"$issFile`"" -NoNewWindow -Wait -PassThru
-    if ($isccProc.ExitCode -ne 0) {
-        throw "Inno Setup compilation failed with exit code $($isccProc.ExitCode)"
-    }
-    
-    $installerPath = Join-Path $ScriptDir "dist\Installer\WinPreview-Setup-x64.exe"
-    if (Test-Path $installerPath) {
-        $installerSizeMb = [math]::Round((Get-Item $installerPath).Length / 1MB, 2)
-        Write-Host "`n[SUCCESS] Standalone Windows Installer created successfully!" -ForegroundColor Green
-        Write-Host "  Location : $installerPath" -ForegroundColor Green
-        Write-Host "  Size     : $installerSizeMb MB" -ForegroundColor Green
+$stagedExe = Join-Path $targetPublishDir "WinPreview.exe"
+$exeSizeMb = [math]::Round((Get-Item $stagedExe).Length / 1MB, 2)
+Write-Host "  Staged WinPreview.exe ($exeSizeMb MB) + $($stagedDlls.Count) runtime libraries" -ForegroundColor Green
+
+# Every DLL the binary links against must be present in the staging directory.
+$peBytes = [System.IO.File]::ReadAllBytes($stagedExe)
+if ($peBytes.Length -lt 0x40) { Fail "Staged EXE is not a valid PE file." }
+$peOffset = [BitConverter]::ToInt32($peBytes, 0x3C)
+if ($peOffset -le 0 -or $peOffset + 6 -gt $peBytes.Length) { Fail "Staged EXE has an invalid PE header offset." }
+$machine = [BitConverter]::ToUInt16($peBytes, $peOffset + 4)
+if ($machine -ne 0x8664) { Fail ("Staged EXE is not x64 (machine 0x{0:X4})." -f $machine) }
+
+# ---------------------------------------------------------------------------
+# Step 3: Production checks (smoke render + package integrity + version sync).
+# ---------------------------------------------------------------------------
+if (-not $SkipTests) {
+    Write-Host "`n[3/5] Running production verification suite..." -ForegroundColor Yellow
+    $testScript = Join-Path $ScriptDir "tests\production_check.ps1"
+    if (Test-Path $testScript) {
+        & powershell -NoProfile -ExecutionPolicy Bypass -File $testScript -PackageDir $targetPublishDir
+        if ($LASTEXITCODE -ne 0) { Fail "Production verification failed (exit $LASTEXITCODE)." }
+    } else {
+        Write-Host "  [WARN] tests\production_check.ps1 not found; skipping verification." -ForegroundColor Yellow
     }
 } else {
-    Write-Host "[WARN] Inno Setup compiler (ISCC.exe) not found. Binaries staged in $OutputDir." -ForegroundColor Yellow
+    Write-Host "`n[3/5] Production checks skipped (-SkipTests)." -ForegroundColor Yellow
 }
 
-# Start resident background instance if requested (skip in CI/CD)
+# ---------------------------------------------------------------------------
+# Step 4: Portable ZIP.
+# ---------------------------------------------------------------------------
+Write-Host "`n[4/5] Creating portable archive..." -ForegroundColor Yellow
+$installerDir = Join-Path $ScriptDir "dist\Installer"
+if (-not (Test-Path $installerDir)) { New-Item -ItemType Directory -Path $installerDir -Force | Out-Null }
+$portableZip = Join-Path $installerDir "WinPreview-Portable-x64.zip"
+if (Test-Path $portableZip) { Remove-Item -LiteralPath $portableZip -Force }
+Compress-Archive -Path (Join-Path $targetPublishDir "*") -DestinationPath $portableZip -CompressionLevel Optimal
+Write-Host "  Portable archive: $portableZip ($([math]::Round((Get-Item $portableZip).Length / 1MB, 2)) MB)" -ForegroundColor Green
+
+# ---------------------------------------------------------------------------
+# Step 5: Inno Setup installer + release manifest.
+# ---------------------------------------------------------------------------
+$installerPath = Join-Path $installerDir "WinPreview-Setup-x64.exe"
+$manifestPath = Join-Path $installerDir "version.json"
+$builtInstaller = $false
+
+if (-not $SkipInstaller) {
+    Write-Host "`n[5/5] Building standalone Windows setup installer..." -ForegroundColor Yellow
+    $isccPaths = @(
+        (Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 6\ISCC.exe"),
+        (Join-Path $env:ProgramFiles "Inno Setup 6\ISCC.exe"),
+        (Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"),
+        "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
+        "C:\Program Files\Inno Setup 6\ISCC.exe"
+    )
+
+    $iscc = $null
+    foreach ($p in $isccPaths) {
+        if ($p -and (Test-Path $p)) { $iscc = $p; break }
+    }
+    if (-not $iscc) {
+        $cmd = Get-Command "ISCC.exe" -ErrorAction SilentlyContinue
+        if ($cmd) { $iscc = $cmd.Source }
+    }
+
+    if (-not $iscc) {
+        Fail "Inno Setup compiler (ISCC.exe) not found. Install Inno Setup 6 or pass -SkipInstaller."
+    }
+
+    if (Test-Path $installerPath) { Remove-Item -LiteralPath $installerPath -Force }
+    $issFile = Join-Path $ScriptDir "installer\WinPreview.iss"
+    $isccProc = Start-Process -FilePath $iscc -ArgumentList "`"$issFile`"" -NoNewWindow -Wait -PassThru
+    if ($isccProc.ExitCode -ne 0) { Fail "Inno Setup compilation failed with exit code $($isccProc.ExitCode)" }
+    if (-not (Test-Path $installerPath)) { Fail "Installer was not produced: $installerPath" }
+
+    $installerSize = (Get-Item $installerPath).Length
+    if ($installerSize -lt 1MB) { Fail "Installer is suspiciously small ($installerSize bytes); aborting." }
+    Write-Host "  Installer: $installerPath ($([math]::Round($installerSize / 1MB, 2)) MB)" -ForegroundColor Green
+    $builtInstaller = $true
+} else {
+    Write-Host "`n[5/5] Installer build skipped (-SkipInstaller)." -ForegroundColor Yellow
+}
+
+# Release manifest consumed by the in-app updater. It overlays computed
+# integrity fields on the repository's source-of-truth version.json.
+$releaseDate = if ($versionJson.release_date) { [string]$versionJson.release_date } else { (Get-Date -Format "yyyy-MM-dd") }
+$downloadUrl = if ($versionJson.download_url) { [string]$versionJson.download_url } else { "https://github.com/Code-Xceed/WinPreview/releases/latest/download/WinPreview-Setup-x64.exe" }
+$changelog = if ($versionJson.changelog) { [string]$versionJson.changelog } else { "" }
+$installerSize = if ($builtInstaller) { (Get-Item $installerPath).Length } else { 0 }
+$installerHash = if ($builtInstaller) { Get-Sha256 $installerPath } else { "" }
+$portableSize = (Get-Item $portableZip).Length
+$portableHash = Get-Sha256 $portableZip
+
+$manifest = [ordered]@{
+    version          = $releaseVersion
+    release_date     = $releaseDate
+    download_url     = $downloadUrl
+    changelog        = $changelog
+    installer_size   = $installerSize
+    installer_sha256 = $installerHash
+    portable_size    = $portableSize
+    portable_sha256  = $portableHash
+}
+$manifest | ConvertTo-Json -Depth 4 | Set-Content -Path $manifestPath -Encoding UTF8
+Write-Host "  Release manifest: $manifestPath" -ForegroundColor Green
+
+# Hard guarantee: the binary the installer ships reports the version we advertise.
+$fileVersion = (Get-Item $stagedExe).VersionInfo.FileVersion
+if ($fileVersion -and -not $fileVersion.StartsWith($releaseVersion)) {
+    Fail "Version mismatch in shipped EXE: file version '$fileVersion' != release version '$releaseVersion'."
+}
+
+# Re-validate the freshly written manifest (the earlier suite ran before packaging).
+$finalVersionCheck = Join-Path $ScriptDir "tests\version_check.ps1"
+if (Test-Path $finalVersionCheck) {
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $finalVersionCheck -RootDir $ScriptDir
+    if ($LASTEXITCODE -ne 0) { Fail "Final release manifest validation failed." }
+}
+
+# ---------------------------------------------------------------------------
+# Optional resident background instance (skipped in CI).
+# ---------------------------------------------------------------------------
 if (-not $env:GITHUB_ACTIONS -and -not $NoLaunch) {
-    $stagedExe = (Resolve-Path (Join-Path $targetPublishDir "WinPreview.exe")).Path
-    if (Test-Path $stagedExe) {
-        Start-Process -FilePath $stagedExe -ArgumentList "--background"
-        Write-Host "  Started resident background engine ($stagedExe)" -ForegroundColor Green
+    $stagedExePath = (Resolve-Path $stagedExe).Path
+    if (Test-Path $stagedExePath) {
+        Start-Process -FilePath $stagedExePath -ArgumentList "--background"
+        Write-Host "  Started resident background engine ($stagedExePath)" -ForegroundColor Green
     }
 }
 
 Write-Host "`n==========================================================" -ForegroundColor Green
-Write-Host "  WinPreview packaging completed successfully!            " -ForegroundColor Green
+Write-Host "  WinPreview $releaseVersion packaging completed successfully!" -ForegroundColor Green
 Write-Host "==========================================================" -ForegroundColor Green

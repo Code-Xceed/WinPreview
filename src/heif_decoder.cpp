@@ -87,19 +87,13 @@ static bool InitializeHeif() {
     size_t lastSlash = exeDir.find_last_of(L"\\/");
     if (lastSlash != std::wstring::npos) exeDir = exeDir.substr(0, lastSlash);
 
+    // Only load the LibHEIF stack from directories the application controls.
+    // Previously a DLL matching *heif*.dll in %APPDATA%\Python was loaded and its
+    // directory added to the DLL search path — a local privilege-escalation vector.
     std::vector<std::wstring> candidateDirs = {
         exeDir,
-        exeDir + L"\\lib",
-        exeDir + L"\\dist\\WinPreview"
+        exeDir + L"\\lib"
     };
-
-    // 2. Discover python site-packages (for local developer machine fallback)
-    WCHAR appDataBuf[MAX_PATH] = {};
-    if (GetEnvironmentVariableW(L"APPDATA", appDataBuf, MAX_PATH) > 0) {
-        candidateDirs.push_back(std::wstring(appDataBuf) + L"\\Python\\Python314\\site-packages");
-        candidateDirs.push_back(std::wstring(appDataBuf) + L"\\Python\\Python313\\site-packages");
-        candidateDirs.push_back(std::wstring(appDataBuf) + L"\\Python\\Python312\\site-packages");
-    }
 
     std::wstring foundDll;
     for (const auto& dir : candidateDirs) {
@@ -112,7 +106,6 @@ static bool InitializeHeif() {
                     std::wstring name = fd.cFileName;
                     if (name.rfind(L"libheif", 0) == 0) {
                         foundDll = dir + L"\\" + name;
-                        SetDllDirectoryW(dir.c_str());
                         break;
                     }
                 }
@@ -123,12 +116,15 @@ static bool InitializeHeif() {
     }
 
     if (foundDll.empty()) {
-        // Try system search
+        // Last resort: application directory / system32 only (never the CWD).
         foundDll = L"libheif.dll";
     }
 
-    s_hHeif = LoadLibraryW(foundDll.c_str());
-    SetDllDirectoryW(NULL);
+    s_hHeif = LoadLibraryExW(foundDll.c_str(), NULL,
+        LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_APPLICATION_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if (!s_hHeif) {
+        s_hHeif = LoadLibraryW(foundDll.c_str());
+    }
 
     if (!s_hHeif) return false;
 
@@ -201,10 +197,11 @@ static void ParseExifBuffer(const uint8_t* data, size_t size, ImageMetadata* out
     if (magic != 42) return;
 
     uint32_t ifd0Offset = read32(tiff + 4);
-    if (ifd0Offset >= tiffSize - 2) return;
+    if (ifd0Offset > tiffSize - 2) return;
 
-    auto parseIfd = [&](uint32_t dirOffset, auto& self) -> void {
-        if (dirOffset >= tiffSize - 2) return;
+    auto parseIfd = [&](uint32_t dirOffset, int depth, auto& self) -> void {
+        if (depth > 8) return; // crafted/cyclic Exif SubIFD graphs
+        if (dirOffset > tiffSize - 2) return;
         uint16_t numEntries = read16(tiff + dirOffset);
         uint32_t cur = dirOffset + 2;
 
@@ -216,7 +213,17 @@ static void ParseExifBuffer(const uint8_t* data, size_t size, ImageMetadata* out
             const uint8_t* valPtr = tiff + cur + 8;
             if (count > 4 || (type == 5 && count > 0)) {
                 uint32_t valOffset = read32(tiff + cur + 8);
-                if (valOffset < tiffSize) valPtr = tiff + valOffset;
+                size_t typeSize = (type == 3) ? 2 : (type == 4 ? 4 : (type == 5 ? 8 : 1));
+                size_t need = (size_t)count * typeSize;
+                if ((size_t)valOffset <= tiffSize && need <= tiffSize - (size_t)valOffset) {
+                    valPtr = tiff + valOffset;
+                } else {
+                    valPtr = nullptr;
+                }
+            }
+            if (!valPtr) {
+                cur += 12;
+                continue;
             }
 
             auto readString = [&]() -> std::wstring {
@@ -274,6 +281,7 @@ static void ParseExifBuffer(const uint8_t* data, size_t size, ImageMetadata* out
                     break;
                 }
                 case 0x8827: {
+                    if (valPtr + 2 > tiff + tiffSize) break;
                     uint16_t iso = read16(valPtr);
                     if (iso > 0) outMeta->isoSpeed = std::to_wstring(iso);
                     break;
@@ -289,7 +297,7 @@ static void ParseExifBuffer(const uint8_t* data, size_t size, ImageMetadata* out
                 }
                 case 0x8769: { // SubIFD (Exif Offset)
                     uint32_t subOffset = read32(tiff + cur + 8);
-                    if (subOffset < tiffSize) self(subOffset, self);
+                    if (subOffset > 0 && subOffset <= tiffSize - 2) self(subOffset, depth + 1, self);
                     break;
                 }
                 default: break;
@@ -298,7 +306,7 @@ static void ParseExifBuffer(const uint8_t* data, size_t size, ImageMetadata* out
         }
     };
 
-    parseIfd(ifd0Offset, parseIfd);
+    parseIfd(ifd0Offset, 0, parseIfd);
 }
 
 bool HeifDecoder::LoadImageFromFile(

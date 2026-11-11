@@ -15,69 +15,113 @@ on:
         type: boolean
         default: false
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  build-and-package:
-    name: Build Native Engine & Installer (Windows x64)
+  build-and-verify:
+    name: Build, Verify & Package (Windows x64)
     runs-on: windows-latest
+    timeout-minutes: 45
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up LLVM-MinGW Toolchain
+      - name: Set up LLVM-MinGW toolchain
         shell: pwsh
         run: |
           Write-Host "Querying latest LLVM-MinGW release..."
           $headers = @{ "User-Agent" = "GitHub-Actions-CI" }
           $release = Invoke-RestMethod -Uri "https://api.github.com/repos/mstorsjo/llvm-mingw/releases/latest" -Headers $headers
           $asset = $release.assets | Where-Object { $_.name -like "*ucrt-x86_64.zip" } | Select-Object -First 1
+          if (-not $asset) { throw "No LLVM-MinGW UCRT x86_64 asset found in latest release." }
           Write-Host "Downloading $($asset.name)..."
           $zipPath = "$env:RUNNER_TEMP\llvm-mingw.zip"
           Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zipPath
-          Write-Host "Extracting LLVM-MinGW..."
           Expand-Archive -Path $zipPath -DestinationPath "$env:RUNNER_TEMP\llvm-mingw"
           $dir = Get-ChildItem "$env:RUNNER_TEMP\llvm-mingw" | Where-Object { $_.PSIsContainer } | Select-Object -First 1
           $binDir = Join-Path $dir.FullName "bin"
           $binDir | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          & (Join-Path $binDir "clang++.exe") --version
           Write-Host "Added LLVM-MinGW to PATH: $binDir" -ForegroundColor Green
 
       - name: Install Inno Setup
-        run: choco install innosetup --no-progress
+        run: choco install innosetup --no-progress -y
 
-      - name: Package Distribution & Build Inno Setup Installer
+      - name: Compile, verify & package
         shell: powershell
         run: |
-          powershell -ExecutionPolicy Bypass -File publish.ps1
+          powershell -ExecutionPolicy Bypass -File publish.ps1 -NoLaunch
+          if ($LASTEXITCODE -ne 0) { throw "publish.ps1 failed with exit code $LASTEXITCODE" }
 
-      - name: Create Portable Zip Package
-        shell: powershell
+      - name: Verify generated files are committed
+        shell: pwsh
         run: |
-          $distDir = "dist\WinPreview"
-          $zipPath = "dist\Installer\WinPreview-Portable-x64.zip"
-          Compress-Archive -Path "$distDir\*" -DestinationPath $zipPath -Force
-          Write-Host "Created portable archive: $zipPath" -ForegroundColor Green
+          # publish.ps1 derives version.h and the installer from version.json.
+          # If this produces a diff, the release was built from stale generated files.
+          git diff --exit-code -- src/version.h installer/WinPreview.iss
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::error::src/version.h or installer/WinPreview.iss is out of sync with version.json. Run publish.ps1 locally and commit the result."
+            exit 1
+          }
 
-      - name: Upload Build Artifacts (CI Run)
+      - name: Show artifact checksums
+        shell: pwsh
+        run: |
+          Get-ChildItem dist\Installer | Select-Object Name, Length, LastWriteTime | Format-Table -AutoSize
+          Get-FileHash dist\Installer\WinPreview-Setup-x64.exe -Algorithm SHA256 | Format-List
+          Get-FileHash dist\Installer\WinPreview-Portable-x64.zip -Algorithm SHA256 | Format-List
+
+      - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: WinPreview-Windows-x64
           path: |
             dist/Installer/WinPreview-Setup-x64.exe
             dist/Installer/WinPreview-Portable-x64.zip
+            dist/Installer/version.json
             version.json
           if-no-files-found: error
+          retention-days: 30
 
-      - name: Publish GitHub Release (on tag v* or manual release)
-        if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.create_release == 'true'
+  release:
+    name: Publish GitHub Release
+    needs: build-and-verify
+    if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.create_release == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download verified artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: WinPreview-Windows-x64
+          path: release-assets
+
+      - name: Determine release tag
+        id: meta
+        shell: pwsh
+        run: |
+          $manifest = Get-Content "release-assets/dist/Installer/version.json" -Raw | ConvertFrom-Json
+          if (-not $manifest.version) { throw "Release manifest is missing a version." }
+          "tag=v$($manifest.version)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          # Tag pushes keep their existing tag; manual releases use v<version.json>.
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || steps.meta.outputs.tag }}
           files: |
-            dist/Installer/WinPreview-Setup-x64.exe
-            dist/Installer/WinPreview-Portable-x64.zip
-            version.json
+            release-assets/dist/Installer/WinPreview-Setup-x64.exe
+            release-assets/dist/Installer/WinPreview-Portable-x64.zip
+            release-assets/dist/Installer/version.json
           draft: false
           prerelease: false
           generate_release_notes: true

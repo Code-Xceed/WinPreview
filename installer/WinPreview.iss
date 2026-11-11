@@ -4,7 +4,7 @@
 ; =====================================================================
 
 #define MyAppName "WinPreview"
-#define MyAppVersion "1.3.0"
+#define MyAppVersion "1.3.1"
 #define MyAppPublisher "Code-Xceed"
 #define MyAppURL "https://github.com/Code-Xceed/WinPreview"
 #define MyAppExeName "WinPreview.exe"
@@ -28,9 +28,13 @@ SetupIconFile=..\src\app.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 WizardImageFile=wizard_large.bmp
 WizardSmallImageFile=wizard_small.bmp
+LicenseFile=..\LICENSE
+MinVersion=10.0
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
+SetupLogging=yes
+UsePreviousAppDir=yes
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog commandline
 ArchitecturesAllowed=x64compatible
@@ -38,7 +42,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 CloseApplications=no
 RestartApplications=no
 DisableProgramGroupPage=yes
-VersionInfoVersion=1.0.7.0
+VersionInfoVersion=1.3.1.0
 VersionInfoCompany={#MyAppPublisher}
 VersionInfoDescription=WinPreview - Apple Preview for Windows
 VersionInfoCopyright=Copyright (C) 2026 Code-Xceed
@@ -168,6 +172,11 @@ begin
   Sleep(150);
   Result := '';
 end;
+
+
+
+
+
 
 
 

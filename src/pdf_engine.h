@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 #include <mutex>
+#include <unordered_set>
 
 namespace WinPreview {
 
@@ -84,7 +85,8 @@ public:
     std::vector<PdfOutlineItem> GetOutline();
 
 private:
-    void TraverseBookmarks(FPDF_BOOKMARK parent, int level, std::vector<PdfOutlineItem>& outList);
+    void TraverseBookmarks(FPDF_BOOKMARK parent, int level, std::vector<PdfOutlineItem>& outList,
+                           std::unordered_set<void*>& visited);
 
     // Must be called while holding m_apiMutex.
     void CloseDocumentLocked();
@@ -96,6 +98,7 @@ private:
     std::mutex m_apiMutex;
 
     HMODULE m_hPdfium = nullptr;
+    bool m_initialized = false;
     FPDF_DOCUMENT m_document = nullptr;
     int m_pageCount = 0;
     std::wstring m_currentFilePath;

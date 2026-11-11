@@ -25,13 +25,14 @@ PdfEngine::PdfEngine() {}
 PdfEngine::~PdfEngine() {
     CloseTextPage();
     CloseDocument();
-    if (fn_FPDF_DestroyLibrary) {
+    if (m_initialized && fn_FPDF_DestroyLibrary) {
         fn_FPDF_DestroyLibrary();
     }
     if (m_hPdfium) {
         FreeLibrary(m_hPdfium);
         m_hPdfium = nullptr;
     }
+    m_initialized = false;
 }
 
 bool PdfEngine::Initialize() {
@@ -101,6 +102,14 @@ bool PdfEngine::Initialize() {
     fn_FPDFDest_GetDestPageIndex = (int(*)(FPDF_DOCUMENT, FPDF_DEST))GetProcAddress(m_hPdfium, "FPDFDest_GetDestPageIndex");
 
     if (!fn_FPDF_InitLibraryWithConfig || !fn_FPDF_LoadDocument || !fn_FPDF_RenderPageBitmap) {
+        // Do not leave resolved pointers aiming into a module we are about to unmap.
+        fn_FPDF_DestroyLibrary = nullptr;
+        fn_FPDF_CloseDocument = nullptr;
+        fn_FPDF_GetPageCount = nullptr;
+        fn_FPDF_LoadPage = nullptr;
+        fn_FPDF_ClosePage = nullptr;
+        fn_FPDF_LoadDocument = nullptr;
+        fn_FPDF_InitLibraryWithConfig = nullptr;
         FreeLibrary(m_hPdfium);
         m_hPdfium = nullptr;
         return false;
@@ -108,6 +117,7 @@ bool PdfEngine::Initialize() {
 
     NativePdfConfig cfg;
     fn_FPDF_InitLibraryWithConfig(&cfg);
+    m_initialized = true;
     return true;
 }
 
@@ -270,6 +280,7 @@ bool PdfEngine::RenderThumbnail(
 ) {
     float pageW = 0.0f, pageH = 0.0f;
     if (!GetPageSize(pageIndex, &pageW, &pageH)) return false;
+    if (pageW <= 0.0f || pageH <= 0.0f || maxDimension <= 0.0f) return false;
 
     float aspect = pageW / pageH;
     float targetW = maxDimension;
@@ -325,25 +336,29 @@ void PdfEngine::CloseTextPage() {
 }
 
 int PdfEngine::GetCharCount() {
+    std::lock_guard<std::mutex> lock(m_apiMutex);
     if (!m_activeTextPage || !fn_FPDFText_CountChars) return 0;
     return fn_FPDFText_CountChars(m_activeTextPage);
 }
 
 int PdfEngine::GetCharIndexAtPos(double pageX, double pageY, double tolX, double tolY) {
+    std::lock_guard<std::mutex> lock(m_apiMutex);
     if (!m_activeTextPage || !fn_FPDFText_GetCharIndexAtPos) return -1;
     return fn_FPDFText_GetCharIndexAtPos(m_activeTextPage, pageX, pageY, tolX, tolY);
 }
 
 bool PdfEngine::GetCharBox(int charIndex, double* left, double* right, double* bottom, double* top) {
+    std::lock_guard<std::mutex> lock(m_apiMutex);
     if (!m_activeTextPage || !fn_FPDFText_GetCharBox) return false;
     return fn_FPDFText_GetCharBox(m_activeTextPage, charIndex, left, right, bottom, top) != 0;
 }
 
 std::vector<D2D1_RECT_F> PdfEngine::GetSelectionRects(int startIndex, int endIndex) {
     std::vector<D2D1_RECT_F> rects;
-    if (!m_activeTextPage || !fn_FPDFText_CountRects || !fn_FPDFText_GetRect) return rects;
+    std::lock_guard<std::mutex> lock(m_apiMutex);
+    if (!m_activeTextPage || !fn_FPDFText_CountRects || !fn_FPDFText_GetRect || !fn_FPDFText_CountChars) return rects;
 
-    int totalChars = GetCharCount();
+    int totalChars = fn_FPDFText_CountChars(m_activeTextPage);
     if (totalChars <= 0) return rects;
 
     int start = std::clamp(std::min(startIndex, endIndex), 0, totalChars - 1);
@@ -352,6 +367,8 @@ std::vector<D2D1_RECT_F> PdfEngine::GetSelectionRects(int startIndex, int endInd
     if (count <= 0) return rects;
 
     int rectCount = fn_FPDFText_CountRects(m_activeTextPage, start, count);
+    if (rectCount <= 0) return rects;
+    if (rectCount > 20000) rectCount = 20000; // bound a malicious/corrupt text page
     rects.reserve(rectCount);
 
     for (int i = 0; i < rectCount; ++i) {
@@ -365,21 +382,24 @@ std::vector<D2D1_RECT_F> PdfEngine::GetSelectionRects(int startIndex, int endInd
 }
 
 std::wstring PdfEngine::GetSelectedText(int startIndex, int endIndex) {
-    if (!m_activeTextPage || !fn_FPDFText_GetText) return L"";
+    std::lock_guard<std::mutex> lock(m_apiMutex);
+    if (!m_activeTextPage || !fn_FPDFText_GetText || !fn_FPDFText_CountChars) return L"";
 
-    int totalChars = GetCharCount();
+    int totalChars = fn_FPDFText_CountChars(m_activeTextPage);
     if (totalChars <= 0) return L"";
 
     int start = std::clamp(std::min(startIndex, endIndex), 0, totalChars - 1);
     int end = std::clamp(std::max(startIndex, endIndex), 0, totalChars - 1);
     int count = end - start + 1;
     if (count <= 0) return L"";
+    if (count > 4 * 1024 * 1024) count = 4 * 1024 * 1024; // 8 MB UTF-16 ceiling
 
     std::vector<unsigned short> buffer(count + 2, 0);
     int written = fn_FPDFText_GetText(m_activeTextPage, start, count, buffer.data());
     if (written <= 0) return L"";
+    if (written > count) written = count;
 
-    return std::wstring(reinterpret_cast<wchar_t*>(buffer.data()));
+    return std::wstring(reinterpret_cast<wchar_t*>(buffer.data()), (size_t)written);
 }
 
 // =========================================================================
@@ -392,12 +412,22 @@ std::vector<PdfSearchMatch> PdfEngine::Search(const std::wstring& query, bool ma
 
     std::lock_guard<std::mutex> lock(m_apiMutex);
     if (!m_document) return matches;
+    if (!fn_FPDFText_LoadPage || !fn_FPDFText_ClosePage || !fn_FPDFText_FindNext ||
+        !fn_FPDFText_GetSchResultIndex || !fn_FPDFText_GetSchCount || !fn_FPDFText_FindClose) {
+        return matches;
+    }
+
+    // A single query on a huge document can otherwise accumulate millions of
+    // matches (and rects) while holding the PDFium lock.
+    constexpr size_t kMaxMatches = 1000;
+    constexpr int kMaxRectsPerMatch = 500;
 
     unsigned long flags = 0;
     if (matchCase) flags |= 0x01; // FPDF_MATCHCASE
     if (wholeWord) flags |= 0x02; // FPDF_MATCHWHOLEWORD
 
-    for (int pageIdx = 0; pageIdx < m_pageCount; ++pageIdx) {
+    bool limitReached = false;
+    for (int pageIdx = 0; pageIdx < m_pageCount && !limitReached; ++pageIdx) {
         FPDF_PAGE page = fn_FPDF_LoadPage(m_document, pageIdx);
         if (!page) continue;
 
@@ -421,14 +451,19 @@ std::vector<PdfSearchMatch> PdfEngine::Search(const std::wstring& query, bool ma
                 match.charIndex = fn_FPDFText_GetSchResultIndex(findHandle);
                 match.charCount = fn_FPDFText_GetSchCount(findHandle);
 
-                int rectCount = fn_FPDFText_CountRects(textPage, match.charIndex, match.charCount);
+                int rectCount = fn_FPDFText_CountRects ? fn_FPDFText_CountRects(textPage, match.charIndex, match.charCount) : 0;
+                if (rectCount > kMaxRectsPerMatch) rectCount = kMaxRectsPerMatch;
                 for (int r = 0; r < rectCount; ++r) {
                     double left = 0, top = 0, right = 0, bottom = 0;
-                    if (fn_FPDFText_GetRect(textPage, r, &left, &top, &right, &bottom)) {
+                    if (fn_FPDFText_GetRect && fn_FPDFText_GetRect(textPage, r, &left, &top, &right, &bottom)) {
                         match.rects.push_back(D2D1::RectF((float)left, (float)top, (float)right, (float)bottom));
                     }
                 }
                 matches.push_back(match);
+                if (matches.size() >= kMaxMatches) {
+                    limitReached = true;
+                    break;
+                }
             }
             fn_FPDFText_FindClose(findHandle);
         }
@@ -444,17 +479,26 @@ std::vector<PdfSearchMatch> PdfEngine::Search(const std::wstring& query, bool ma
 // TABLE OF CONTENTS / BOOKMARKS OUTLINE
 // =========================================================================
 
-void PdfEngine::TraverseBookmarks(FPDF_BOOKMARK parent, int level, std::vector<PdfOutlineItem>& outList) {
+void PdfEngine::TraverseBookmarks(FPDF_BOOKMARK parent, int level, std::vector<PdfOutlineItem>& outList,
+                                  std::unordered_set<void*>& visited) {
     if (!m_document || !fn_FPDFBookmark_GetTitle) return;
+    if (level > 32 || outList.size() >= 2000) return; // crafted deep/cyclic outlines
 
     FPDF_BOOKMARK cur = parent ? fn_FPDFBookmark_GetFirstChild(m_document, parent)
                                : fn_FPDFBookmark_GetFirstChild(m_document, NULL);
 
     while (cur) {
-        // Query title size
+        FPDF_BOOKMARK next = fn_FPDFBookmark_GetNextSibling ? fn_FPDFBookmark_GetNextSibling(m_document, cur) : nullptr;
+
+        if (!visited.insert(cur).second) {
+            cur = next; // cyclic bookmark graph: never recurse into it
+            continue;
+        }
+
+        // Query title size (with a hard cap so a corrupt bookmark cannot demand GBs)
         unsigned long bytes = fn_FPDFBookmark_GetTitle(cur, NULL, 0);
         std::wstring title;
-        if (bytes > 0) {
+        if (bytes > 0 && bytes < 64 * 1024) {
             std::vector<unsigned char> titleBuf(bytes + 2, 0);
             fn_FPDFBookmark_GetTitle(cur, titleBuf.data(), bytes);
             title = reinterpret_cast<const wchar_t*>(titleBuf.data());
@@ -477,18 +521,18 @@ void PdfEngine::TraverseBookmarks(FPDF_BOOKMARK parent, int level, std::vector<P
         item.level = level;
         outList.push_back(item);
 
-        // Recurse children
-        TraverseBookmarks(cur, level + 1, outList);
+        TraverseBookmarks(cur, level + 1, outList, visited);
 
-        // Advance to next sibling
-        cur = fn_FPDFBookmark_GetNextSibling ? fn_FPDFBookmark_GetNextSibling(m_document, cur) : nullptr;
+        cur = next;
     }
 }
 
 std::vector<PdfOutlineItem> PdfEngine::GetOutline() {
     std::vector<PdfOutlineItem> outline;
+    std::lock_guard<std::mutex> lock(m_apiMutex);
     if (!m_document || !fn_FPDFBookmark_GetFirstChild) return outline;
-    TraverseBookmarks(nullptr, 0, outline);
+    std::unordered_set<void*> visited;
+    TraverseBookmarks(nullptr, 0, outline, visited);
     return outline;
 }
 } // namespace WinPreview

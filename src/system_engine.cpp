@@ -296,12 +296,12 @@ bool SystemEngine::LoadBinary(const std::wstring& filePath, IDWriteFactory* dwri
                 LPWSTR val = nullptr;
                 UINT vLen = 0;
                 if (VerQueryValueW(verData.data(), subBlock, (LPVOID*)&val, &vLen) && val && vLen > 0) {
-                    out = val;
+                    out.assign(val, wcsnlen(val, vLen));
                 } else {
                     // Fallback to neutral 040904E4
                     swprintf_s(subBlock, L"\\StringFileInfo\\040904e4\\%s", key);
                     if (VerQueryValueW(verData.data(), subBlock, (LPVOID*)&val, &vLen) && val && vLen > 0) {
-                        out = val;
+                        out.assign(val, wcsnlen(val, vLen));
                     }
                 }
             };
@@ -332,6 +332,9 @@ bool SystemEngine::LoadBinary(const std::wstring& filePath, IDWriteFactory* dwri
     trustData.dwUnionChoice = WTD_CHOICE_FILE;
     trustData.pFile = &fileData;
     trustData.dwStateAction = WTD_STATEACTION_VERIFY;
+    // Never block the preview thread on network revocation lookup; the local
+    // trust chain still decides validity.
+    trustData.dwProvFlags = WTD_CACHE_ONLY_URL_RETRIEVAL;
 
     LONG status = WinVerifyTrust(NULL, &actionGuid, &trustData);
     trustData.dwStateAction = WTD_STATEACTION_CLOSE;
@@ -610,7 +613,6 @@ void SystemEngine::Render(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D1_RECT
     }
 
     float clientW = targetRect.right - targetRect.left;
-    float clientH = targetRect.bottom - targetRect.top;
     float marginX = (std::max)(36.0f, (clientW - 900.0f) / 2.0f);
     float contentW = clientW - marginX * 2.0f;
     float curY = targetRect.top + 32.0f + m_scrollY;

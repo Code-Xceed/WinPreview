@@ -1,4 +1,4 @@
-#include "text_engine.h"
+﻿#include "text_engine.h"
 #include <algorithm>
 #include <cmath>
 #include <cwctype>
@@ -22,6 +22,11 @@ void TextEngine::Close() {
     m_redoStack.clear();
     m_isLoaded = false;
     m_isModified = false;
+    m_readOnly = false;
+    m_fileSizeBytes = 0;
+    m_columnCount = 0;
+    m_totalTableWidth = 0.0f;
+    m_tableWidthsDirty = true;
     m_scrollY = 0.0f;
     m_targetScrollY = 0.0f;
     m_scrollX = 0.0f;
@@ -174,6 +179,7 @@ bool TextEngine::LoadFile(const std::wstring& filePath, IDWriteFactory* dwriteFa
 
     m_fileSizeBytes = liSize.QuadPart;
     DWORD bytesToRead = (DWORD)std::min<int64_t>(m_fileSizeBytes, 16 * 1024 * 1024);
+    m_readOnly = (m_fileSizeBytes > (int64_t)bytesToRead);
 
     std::vector<uint8_t> rawBuffer(bytesToRead + 4, 0);
     DWORD bytesRead = 0;
@@ -191,13 +197,25 @@ bool TextEngine::LoadFile(const std::wstring& filePath, IDWriteFactory* dwriteFa
     std::wstring fullContent;
     uint8_t* data = rawBuffer.data();
 
+    // When the read stops at the 16 MB cap, back off to the last complete UTF-8
+    // sequence. Decoding a cut-off lead byte would fail MB_ERR_INVALID_CHARS and
+    // silently re-decode the whole (valid) file with the ANSI code page.
+    auto utf8Bytes = [&]() -> DWORD {
+        DWORD n = bytesRead;
+        if (!m_readOnly) return n;
+        while (n > 0 && (data[n - 1] & 0xC0) == 0x80) --n;
+        if (n > 0 && data[n - 1] >= 0xC0) --n;
+        return n;
+    };
+
     // Check UTF-8 BOM
     if (bytesRead >= 3 && data[0] == 0xEF && data[1] == 0xBB && data[2] == 0xBF) {
         m_encodingName = L"UTF-8 (BOM)";
-        int wlen = MultiByteToWideChar(CP_UTF8, 0, (char*)(data + 3), bytesRead - 3, NULL, 0);
+        DWORD n = utf8Bytes();
+        int wlen = (n > 3) ? MultiByteToWideChar(CP_UTF8, 0, (char*)(data + 3), n - 3, NULL, 0) : 0;
         if (wlen > 0) {
             fullContent.resize(wlen);
-            MultiByteToWideChar(CP_UTF8, 0, (char*)(data + 3), bytesRead - 3, fullContent.data(), wlen);
+            MultiByteToWideChar(CP_UTF8, 0, (char*)(data + 3), n - 3, fullContent.data(), wlen);
         }
     }
     // Check UTF-16 LE BOM
@@ -218,17 +236,18 @@ bool TextEngine::LoadFile(const std::wstring& filePath, IDWriteFactory* dwriteFa
     }
     // Fallback: Test UTF-8, else ANSI
     else {
-        int wlen = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, (char*)data, bytesRead, NULL, 0);
+        DWORD n = utf8Bytes();
+        int wlen = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, (char*)data, n, NULL, 0);
         if (wlen > 0) {
             m_encodingName = L"UTF-8";
             fullContent.resize(wlen);
-            MultiByteToWideChar(CP_UTF8, 0, (char*)data, bytesRead, fullContent.data(), wlen);
+            MultiByteToWideChar(CP_UTF8, 0, (char*)data, n, fullContent.data(), wlen);
         } else {
             m_encodingName = L"ANSI";
-            wlen = MultiByteToWideChar(CP_ACP, 0, (char*)data, bytesRead, NULL, 0);
+            wlen = MultiByteToWideChar(CP_ACP, 0, (char*)data, n, NULL, 0);
             if (wlen > 0) {
                 fullContent.resize(wlen);
-                MultiByteToWideChar(CP_ACP, 0, (char*)data, bytesRead, fullContent.data(), wlen);
+                MultiByteToWideChar(CP_ACP, 0, (char*)data, n, fullContent.data(), wlen);
             }
         }
     }
@@ -320,45 +339,58 @@ void TextEngine::ParseCsv(const std::wstring& content, wchar_t delimiter) {
     m_columnWidths.clear();
     m_columnCount = 0;
 
+    // Hard caps: a 16 MB line of delimiters previously produced millions of cells
+    // (hundreds of MB, then a UI hang measuring/rendering every column).
+    constexpr int kMaxColumns = 512;
+    constexpr size_t kMaxRows = 200000;
+    constexpr size_t kMaxCellChars = 8192;
+
     std::vector<std::wstring> curRow;
     std::wstring curCell;
     bool inQuotes = false;
 
+    auto commitCell = [&]() {
+        if ((int)curRow.size() < kMaxColumns) {
+            curRow.push_back(curCell);
+        }
+        curCell.clear();
+    };
+
     for (size_t i = 0; i < content.length(); ++i) {
+        if (m_rows.size() >= kMaxRows) break;
         wchar_t c = content[i];
 
         if (c == L'"') {
             if (inQuotes && i + 1 < content.length() && content[i + 1] == L'"') {
-                curCell.push_back(L'"');
+                if (curCell.size() < kMaxCellChars) curCell.push_back(L'"');
                 i++;
             } else {
                 inQuotes = !inQuotes;
             }
         } else if (c == delimiter && !inQuotes) {
-            curRow.push_back(curCell);
-            curCell.clear();
+            commitCell();
         } else if ((c == L'\r' || c == L'\n') && !inQuotes) {
             if (c == L'\r' && i + 1 < content.length() && content[i + 1] == L'\n') i++;
-            curRow.push_back(curCell);
-            curCell.clear();
+            commitCell();
             if (!curRow.empty()) {
                 m_columnCount = std::max(m_columnCount, (int)curRow.size());
                 m_rows.push_back(curRow);
             }
             curRow.clear();
         } else {
-            curCell.push_back(c);
+            if (curCell.size() < kMaxCellChars) curCell.push_back(c);
         }
     }
 
-    if (!curCell.empty() || !curRow.empty()) {
-        curRow.push_back(curCell);
+    if (m_rows.size() < kMaxRows && (!curCell.empty() || !curRow.empty())) {
+        commitCell();
         m_columnCount = std::max(m_columnCount, (int)curRow.size());
         m_rows.push_back(curRow);
     }
 
     m_columnWidths.assign(m_columnCount, 85.0f);
     m_totalTableWidth = m_columnCount * 85.0f;
+    m_tableWidthsDirty = true; // real auto-fit happens on first RenderSpreadsheet
 }
 
 std::wstring TextEngine::GetAllText() const {
@@ -467,16 +499,19 @@ void TextEngine::SetScrollPosition(float scrollY, float scrollX) {
 void TextEngine::ZoomIn() {
     m_fontSize = std::min(32.0f, m_fontSize + 1.5f);
     SafeRelease(m_fontCustom);
+    m_tableWidthsDirty = true;
 }
 
 void TextEngine::ZoomOut() {
     m_fontSize = std::max(8.0f, m_fontSize - 1.5f);
     SafeRelease(m_fontCustom);
+    m_tableWidthsDirty = true;
 }
 
 void TextEngine::ResetZoom() {
     m_fontSize = 13.0f;
     SafeRelease(m_fontCustom);
+    m_tableWidthsDirty = true;
 }
 
 bool TextEngine::UpdateAnimation(float dt) {
@@ -942,6 +977,7 @@ void TextEngine::NoteUndoEdit(int kind) {
 }
 
 bool TextEngine::Undo() {
+    if (m_readOnly) return false;
     if (m_undoStack.empty()) return false;
     UndoSnapshot cur;
     cur.lines = m_lines;
@@ -961,6 +997,7 @@ bool TextEngine::Undo() {
 }
 
 bool TextEngine::Redo() {
+    if (m_readOnly) return false;
     if (m_redoStack.empty()) return false;
     UndoSnapshot cur;
     cur.lines = m_lines;
@@ -980,6 +1017,7 @@ bool TextEngine::Redo() {
 }
 
 bool TextEngine::DeleteSelection() {
+    if (m_readOnly) return false;
     if (!HasSelection()) return false;
     PushUndo();
 
@@ -1007,6 +1045,7 @@ bool TextEngine::DeleteSelection() {
 }
 
 bool TextEngine::InsertChar(wchar_t ch) {
+    if (m_readOnly) return false;
     const bool hadSelection = HasSelection();
     if (hadSelection) {
         DeleteSelection(); // already records its own snapshot
@@ -1061,6 +1100,7 @@ bool TextEngine::InsertNewline() {
 }
 
 bool TextEngine::DeleteChar(bool backspace) {
+    if (m_readOnly) return false;
     if (HasSelection()) {
         return DeleteSelection();
     }
@@ -1122,6 +1162,11 @@ bool TextEngine::DeleteChar(bool backspace) {
 }
 
 bool TextEngine::Indent(bool unindent) {
+    if (m_readOnly) return false;
+    if (m_lines.empty()) return false;
+    m_cursor.line = std::clamp(m_cursor.line, 0, (int)m_lines.size() - 1);
+    m_cursor.col = std::clamp(m_cursor.col, 0, (int)m_lines[m_cursor.line].length());
+
     PushUndo();
     std::wstring spaces(m_tabSpaces, L' ');
 
@@ -1177,13 +1222,28 @@ bool TextEngine::Copy(HWND hwnd) {
     if (textToCopy.empty()) return false;
 
     if (OpenClipboard(hwnd)) {
-        EmptyClipboard();
         size_t bytes = (textToCopy.length() + 1) * sizeof(wchar_t);
         HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, bytes);
-        if (hMem) {
-            memcpy(GlobalLock(hMem), textToCopy.c_str(), bytes);
-            GlobalUnlock(hMem);
-            SetClipboardData(CF_UNICODETEXT, hMem);
+        if (!hMem) {
+            CloseClipboard();
+            return false;
+        }
+        void* dst = GlobalLock(hMem);
+        if (!dst) {
+            GlobalFree(hMem);
+            CloseClipboard();
+            return false;
+        }
+        memcpy(dst, textToCopy.c_str(), bytes);
+        GlobalUnlock(hMem);
+
+        // Clear the previous clipboard contents only after the replacement buffer
+        // is safely allocated and populated.
+        EmptyClipboard();
+        if (!SetClipboardData(CF_UNICODETEXT, hMem)) {
+            GlobalFree(hMem); // ownership transfers only on success
+            CloseClipboard();
+            return false;
         }
         CloseClipboard();
         return true;
@@ -1192,6 +1252,7 @@ bool TextEngine::Copy(HWND hwnd) {
 }
 
 bool TextEngine::Cut(HWND hwnd) {
+    if (m_readOnly) return false;
     if (!Copy(hwnd)) return false;
 
     if (HasSelection()) {
@@ -1215,6 +1276,7 @@ bool TextEngine::Cut(HWND hwnd) {
 }
 
 bool TextEngine::Paste(HWND hwnd) {
+    if (m_readOnly) return false;
     if (!OpenClipboard(hwnd)) return false;
     HANDLE hData = GetClipboardData(CF_UNICODETEXT);
     if (!hData) {
@@ -1226,7 +1288,11 @@ bool TextEngine::Paste(HWND hwnd) {
         CloseClipboard();
         return false;
     }
-    std::wstring pasted(pText);
+    // Clipboard owners are only conventionally NUL-terminated; bound the read by
+    // the actual HGLOBAL size so a malformed owner cannot leak adjacent memory.
+    SIZE_T globalBytes = GlobalSize(hData);
+    size_t maxChars = (globalBytes >= sizeof(wchar_t)) ? (globalBytes / sizeof(wchar_t)) - 1 : 0;
+    std::wstring pasted(pText, wcsnlen(pText, maxChars));
     GlobalUnlock(hData);
     CloseClipboard();
 
@@ -1282,7 +1348,7 @@ bool TextEngine::Paste(HWND hwnd) {
 }
 
 bool TextEngine::SaveFile() {
-    if (m_filePath.empty()) return false;
+    if (m_filePath.empty() || m_readOnly) return false;
 
     std::wstring eol = (m_lineEndingName == L"LF") ? L"\n" : L"\r\n";
     std::wstring fullText;
@@ -1291,50 +1357,92 @@ bool TextEngine::SaveFile() {
         if (i + 1 < m_lines.size()) fullText += eol;
     }
 
+    // Write to a sibling temp file and atomically replace the original. A failed
+    // encode/write can then never leave a truncated or zero-byte document behind.
+    std::wstring tempPath = m_filePath + L".winpreview.tmp";
+    DeleteFileW(tempPath.c_str());
+
     HANDLE hFile = CreateFileW(
-        m_filePath.c_str(),
+        tempPath.c_str(),
         GENERIC_WRITE,
-        FILE_SHARE_READ,
+        0,
         NULL,
         CREATE_ALWAYS,
-        FILE_ATTRIBUTE_NORMAL,
+        FILE_ATTRIBUTE_TEMPORARY,
         NULL
     );
-
     if (hFile == INVALID_HANDLE_VALUE) return false;
 
-    DWORD written = 0;
+    bool writeOk = true;
+    auto writeBytes = [&](const void* data, DWORD bytes) {
+        if (!writeOk || bytes == 0) return;
+        DWORD written = 0;
+        if (!WriteFile(hFile, data, bytes, &written, NULL) || written != bytes) {
+            writeOk = false;
+        }
+    };
 
     if (m_encodingName == L"UTF-8 (BOM)") {
-        uint8_t bom[3] = { 0xEF, 0xBB, 0xBF };
-        WriteFile(hFile, bom, 3, &written, NULL);
+        const uint8_t bom[3] = { 0xEF, 0xBB, 0xBF };
+        writeBytes(bom, 3);
         int utf8Len = WideCharToMultiByte(CP_UTF8, 0, fullText.c_str(), (int)fullText.length(), NULL, 0, NULL, NULL);
         if (utf8Len > 0) {
             std::string utf8Buf(utf8Len, '\0');
             WideCharToMultiByte(CP_UTF8, 0, fullText.c_str(), (int)fullText.length(), utf8Buf.data(), utf8Len, NULL, NULL);
-            WriteFile(hFile, utf8Buf.data(), utf8Len, &written, NULL);
+            writeBytes(utf8Buf.data(), (DWORD)utf8Len);
         }
     } else if (m_encodingName == L"UTF-16 LE") {
-        uint8_t bom[2] = { 0xFF, 0xFE };
-        WriteFile(hFile, bom, 2, &written, NULL);
-        WriteFile(hFile, fullText.data(), (DWORD)(fullText.length() * sizeof(wchar_t)), &written, NULL);
+        const uint8_t bom[2] = { 0xFF, 0xFE };
+        writeBytes(bom, 2);
+        writeBytes(fullText.data(), (DWORD)(fullText.length() * sizeof(wchar_t)));
+    } else if (m_encodingName == L"UTF-16 BE") {
+        const uint8_t bom[2] = { 0xFE, 0xFF };
+        writeBytes(bom, 2);
+        std::vector<uint8_t> be(fullText.length() * 2);
+        for (size_t i = 0; i < fullText.length(); ++i) {
+            uint16_t unit = (uint16_t)fullText[i];
+            be[i * 2] = (uint8_t)(unit >> 8);
+            be[i * 2 + 1] = (uint8_t)(unit & 0xFF);
+        }
+        if (!be.empty()) writeBytes(be.data(), (DWORD)be.size());
     } else if (m_encodingName == L"ANSI") {
         int ansiLen = WideCharToMultiByte(CP_ACP, 0, fullText.c_str(), (int)fullText.length(), NULL, 0, NULL, NULL);
         if (ansiLen > 0) {
             std::string ansiBuf(ansiLen, '\0');
             WideCharToMultiByte(CP_ACP, 0, fullText.c_str(), (int)fullText.length(), ansiBuf.data(), ansiLen, NULL, NULL);
-            WriteFile(hFile, ansiBuf.data(), ansiLen, &written, NULL);
+            writeBytes(ansiBuf.data(), (DWORD)ansiLen);
         }
     } else { // UTF-8 standard
         int utf8Len = WideCharToMultiByte(CP_UTF8, 0, fullText.c_str(), (int)fullText.length(), NULL, 0, NULL, NULL);
         if (utf8Len > 0) {
             std::string utf8Buf(utf8Len, '\0');
             WideCharToMultiByte(CP_UTF8, 0, fullText.c_str(), (int)fullText.length(), utf8Buf.data(), utf8Len, NULL, NULL);
-            WriteFile(hFile, utf8Buf.data(), utf8Len, &written, NULL);
+            writeBytes(utf8Buf.data(), (DWORD)utf8Len);
         }
     }
 
+    if (writeOk && FlushFileBuffers(hFile)) {
+        // keep writeOk
+    } else {
+        writeOk = false;
+    }
     CloseHandle(hFile);
+
+    if (!writeOk) {
+        DeleteFileW(tempPath.c_str());
+        return false;
+    }
+
+    if (!MoveFileExW(tempPath.c_str(), m_filePath.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        DeleteFileW(tempPath.c_str());
+        return false;
+    }
+
+    m_fileSizeBytes = 0;
+    WIN32_FILE_ATTRIBUTE_DATA attrs{};
+    if (GetFileAttributesExW(m_filePath.c_str(), GetFileExInfoStandard, &attrs)) {
+        m_fileSizeBytes = ((int64_t)attrs.nFileSizeHigh << 32) | attrs.nFileSizeLow;
+    }
     m_isModified = false;
     return true;
 }
@@ -1703,6 +1811,77 @@ void TextEngine::RenderText(
     }
 }
 
+void TextEngine::MeasureTableColumns(D2DEngine& d2d, float dpiScale) {
+    if (m_rows.empty() || m_columnCount <= 0) return;
+
+    IDWriteFactory* dwf = m_dwriteFactory ? m_dwriteFactory : d2d.GetDWriteFactory();
+    IDWriteTextFormat* cellFont = m_fontCustom ? m_fontCustom : d2d.FontMono;
+    IDWriteTextFormat* headFont = d2d.FontButton;
+    if (!dwf || !cellFont) {
+        m_columnWidths.assign(m_columnCount, 85.0f);
+        m_totalTableWidth = m_columnCount * 85.0f;
+        return;
+    }
+
+    // Real text-layout measurement gives exact per-column widths, so cells and
+    // headers never print over neighbors. Rows past the cap use a reciprocal
+    // char-count estimate with the measured mono advance — close enough for a
+    // scroll indicator, and the belt-and-braces per-cell clip in the renderer
+    // guarantees no bleed either way.
+    const int MAX_MEASURE_ROWS = 500;
+    const int MAX_COLS = 24;
+    std::vector<float> maxCellW((size_t)m_columnCount, 0.0f);
+
+    int rowsToMeasure = std::min<int>(MAX_MEASURE_ROWS, (int)m_rows.size());
+    for (int r = 0; r < rowsToMeasure; ++r) {
+        const auto& row = m_rows[r];
+        bool isHeader = (r == 0); // sticky header renders in the proportional UI font
+        IDWriteTextFormat* fmt = isHeader ? headFont : cellFont;
+        if (!fmt) continue;
+        for (int c = 0; c < m_columnCount && c < MAX_COLS; ++c) {
+            const std::wstring& txt = (c < (int)row.size()) ? row[c] : L"";
+            if (txt.empty()) continue;
+            IDWriteTextLayout* layout = nullptr;
+            if (SUCCEEDED(dwf->CreateTextLayout(txt.c_str(), (UINT32)txt.length(), fmt, 10000.0f, 60.0f, &layout)) && layout) {
+                DWRITE_TEXT_METRICS m{};
+                layout->GetMetrics(&m);
+                layout->Release();
+                if (m.widthIncludingTrailingWhitespace > maxCellW[c]) {
+                    maxCellW[c] = m.widthIncludingTrailingWhitespace;
+                }
+            }
+        }
+    }
+
+    // Rows beyond the measurement cap: estimate from char count (mono advance).
+    int countedRows = std::max(0, (int)m_rows.size() - MAX_MEASURE_ROWS);
+    if (countedRows > 0 && dpiScale > 0.05f) {
+        float monoAdvanceDip = GetCharWidth() / dpiScale;
+        for (int r = MAX_MEASURE_ROWS; r < (int)m_rows.size(); ++r) {
+            const auto& row = m_rows[r];
+            for (int c = 0; c < m_columnCount && c < MAX_COLS; ++c) {
+                const std::wstring& txt = (c < (int)row.size()) ? row[c] : L"";
+                float est = (float)txt.length() * monoAdvanceDip;
+                if (est > maxCellW[c]) maxCellW[c] = est;
+            }
+        }
+    }
+
+    // Store widths in DIP (the renderer multiplies by dpiScale at draw time).
+    // Content + horizontal cell padding (8 each side) + 2 breathing room.
+    float total = 0.0f;
+    m_columnWidths.assign(m_columnCount, 85.0f);
+    for (int c = 0; c < m_columnCount && c < MAX_COLS; ++c) {
+        float w = (maxCellW[c] > 0.0f && dpiScale > 0.05f) ? (maxCellW[c] / dpiScale + 18.0f) : 85.0f;
+        w = std::min(320.0f, std::max(56.0f, w));
+        m_columnWidths[c] = w;
+        total += w;
+    }
+    for (int c = MAX_COLS; c < m_columnCount; ++c) total += 85.0f;
+    m_totalTableWidth = total;
+    m_tableWidthsDirty = false;
+}
+
 void TextEngine::RenderSpreadsheet(
     ID2D1RenderTarget* rt,
     D2DEngine& d2d,
@@ -1719,6 +1898,11 @@ void TextEngine::RenderSpreadsheet(
     EnsureFont(dpiScale);
     IDWriteTextFormat* font = m_fontCustom ? m_fontCustom : d2d.FontMono;
     if (!font) font = d2d.FontBody;
+
+    // Auto-fit columns from real text metrics (parse/zoom marks the dirty flag).
+    if (m_tableWidthsDirty) {
+        MeasureTableColumns(d2d, dpiScale);
+    }
 
     float topPadding = GetHeaderTopPadding(dpiScale);
     float gridTop = viewportRect.top + topPadding;
@@ -1774,7 +1958,11 @@ void TextEngine::RenderSpreadsheet(
             if (curX + colW >= viewportRect.left + indexColW && curX <= viewportRect.right) {
                 if (c < (int)rowData.size() && !rowData[c].empty()) {
                     D2D1_RECT_F cellTextRect = D2D1::RectF(curX + 8.0f * dpiScale, rowY, curX + colW - 8.0f * dpiScale, rowY + rowH);
+                    // Per-cell clip: even an unmeasured pathological cell can never
+                    // print over its neighbor's column.
+                    rt->PushAxisAlignedClip(cellTextRect, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
                     rt->DrawText(rowData[c].c_str(), (UINT32)rowData[c].length(), font, cellTextRect, d2d.BrushText);
+                    rt->PopAxisAlignedClip();
                 }
 
                 // Vertical cell divider line
@@ -1851,7 +2039,9 @@ void TextEngine::RenderSpreadsheet(
             if (curX + colW >= viewportRect.left + indexColW && curX <= viewportRect.right) {
                 std::wstring title = (c < (int)headers.size()) ? headers[c] : L"";
                 D2D1_RECT_F hTextRect = D2D1::RectF(curX + 8.0f * dpiScale, gridTop, curX + colW - 8.0f * dpiScale, gridTop + headerH);
+                rt->PushAxisAlignedClip(hTextRect, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
                 rt->DrawText(title.c_str(), (UINT32)title.length(), d2d.FontButton, hTextRect, d2d.BrushText);
+                rt->PopAxisAlignedClip();
 
                 rt->DrawLine(
                     D2D1::Point2F(curX + colW, viewportRect.top + 3.0f),
@@ -1867,3 +2057,6 @@ void TextEngine::RenderSpreadsheet(
 }
 
 } // namespace WinPreview
+
+
+

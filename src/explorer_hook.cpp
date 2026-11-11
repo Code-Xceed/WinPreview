@@ -1,4 +1,4 @@
-#include "explorer_hook.h"
+﻿#include "explorer_hook.h"
 #include <shellapi.h>
 #include <shlobj.h>
 #include <exdisp.h>
@@ -9,14 +9,25 @@
 
 namespace WinPreview {
 
-static HHOOK g_hKeyboardHook = NULL;
-static HWND g_hTargetHwnd = NULL;
+static std::atomic<HHOOK> g_hKeyboardHook{ nullptr };
+static std::atomic<HWND> g_hTargetHwnd{ nullptr };
 static DWORD g_lastSpaceTime = 0;
 static HotkeyConfig g_hotkeyConfig;
 static bool g_hotkeyConfigLoaded = false;
+// Atomic POD snapshot of the hotkey, read from inside the WH_KEYBOARD_LL
+// callback. The std::wstring-bearing HotkeyConfig must never be copied there
+// while the UI thread can rewrite it.
+static std::atomic<unsigned int> g_hotkeyPacked{ 0 };
 static std::atomic<bool> g_suppressSpaceClose{false};
 static std::atomic<bool> g_synthesizingSpace{false};
 static const wchar_t* REG_KEY_SETTINGS = L"Software\\WinPreview\\Settings";
+
+static unsigned int PackHotkeyPOD(const HotkeyConfig& cfg) {
+    return (1u << 31) |
+           (((unsigned int)cfg.vkCode & 0xFFu) << 8) |
+           (cfg.ctrl ? 1u : 0u) | (cfg.alt ? 2u : 0u) |
+           (cfg.shift ? 4u : 0u) | (cfg.win ? 8u : 0u);
+}
 
 void ExplorerHook::SetSuppressSpaceClose(bool suppress) {
     g_suppressSpaceClose.store(suppress, std::memory_order_relaxed);
@@ -29,9 +40,9 @@ void ExplorerHook::PassSynthesizedSpace() {
 }
 
 static HANDLE g_hHookThread = NULL;
-static DWORD g_hookThreadId = 0;
+static std::atomic<DWORD> g_hookThreadId{ 0 };
 static HANDLE g_hHookReadyEvent = NULL;
-static DWORD s_cachedShellPid = 0;
+static std::atomic<DWORD> s_cachedShellPid{ 0 };
 
 
 HotkeyConfig ExplorerHook::GetHotkeyConfig() {
@@ -42,9 +53,11 @@ HotkeyConfig ExplorerHook::GetHotkeyConfig() {
 void ExplorerHook::SetHotkeyConfig(const HotkeyConfig& config) {
     g_hotkeyConfig = config;
     g_hotkeyConfigLoaded = true;
+    g_hotkeyPacked.store(PackHotkeyPOD(config), std::memory_order_release);
     SaveHotkeyConfig();
-    if (g_hTargetHwnd) {
-        ReapplyRegisteredHotkey(g_hTargetHwnd);
+    HWND target = g_hTargetHwnd.load(std::memory_order_acquire);
+    if (target) {
+        ReapplyRegisteredHotkey(target);
     }
 }
 
@@ -83,6 +96,7 @@ void ExplorerHook::LoadHotkeyConfig() {
         SaveHotkeyConfig();
     }
     g_hotkeyConfigLoaded = true;
+    g_hotkeyPacked.store(PackHotkeyPOD(g_hotkeyConfig), std::memory_order_release);
 }
 
 void ExplorerHook::SaveHotkeyConfig() {
@@ -344,11 +358,12 @@ bool ExplorerHook::GetSelectedExplorerPath(std::wstring& outPath) {
     if (!isDesktop && !isExplorer && topHwnd) {
         DWORD topPid = 0;
         GetWindowThreadProcessId(topHwnd, &topPid);
-        if (s_cachedShellPid == 0) {
+        if (s_cachedShellPid.load(std::memory_order_relaxed) == 0) {
             HWND hShell = GetShellWindow();
-            if (hShell) GetWindowThreadProcessId(hShell, &s_cachedShellPid);
+            if (hShell) { DWORD pid = 0; GetWindowThreadProcessId(hShell, &pid); s_cachedShellPid.store(pid, std::memory_order_relaxed); }
         }
-        if (s_cachedShellPid != 0 && topPid == s_cachedShellPid) {
+        if (s_cachedShellPid.load(std::memory_order_relaxed) != 0 &&
+            topPid == s_cachedShellPid.load(std::memory_order_relaxed)) {
             isExplorer = true;
         }
     }
@@ -753,21 +768,34 @@ bool ExplorerHook::SelectExplorerItem(const std::wstring& itemPath) {
 
 static LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
     if (nCode == HC_ACTION && (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN)) {
-        if (g_synthesizingSpace.exchange(false, std::memory_order_acq_rel)) {
-            return CallNextHookEx(g_hKeyboardHook, nCode, wParam, lParam);
+        KBDLLHOOKSTRUCT* pkb = (KBDLLHOOKSTRUCT*)lParam;
+        if (!pkb) return CallNextHookEx(g_hKeyboardHook.load(std::memory_order_relaxed), nCode, wParam, lParam);
+
+        // Only the injected Space event may consume the pass-through flag; a real
+        // key pressed while the synthetic event is queued must not clear it.
+        if (pkb->vkCode == VK_SPACE && (pkb->flags & LLKHF_INJECTED) &&
+            g_synthesizingSpace.exchange(false, std::memory_order_acq_rel)) {
+            return CallNextHookEx(g_hKeyboardHook.load(std::memory_order_relaxed), nCode, wParam, lParam);
         }
 
-        KBDLLHOOKSTRUCT* pkb = (KBDLLHOOKSTRUCT*)lParam;
-        if (!pkb) return CallNextHookEx(g_hKeyboardHook, nCode, wParam, lParam);
-
-        if (!g_hotkeyConfigLoaded) ExplorerHook::LoadHotkeyConfig();
-        const HotkeyConfig curCfg = g_hotkeyConfig;
+        // Snapshot the hotkey as a lock-free POD. LoadHotkeyConfig() runs on the
+        // UI thread only; doing registry I/O or copying a std::wstring here would
+        // both race and risk the 1-second LowLevelHooksTimeout unhook.
+        const unsigned int packed = g_hotkeyPacked.load(std::memory_order_acquire);
+        const bool cfgLoaded = (packed & (1u << 31)) != 0;
+        const UINT hotVk = cfgLoaded ? (UINT)((packed >> 8) & 0xFFu) : (UINT)VK_SPACE;
+        const bool hotCtrl = cfgLoaded && (packed & 1u);
+        const bool hotAlt = cfgLoaded && (packed & 2u);
+        const bool hotShift = cfgLoaded && (packed & 4u);
+        const bool hotWin = cfgLoaded && (packed & 8u);
+        const HWND target = g_hTargetHwnd.load(std::memory_order_acquire);
+        HHOOK hook = g_hKeyboardHook.load(std::memory_order_relaxed);
 
         // ULTRA-FAST SHORT CIRCUIT: If key does not match target hotkey,
         // check only escape/arrows if WinPreview is visible, otherwise return IMMEDIATELY.
         // Takes < 0.001 ms, zero GetAsyncKeyState calls, eliminates typing lag in all apps!
-        if (pkb->vkCode != curCfg.vkCode) {
-            if (g_hTargetHwnd && IsWindow(g_hTargetHwnd) && IsWindowVisible(g_hTargetHwnd)) {
+        if (pkb->vkCode != hotVk) {
+            if (target && IsWindow(target) && IsWindowVisible(target)) {
                 if (pkb->vkCode == VK_ESCAPE) {
                     // Close the preview only when the user is interacting with it
                     // (or with the Explorer session it overlays). If focus has
@@ -777,7 +805,7 @@ static LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lP
                     HWND topHwnd = fgHwnd ? GetAncestor(fgHwnd, GA_ROOT) : NULL;
                     if (!fgHwnd) topHwnd = NULL;
 
-                    bool previewFocused = (fgHwnd == g_hTargetHwnd) || (topHwnd == g_hTargetHwnd);
+                    bool previewFocused = (fgHwnd == target) || (topHwnd == target);
                     bool explorerFocused = false;
                     if (!previewFocused && fgHwnd) {
                         WCHAR clsTop[64] = {}, clsFg[64] = {};
@@ -794,19 +822,19 @@ static LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lP
                     }
 
                     if (previewFocused || explorerFocused) {
-                        PostMessageW(g_hTargetHwnd, ExplorerHook::WM_WINPREVIEW_CLOSE, 0, 0);
+                        PostMessageW(target, ExplorerHook::WM_WINPREVIEW_CLOSE, 0, 0);
                         return 1;
                     }
-                    return CallNextHookEx(g_hKeyboardHook, nCode, wParam, lParam);
+                    return CallNextHookEx(hook, nCode, wParam, lParam);
                 }
                 else if (pkb->vkCode == VK_UP || pkb->vkCode == VK_DOWN || pkb->vkCode == VK_LEFT || pkb->vkCode == VK_RIGHT) {
                     HWND fgHwnd = GetForegroundWindow();
-                    if (fgHwnd != g_hTargetHwnd) {
-                        PostMessageW(g_hTargetHwnd, ExplorerHook::WM_WINPREVIEW_EXPLORER_NAV, 1, 0);
+                    if (fgHwnd != target) {
+                        PostMessageW(target, ExplorerHook::WM_WINPREVIEW_EXPLORER_NAV, 1, 0);
                     }
                 }
             }
-            return CallNextHookEx(g_hKeyboardHook, nCode, wParam, lParam);
+            return CallNextHookEx(hook, nCode, wParam, lParam);
         }
 
         // Key matches target hotkey: now check modifiers
@@ -815,13 +843,13 @@ static LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lP
         bool isShiftDown = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
         bool isWinDown = ((GetAsyncKeyState(VK_LWIN) & 0x8000) != 0) || ((GetAsyncKeyState(VK_RWIN) & 0x8000) != 0);
 
-        if (isCtrlDown != curCfg.ctrl || isAltDown != curCfg.alt ||
-            isShiftDown != curCfg.shift || isWinDown != curCfg.win) {
-            return CallNextHookEx(g_hKeyboardHook, nCode, wParam, lParam);
+        if (isCtrlDown != hotCtrl || isAltDown != hotAlt ||
+            isShiftDown != hotShift || isWinDown != hotWin) {
+            return CallNextHookEx(hook, nCode, wParam, lParam);
         }
 
-        if (!g_hTargetHwnd || !IsWindow(g_hTargetHwnd)) {
-            return CallNextHookEx(g_hKeyboardHook, nCode, wParam, lParam);
+        if (!target || !IsWindow(target)) {
+            return CallNextHookEx(hook, nCode, wParam, lParam);
         }
 
         DWORD now = GetTickCount();
@@ -830,23 +858,23 @@ static LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lP
         }
 
         HWND fgHwnd = GetForegroundWindow();
-        if (!fgHwnd) return CallNextHookEx(g_hKeyboardHook, nCode, wParam, lParam);
+        if (!fgHwnd) return CallNextHookEx(hook, nCode, wParam, lParam);
 
         HWND topHwnd = GetAncestor(fgHwnd, GA_ROOT);
         if (!topHwnd) topHwnd = fgHwnd;
 
         // 1. If WinPreview itself is the active foreground window
-        if (fgHwnd == g_hTargetHwnd || topHwnd == g_hTargetHwnd) {
+        if (fgHwnd == target || topHwnd == target) {
             if (g_suppressSpaceClose.load(std::memory_order_relaxed)) {
-                return CallNextHookEx(g_hKeyboardHook, nCode, wParam, lParam);
+                return CallNextHookEx(hook, nCode, wParam, lParam);
             }
             g_lastSpaceTime = now;
-            PostMessageW(g_hTargetHwnd, ExplorerHook::WM_WINPREVIEW_CLOSE, 0, 0);
+            PostMessageW(target, ExplorerHook::WM_WINPREVIEW_CLOSE, 0, 0);
             return 1; // Handled & swallowed
         }
 
         // 2. WinPreview is hidden. Check if foreground is File Explorer or Desktop:
-        bool isBareSpace = (curCfg.vkCode == VK_SPACE && !curCfg.ctrl && !curCfg.alt && !curCfg.shift && !curCfg.win);
+        bool isBareSpace = (hotVk == VK_SPACE && !hotCtrl && !hotAlt && !hotShift && !hotWin);
 
         if (isBareSpace) {
             WCHAR clsTop[64] = {};
@@ -858,53 +886,82 @@ static LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lP
                                         wcscmp(clsTop, L"ShellTabWindowClass") == 0 || wcscmp(clsFg, L"ShellTabWindowClass") == 0 ||
                                         wcscmp(clsTop, L"XamlExplorerHostIslandWindow") == 0 || wcscmp(clsFg, L"XamlExplorerHostIslandWindow") == 0 ||
                                         wcscmp(clsTop, L"Progman") == 0 || wcscmp(clsTop, L"WorkerW") == 0 ||
-                                        wcscmp(clsFg, L"Progman") == 0 || wcscmp(clsFg, L"WorkerW") == 0 ||
-                                        wcscmp(clsTop, L"Shell_TrayWnd") == 0 || wcscmp(clsFg, L"Shell_TrayWnd") == 0 ||
-                                        wcscmp(clsTop, L"#32770") == 0 || wcscmp(clsFg, L"#32770") == 0);
+                                        wcscmp(clsFg, L"Progman") == 0 || wcscmp(clsFg, L"WorkerW") == 0);
+
+            // The taskbar, notification area and any shell dialog (#32770) live in
+            // explorer.exe too, but Space there activates buttons/tray items. Never
+            // hijack those — the old allow-list handled them as "Explorer".
+            bool isShellChrome = (wcscmp(clsTop, L"Shell_TrayWnd") == 0 || wcscmp(clsFg, L"Shell_TrayWnd") == 0 ||
+                                  wcscmp(clsTop, L"NotifyIconOverflowWindow") == 0 ||
+                                  wcscmp(clsTop, L"TaskListThumbnailWnd") == 0 ||
+                                  wcscmp(clsTop, L"#32770") == 0 || wcscmp(clsFg, L"#32770") == 0 ||
+                                  wcscmp(clsTop, L"ForegroundStaging") == 0 ||
+                                  wcscmp(clsFg, L"Windows.UI.Core.CoreWindow") == 0);
+            if (isShellChrome) {
+                return CallNextHookEx(hook, nCode, wParam, lParam);
+            }
 
             if (!isExplorerOrDesktop) {
-                if (s_cachedShellPid == 0) {
+                if (s_cachedShellPid.load(std::memory_order_relaxed) == 0) {
                     HWND hShell = GetShellWindow();
-                    if (hShell) GetWindowThreadProcessId(hShell, &s_cachedShellPid);
+                    if (hShell) { DWORD pid = 0; GetWindowThreadProcessId(hShell, &pid); s_cachedShellPid.store(pid, std::memory_order_relaxed); }
                 }
                 DWORD fgPid = 0;
                 GetWindowThreadProcessId(topHwnd, &fgPid);
-                if (s_cachedShellPid != 0 && fgPid == s_cachedShellPid) {
+                if (s_cachedShellPid.load(std::memory_order_relaxed) != 0 && fgPid == s_cachedShellPid.load(std::memory_order_relaxed)) {
                     isExplorerOrDesktop = true;
                 }
             }
 
             if (!isExplorerOrDesktop) {
-                return CallNextHookEx(g_hKeyboardHook, nCode, wParam, lParam);
+                return CallNextHookEx(hook, nCode, wParam, lParam);
             }
 
-            // In Explorer/Desktop: if user is typing in an Edit control (renaming file, search box)
-            GUITHREADINFO gti = { sizeof(GUITHREADINFO) };
+            // In Explorer/Desktop: if the user is typing (rename/search) or the
+            // focus is a button/toolbar, Space belongs to that control.
+            GUITHREADINFO gti{};
+            gti.cbSize = sizeof(gti);
             DWORD fgThread = GetWindowThreadProcessId(fgHwnd, NULL);
             if (GetGUIThreadInfo(fgThread, &gti) && gti.hwndFocus) {
                 WCHAR focusCls[64] = {};
                 GetClassNameW(gti.hwndFocus, focusCls, 64);
                 if (_wcsicmp(focusCls, L"Edit") == 0 || _wcsicmp(focusCls, L"RichEdit") == 0 ||
-                    _wcsicmp(focusCls, L"RICHEDIT50W") == 0 || _wcsicmp(focusCls, L"SearchBox") == 0) {
-                    return CallNextHookEx(g_hKeyboardHook, nCode, wParam, lParam);
+                    _wcsicmp(focusCls, L"RICHEDIT50W") == 0 || _wcsicmp(focusCls, L"SearchBox") == 0 ||
+                    _wcsicmp(focusCls, L"Button") == 0 || _wcsicmp(focusCls, L"ToolbarWindow32") == 0 ||
+                    _wcsicmp(focusCls, L"ComboBox") == 0 || _wcsicmp(focusCls, L"ComboBoxEx32") == 0) {
+                    return CallNextHookEx(hook, nCode, wParam, lParam);
+                }
+
+                // File list must actually own focus for a QuickLook trigger.
+                bool isCabinet = (wcscmp(clsTop, L"CabinetWClass") == 0 || wcscmp(clsTop, L"ExploreWClass") == 0 ||
+                                  wcscmp(clsTop, L"ShellTabWindowClass") == 0 || wcscmp(clsFg, L"ShellTabWindowClass") == 0);
+                if (isCabinet) {
+                    bool listFocused = (_wcsicmp(focusCls, L"DirectUIHWND") == 0 ||
+                                        _wcsicmp(focusCls, L"SysListView32") == 0 ||
+                                        _wcsicmp(focusCls, L"SHELLDLL_DefView") == 0);
+                    if (!listFocused) {
+                        return CallNextHookEx(hook, nCode, wParam, lParam);
+                    }
                 }
             }
         }
 
         g_lastSpaceTime = now;
-        PostMessageW(g_hTargetHwnd, ExplorerHook::WM_WINPREVIEW_EXPLORER_SPACE, 0, 0);
+        PostMessageW(target, ExplorerHook::WM_WINPREVIEW_EXPLORER_SPACE, 0, 0);
         return 1; // Eat the keystroke
     }
-    return CallNextHookEx(g_hKeyboardHook, nCode, wParam, lParam);
+    return CallNextHookEx(g_hKeyboardHook.load(std::memory_order_relaxed), nCode, wParam, lParam);
 }
 
 static DWORD WINAPI HookThreadProc(LPVOID lpParam) {
+    (void)lpParam;
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
 
     MSG msg;
     PeekMessageW(&msg, NULL, WM_USER, WM_USER, PM_NOREMOVE);
 
-    g_hKeyboardHook = SetWindowsHookExW(WH_KEYBOARD_LL, LowLevelKeyboardProc, GetModuleHandleW(NULL), 0);
+    HHOOK hook = SetWindowsHookExW(WH_KEYBOARD_LL, LowLevelKeyboardProc, GetModuleHandleW(NULL), 0);
+    g_hKeyboardHook.store(hook, std::memory_order_release);
 
     if (g_hHookReadyEvent) {
         SetEvent(g_hHookReadyEvent);
@@ -916,64 +973,85 @@ static DWORD WINAPI HookThreadProc(LPVOID lpParam) {
         DispatchMessageW(&msg);
     }
 
-    if (g_hKeyboardHook) {
-        UnhookWindowsHookEx(g_hKeyboardHook);
-        g_hKeyboardHook = NULL;
+    if (hook) {
+        UnhookWindowsHookEx(hook);
+        // Only clear the global if it still refers to *this* thread's hook.
+        HHOOK expected = hook;
+        g_hKeyboardHook.compare_exchange_strong(expected, nullptr);
     }
+    g_hookThreadId.store(0, std::memory_order_release);
     return 0;
 }
 
 bool ExplorerHook::InstallHook(HWND targetHwnd) {
-    g_hTargetHwnd = targetHwnd;
+    if (!targetHwnd || !IsWindow(targetHwnd)) return false;
+
+    g_hTargetHwnd.store(targetHwnd, std::memory_order_release);
     LoadHotkeyConfig();
     ReapplyRegisteredHotkey(targetHwnd);
 
     // If hook thread already running and valid, keep it
-    if (g_hHookThread != NULL && WaitForSingleObject(g_hHookThread, 0) == WAIT_TIMEOUT && g_hKeyboardHook != NULL) {
+    if (g_hHookThread != NULL && WaitForSingleObject(g_hHookThread, 0) == WAIT_TIMEOUT &&
+        g_hKeyboardHook.load(std::memory_order_acquire) != NULL) {
         return true;
     }
 
-    // Clean up any stale thread
+    // Clean up any stale thread. If it refuses to exit, do NOT start a second
+    // hook: two live WH_KEYBOARD_LL hooks would double-consume Space.
     UninstallHook();
-    g_hTargetHwnd = targetHwnd;
+    if (g_hHookThread != NULL) return false;
+    g_hTargetHwnd.store(targetHwnd, std::memory_order_release);
 
     g_hHookReadyEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
-    g_hHookThread = CreateThread(NULL, 0, HookThreadProc, NULL, 0, &g_hookThreadId);
+    DWORD threadId = 0;
+    g_hHookThread = CreateThread(NULL, 0, HookThreadProc, NULL, 0, &threadId);
     if (!g_hHookThread) {
         if (g_hHookReadyEvent) { CloseHandle(g_hHookReadyEvent); g_hHookReadyEvent = NULL; }
         return false;
     }
+    g_hookThreadId.store(threadId, std::memory_order_release);
 
-    WaitForSingleObject(g_hHookReadyEvent, 50); // Fast 50ms wait instead of 500ms
+    WaitForSingleObject(g_hHookReadyEvent, 250);
     CloseHandle(g_hHookReadyEvent);
     g_hHookReadyEvent = NULL;
 
-    return (g_hKeyboardHook != NULL);
+    return (g_hKeyboardHook.load(std::memory_order_acquire) != NULL);
 }
 
 void ExplorerHook::UninstallHook() {
-    if (g_hTargetHwnd && IsWindow(g_hTargetHwnd)) {
-        UnregisterHotKey(g_hTargetHwnd, HOTKEY_ID);
+    HWND target = g_hTargetHwnd.load(std::memory_order_acquire);
+    if (target && IsWindow(target)) {
+        UnregisterHotKey(target, HOTKEY_ID);
     }
-    if (g_hookThreadId != 0) {
-        PostThreadMessageW(g_hookThreadId, WM_QUIT, 0, 0);
-        g_hookThreadId = 0;
+
+    DWORD threadId = g_hookThreadId.load(std::memory_order_acquire);
+    if (threadId != 0) {
+        PostThreadMessageW(threadId, WM_QUIT, 0, 0);
     }
+
     if (g_hHookThread != NULL) {
-        WaitForSingleObject(g_hHookThread, 1000);
-        CloseHandle(g_hHookThread);
-        g_hHookThread = NULL;
+        DWORD wait = WaitForSingleObject(g_hHookThread, 2000);
+        if (wait == WAIT_OBJECT_0) {
+            CloseHandle(g_hHookThread);
+            g_hHookThread = NULL;
+            g_hookThreadId.store(0, std::memory_order_release);
+            g_hKeyboardHook.store(nullptr, std::memory_order_release);
+        }
+        // On timeout, keep the handle and hook state intact so InstallHook()
+        // refuses to create a duplicate. The process exits shortly afterwards.
+    } else {
+        g_hKeyboardHook.store(nullptr, std::memory_order_release);
+        g_hookThreadId.store(0, std::memory_order_release);
     }
-    g_hKeyboardHook = NULL;
 }
 
 void ExplorerHook::EnsureHookActive(HWND targetHwnd) {
     if (!targetHwnd || !IsWindow(targetHwnd)) return;
-    s_cachedShellPid = 0; // Invalidate cached shell PID so Explorer restarts/session changes are handled immediately
-    g_hTargetHwnd = targetHwnd;
+    s_cachedShellPid.store(0, std::memory_order_relaxed); // Invalidate cached shell PID so Explorer restarts/session changes are handled immediately
+    g_hTargetHwnd.store(targetHwnd, std::memory_order_release);
 
     bool threadAlive = (g_hHookThread != NULL && WaitForSingleObject(g_hHookThread, 0) == WAIT_TIMEOUT);
-    if (!threadAlive || g_hKeyboardHook == NULL) {
+    if (!threadAlive || g_hKeyboardHook.load(std::memory_order_acquire) == NULL) {
         InstallHook(targetHwnd);
     } else {
         ReapplyRegisteredHotkey(targetHwnd);
@@ -981,7 +1059,8 @@ void ExplorerHook::EnsureHookActive(HWND targetHwnd) {
 }
 
 bool ExplorerHook::IsHookInstalled() {
-    return (g_hKeyboardHook != NULL && g_hHookThread != NULL && WaitForSingleObject(g_hHookThread, 0) == WAIT_TIMEOUT);
+    return (g_hKeyboardHook.load(std::memory_order_acquire) != NULL &&
+            g_hHookThread != NULL && WaitForSingleObject(g_hHookThread, 0) == WAIT_TIMEOUT);
 }
 
 bool ExplorerHook::ForwardFileToExistingInstance(const std::wstring& filePath) {
@@ -1004,3 +1083,5 @@ bool ExplorerHook::ForwardFileToExistingInstance(const std::wstring& filePath) {
 }
 
 } // namespace WinPreview
+
+

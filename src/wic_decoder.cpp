@@ -346,7 +346,7 @@ bool WicDecoder::LoadImageFromFile(
     SafeRelease(frame);
     SafeRelease(decoder);
 
-    return SUCCEEDED(hr);
+    return SUCCEEDED(hr) && *outBitmap != nullptr;
 }
 
 bool WicDecoder::CreateThumbnail(
@@ -375,6 +375,11 @@ bool WicDecoder::CreateThumbnail(
 
     UINT width = 0, height = 0;
     frame->GetSize(&width, &height);
+    if (width == 0 || height == 0) {
+        SafeRelease(frame);
+        SafeRelease(decoder);
+        return false;
+    }
 
     UINT targetW = maxDimension;
     UINT targetH = maxDimension;
@@ -559,6 +564,11 @@ bool WicDecoder::SaveImage(
 
     UINT origW = 0, origH = 0;
     frame->GetSize(&origW, &origH);
+    if (origW == 0 || origH == 0) {
+        SafeRelease(frame);
+        SafeRelease(decoder);
+        return false;
+    }
 
     IWICBitmapSource* currentSource = frame;
     currentSource->AddRef();
@@ -623,10 +633,16 @@ bool WicDecoder::SaveImage(
         containerGUID = GUID_ContainerFormatTiff;
     }
 
+    // Encode to a sibling temp file and atomically replace the destination. This
+    // makes Ctrl+S (dest == source) safe, and a failed encode can never leave a
+    // truncated/zero-byte image behind.
+    std::wstring tempPath = outPath + L".winpreview.tmp";
+    DeleteFileW(tempPath.c_str());
+
     IWICStream* stream = nullptr;
     hr = factory->CreateStream(&stream);
     if (SUCCEEDED(hr)) {
-        hr = stream->InitializeFromFilename(outPath.c_str(), GENERIC_WRITE);
+        hr = stream->InitializeFromFilename(tempPath.c_str(), GENERIC_WRITE);
     }
 
     IWICBitmapEncoder* encoder = nullptr;
@@ -666,6 +682,7 @@ bool WicDecoder::SaveImage(
         hr = encoder->Commit();
     }
 
+    bool ok = SUCCEEDED(hr);
     SafeRelease(propBag);
     SafeRelease(frameEncode);
     SafeRelease(encoder);
@@ -674,7 +691,17 @@ bool WicDecoder::SaveImage(
     SafeRelease(frame);
     SafeRelease(decoder);
 
-    return SUCCEEDED(hr);
+    if (!ok) {
+        DeleteFileW(tempPath.c_str());
+        return false;
+    }
+
+    if (!MoveFileExW(tempPath.c_str(), outPath.c_str(),
+                     MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        DeleteFileW(tempPath.c_str());
+        return false;
+    }
+    return true;
 }
 
 bool WicDecoder::LoadShellThumbnail(

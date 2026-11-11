@@ -6,6 +6,12 @@ obj/
 *.exe
 *.dll
 !src/pdfium.dll
+!src/libheif-*.dll
+!src/libde265-*.dll
+!src/libx265-*.dll
+!src/libstdc++-*.dll
+!src/libgcc_s_*.dll
+!src/libwinpthread-*.dll
 *.res
 *.obj
 *.o
@@ -13,23 +19,13 @@ obj/
 *.ilk
 
 # Non-software & development directories
-docs/
-tests/
-samples/
 research/
 scratch/
 .freebuff/
+.cloud-attachments/
 .vs/
 .vscode/
 .idea/
-
-# Internal governance & formatting files
-.clang-format
-.editorconfig
-CHANGELOG.md
-CODE_OF_CONDUCT.md
-CONTRIBUTING.md
-SECURITY.md
 
 # Logs & Temporary Files
 *.log

@@ -158,7 +158,8 @@ bool MediaEngine::Initialize(HWND parentHwnd) {
     if (!m_vlc) return false;
 
     // Register child window class
-    WNDCLASSEXW wc = { sizeof(WNDCLASSEXW) };
+    WNDCLASSEXW wc{};
+    wc.cbSize = sizeof(wc);
     wc.lpfnWndProc = VideoWndProc;
     wc.hInstance = GetModuleHandle(NULL);
     wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
@@ -178,6 +179,7 @@ bool MediaEngine::Initialize(HWND parentHwnd) {
         GetModuleHandle(NULL),
         NULL
     );
+    if (!m_videoHwnd) return false;
 
     SetWindowLongPtr(m_videoHwnd, GWLP_USERDATA, (LONG_PTR)this);
     return true;
@@ -185,7 +187,11 @@ bool MediaEngine::Initialize(HWND parentHwnd) {
 
 bool MediaEngine::OpenMedia(const std::wstring& filePath) {
     std::lock_guard<std::recursive_mutex> lock(m_mediaMutex);
-    if (!m_vlc) return false;
+    if (!m_vlc || !m_videoHwnd) return false;
+    if (!fn_libvlc_media_new_path || !fn_libvlc_media_release ||
+        !fn_libvlc_media_player_new_from_media || !fn_libvlc_media_player_play) {
+        return false;
+    }
     CloseMedia();
 
     // Convert path to UTF-8
@@ -204,7 +210,7 @@ bool MediaEngine::OpenMedia(const std::wstring& filePath) {
     if (!m_mp) return false;
 
     fn_libvlc_media_player_set_hwnd(m_mp, (void*)m_videoHwnd);
-    fn_libvlc_audio_set_volume(m_mp, m_lastVolume);
+    if (fn_libvlc_audio_set_volume) fn_libvlc_audio_set_volume(m_mp, m_lastVolume);
     m_hasStarted = false;
     m_pendingSeek = -1.0f;
 
@@ -240,8 +246,8 @@ void MediaEngine::CloseMedia() {
         if (fn_libvlc_media_player_set_hwnd) {
             fn_libvlc_media_player_set_hwnd(m_mp, nullptr);
         }
-        fn_libvlc_media_player_stop(m_mp);
-        fn_libvlc_media_player_release(m_mp);
+        if (fn_libvlc_media_player_stop) fn_libvlc_media_player_stop(m_mp);
+        if (fn_libvlc_media_player_release) fn_libvlc_media_player_release(m_mp);
         m_mp = nullptr;
     }
     m_hasStarted = false;

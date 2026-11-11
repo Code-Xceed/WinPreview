@@ -37,7 +37,6 @@ void FontEngine::ParseNameTable(const void* tableData, UINT32 tableSize) {
     if (!tableData || tableSize < 6) return;
     const uint8_t* data = (const uint8_t*)tableData;
 
-    UINT16 format = ReadBE16(data);
     UINT16 count = ReadBE16(data + 2);
     UINT16 stringOffset = ReadBE16(data + 4);
 
@@ -184,7 +183,6 @@ void FontEngine::Render(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D1_RECT_F
     if (!rt || !m_isLoaded) return;
 
     float clientW = targetRect.right - targetRect.left;
-    float clientH = targetRect.bottom - targetRect.top;
     float marginX = (std::max)(48.0f, (clientW - 860.0f) / 2.0f);
     float textW = clientW - marginX * 2.0f;
 
@@ -267,14 +265,20 @@ void FontEngine::Render(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D1_RECT_F
         }
         curY += 22.0f;
 
-        // Specimen text
+        // Specimen text — advance by the MEASURED layout height, not the fixed
+        // row height, so a wrapped specimen (42 PT at narrow widths) pushes the
+        // next section down instead of printing over it.
         IDWriteTextLayout* textLayout = nullptr;
-        d2d.GetDWriteFactory()->CreateTextLayout(row.text, (UINT32)wcslen(row.text), row.format, textW, row.height, &textLayout);
+        d2d.GetDWriteFactory()->CreateTextLayout(row.text, (UINT32)wcslen(row.text), row.format, textW, 400.0f, &textLayout);
+        float usedH = row.height;
         if (textLayout) {
+            DWRITE_TEXT_METRICS sm{};
+            textLayout->GetMetrics(&sm);
+            if (sm.height > usedH) usedH = sm.height;
             rt->DrawTextLayout(D2D1::Point2F(marginX, curY), textLayout, d2d.BrushText);
             textLayout->Release();
         }
-        curY += row.height + 18.0f;
+        curY += usedH + 18.0f;
 
         rt->DrawLine(D2D1::Point2F(marginX, curY - 8.0f), D2D1::Point2F(marginX + textW, curY - 8.0f), d2d.BrushBorderSubtle, 0.6f);
     }

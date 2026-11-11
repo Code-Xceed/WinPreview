@@ -33,14 +33,30 @@ void MarkdownEngine::Close() {
     m_kernelName.clear();
 }
 
-bool MarkdownEngine::LoadMarkdownFile(const std::wstring& filePath) {
-    Close();
-    std::ifstream file(filePath.c_str(), std::ios::binary);
+static bool ReadTextFileCapped(const std::wstring& filePath, std::string& outContent) {
+    outContent.clear();
+    std::ifstream file(filePath.c_str(), std::ios::binary | std::ios::ate);
     if (!file.is_open()) return false;
 
-    std::stringstream buffer;
-    buffer << file.rdbuf();
-    std::string content = buffer.str();
+    std::streamoff size = file.tellg();
+    // A preview must never try to materialize a multi-GB Markdown/notebook file.
+    constexpr std::streamoff kMaxBytes = 32 * 1024 * 1024;
+    if (size < 0 || size > kMaxBytes) return false;
+
+    file.seekg(0, std::ios::beg);
+    if (size == 0) return true;
+
+    outContent.resize((size_t)size);
+    file.read(outContent.data(), size);
+    size_t got = (size_t)file.gcount();
+    outContent.resize(got);
+    return got > 0;
+}
+
+bool MarkdownEngine::LoadMarkdownFile(const std::wstring& filePath) {
+    Close();
+    std::string content;
+    if (!ReadTextFileCapped(filePath, content)) return false;
 
     m_filePath = filePath;
     m_isNotebook = false;
@@ -51,12 +67,8 @@ bool MarkdownEngine::LoadMarkdownFile(const std::wstring& filePath) {
 
 bool MarkdownEngine::LoadNotebookFile(const std::wstring& filePath) {
     Close();
-    std::ifstream file(filePath.c_str(), std::ios::binary);
-    if (!file.is_open()) return false;
-
-    std::stringstream buffer;
-    buffer << file.rdbuf();
-    std::string content = buffer.str();
+    std::string content;
+    if (!ReadTextFileCapped(filePath, content)) return false;
 
     m_filePath = filePath;
     m_isNotebook = true;
@@ -199,6 +211,7 @@ void MarkdownEngine::ParseNotebook(const std::string& rawJson) {
 
         // Parse string lines in source array
         std::wstring cellText;
+        std::string cellUtf8;
         size_t sidx = 0;
         while (true) {
             size_t sq1 = srcSlice.find('\"', sidx);
@@ -223,11 +236,14 @@ void MarkdownEngine::ParseNotebook(const std::string& rawJson) {
                 unescaped += lineStr[c];
             }
             cellText += Utf8ToWide(unescaped);
+            cellUtf8 += unescaped;
             sidx = sq2 + 1;
         }
 
         if (cellType == "markdown") {
-            ParseMarkdown(std::string(cellText.begin(), cellText.end()));
+            // Parse the original UTF-8 bytes: copying a std::wstring through
+            // std::string iterators truncates every non-ASCII character.
+            ParseMarkdown(cellUtf8);
         } else if (cellType == "code") {
             WCHAR promptBuf[32];
             swprintf_s(promptBuf, L"In [%d]:", execIdx);
@@ -307,7 +323,6 @@ void MarkdownEngine::Render(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D1_RE
     rt->PushAxisAlignedClip(targetRect, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
 
     float clientW = targetRect.right - targetRect.left;
-    float clientH = targetRect.bottom - targetRect.top;
     float marginX = (std::max)(48.0f, (clientW - 860.0f) / 2.0f);
     float textW = clientW - marginX * 2.0f;
 

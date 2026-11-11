@@ -1,0 +1,25 @@
+# Normalize text to LF in the repository; check out CRLF for Windows-native files.
+* text=auto
+
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+*.cpp text eol=lf
+*.h text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.iss text eol=crlf
+
+*.dll binary
+*.exe binary
+*.ico binary
+*.png binary
+*.bmp binary
+*.ttf binary
+*.otf binary
+*.mp3 binary
+*.zip binary
+*.pdf binary
+*.cer binary
+*.bin binary

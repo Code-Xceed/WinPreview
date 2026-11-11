@@ -209,6 +209,19 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
                 if (screenshotSimulateUpdate) {
                     app.GetUpdater().SimulateUpdateForTesting();
                 }
+                // Let async document work (PDF raster on its worker thread, WIC decodes,
+                // thumbnail generation) land before the deterministic capture — pump the
+                // message loop until the frame settles or a short deadline elapses.
+                LogTime("Settling async render for screenshot");
+                DWORD settleDeadline = GetTickCount() + 500;
+                while (GetTickCount() < settleDeadline) {
+                    MSG settleMsg;
+                    while (PeekMessageW(&settleMsg, NULL, 0, 0, PM_REMOVE)) {
+                        TranslateMessage(&settleMsg);
+                        DispatchMessageW(&settleMsg);
+                    }
+                    Sleep(10);
+                }
                 LogTime("Calling SaveScreenshot");
                 app.SaveScreenshot(screenshotPath);
                 LogTime("SaveScreenshot completed");

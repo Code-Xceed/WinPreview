@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #include "d2d_engine.h"
 #include <string>
 #include <vector>
@@ -150,6 +150,9 @@ public:
     bool SaveFile();
     bool IsModified() const { return m_isModified; }
     void SetModified(bool mod) { m_isModified = mod; }
+    // True when the file exceeded the safe in-memory load cap. Such documents are
+    // opened read-only so saving can never truncate the untouched tail.
+    bool IsReadOnly() const { return m_readOnly; }
 
     // Status Bar & Indentation
     int GetTabSpaces() const { return m_tabSpaces; }
@@ -197,6 +200,9 @@ private:
     std::vector<float> m_columnWidths;
     int m_columnCount = 0;
     float m_totalTableWidth = 0.0f;
+    // Column auto-fit enumerates cell text with a real text layout; must re-run
+    // after parse and after any zoom (font metrics change with zoom).
+    bool m_tableWidthsDirty = true;
 
     // View Options
     float m_fontSize = 13.0f;
@@ -220,6 +226,7 @@ private:
     bool m_caretVisible = true;
     bool m_isSelectingText = false;
     bool m_isModified = false;
+    bool m_readOnly = false; // file larger than the load cap; never write it back
 
     // Undo / Redo Stacks
     std::vector<UndoSnapshot> m_undoStack;
@@ -237,9 +244,7 @@ private:
     bool m_isDraggingVScroll = false;
     bool m_isDraggingHScroll = false;
     float m_dragStartY = 0.0f;
-    float m_dragStartX = 0.0f;
     float m_initialScrollY = 0.0f;
-    float m_initialScrollX = 0.0f;
 
     // Status bar clickable regions (cached for hit test)
     D2D1_RECT_F m_statusSpacesRect = {};
@@ -266,7 +271,7 @@ private:
     void EnsureFont(float dpiScale);
     void ParseCsv(const std::wstring& content, wchar_t delimiter);
     void DetectLanguage(const std::wstring& ext, const std::wstring& filename = L"");
-    void MeasureTableColumns(IDWriteFactory* dwriteFactory, float dpiScale);
+    void MeasureTableColumns(D2DEngine& d2d, float dpiScale);
 };
 
 } // namespace WinPreview

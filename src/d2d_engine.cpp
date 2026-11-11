@@ -1097,7 +1097,6 @@ void D2DEngine::DrawMicroTooltip(float centerX, float topY, const WCHAR* text, f
     SafeRelease(layout);
 
     float padH = 10.0f;
-    float padV = 5.0f;
     float pillW = textW + padH * 2.0f;
     float pillH = 24.0f;
 
