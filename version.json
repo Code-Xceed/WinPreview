@@ -1,6 +1,6 @@
 {
-  "version": "1.3.1",
+  "version": "1.3.2",
   "release_date": "2026-11-11",
   "download_url": "https://github.com/Code-Xceed/WinPreview/releases/latest/download/WinPreview-Setup-x64.exe",
-  "changelog": "WinPreview v1.3.1 - Production Stability Release: SHA-256 manifest integrity verification for updates, race-free update engine, throttled single startup update check, guaranteed HEIC/HEIF runtime packaging, full version single-source-of-truth pipeline, responsive PDF sidebar and toolbar overflow guards, CSV auto-fit columns, font specimen overlap fixes, and a comprehensive production verification suite covering every document engine."
+  "changelog": "WinPreview v1.3.2 - Interface & Interaction Release: one Lucide-based icon system across every toolbar, panel and the media HUD; redesigned Settings with tab icons and readable rows; Settings and File info now reachable from every format, including folders, archives, certificates, shortcuts, images, PDFs, Office, SVG, Markdown, notebooks, fonts, code, spreadsheets, audio and video; a new More actions menu on the media transport HUD plus right-click on video; controls start visible, fade after 2.5 seconds, reveal on mouse movement and toggle on click everywhere; the HUD now sizes itself to its window so controls never clip; human sentence-case copy throughout; fixed file-info header, close icons and toolbar clipping."
 }

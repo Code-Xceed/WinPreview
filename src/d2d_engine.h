@@ -145,6 +145,18 @@ public:
     void DrawIconSun(float cx, float cy, float size, ID2D1Brush* brush, ID2D1RenderTarget* rt = nullptr);
     void DrawIconClose(float cx, float cy, float size, ID2D1Brush* brush, ID2D1RenderTarget* rt = nullptr);
 
+    // Secondary utility glyphs used by Settings and About.
+    void DrawIconSliders(float cx, float cy, float size, ID2D1Brush* brush, ID2D1RenderTarget* rt = nullptr);
+    void DrawIconKeyboard(float cx, float cy, float size, ID2D1Brush* brush, ID2D1RenderTarget* rt = nullptr);
+    void DrawIconMonitor(float cx, float cy, float size, ID2D1Brush* brush, ID2D1RenderTarget* rt = nullptr);
+    void DrawIconCheck(float cx, float cy, float size, ID2D1Brush* brush, ID2D1RenderTarget* rt = nullptr);
+    void DrawIconChevronDown(float cx, float cy, float size, ID2D1Brush* brush, ID2D1RenderTarget* rt = nullptr);
+    void DrawIconChevronUp(float cx, float cy, float size, ID2D1Brush* brush, ID2D1RenderTarget* rt = nullptr);
+    void DrawIconHelp(float cx, float cy, float size, ID2D1Brush* brush, ID2D1RenderTarget* rt = nullptr);
+
+    // Generic Lucide-derived icon renderer (24x24 grid, shared stroke weight).
+    void DrawIconAsset(int id, float cx, float cy, float size, ID2D1Brush* brush, ID2D1RenderTarget* rt = nullptr);
+
     // Micro-Tooltip Renderer (Smooth Alpha, Direct2D Anti-aliased)
     void DrawMicroTooltip(float centerX, float topY, const WCHAR* text, float alpha, bool above = false);
 
@@ -163,6 +175,9 @@ private:
     HWND m_hwnd = nullptr;
     float m_dpiScale = 1.0f;
     UINT m_dpi = 96;
+    std::vector<ID2D1PathGeometry*> m_iconGeometries;
+
+    ID2D1PathGeometry* GetIconGeometry(int id);
 
     void CreateBrushes();
     void CreateFonts();

@@ -5,6 +5,34 @@ All notable changes to **WinPreview** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.2] - 2026-11-11
+
+### Design system & iconography
+- Replaced every hand-drawn toolbar glyph with a single Lucide-derived vector set (24×24 grid, shared stroke weight, round caps) rendered from cached geometry.
+- One icon language now covers navigation, zoom, rotate, crop, search, file info, settings, fullscreen, overflow, editor actions, media transport, file types and the HUD.
+- Redesigned Settings: iconed tabs, left-aligned titles and descriptions, clearer grouping, and a solid readable modal surface.
+- File Info panel: corrected header (no stray glyph), consistent close icon, simpler “Copy details” action.
+- Consistent sentence-case copy across tooltips, menus, toasts, empty state, About and unsupported-file screens; removed robotic marketing strings.
+
+### Interaction & motion
+- Controls now start visible on open, fade after 2.5 seconds idle, reappear on any mouse movement, and toggle on canvas click — identically for images, PDFs, SVG, Office, fonts, Markdown, notebooks, code, spreadsheets, audio and video.
+- Media: the transport HUD gained a "More actions" button (file info, open with, show in folder, copy path, loop, fullscreen, settings) and the video surface now forwards right-clicks to the same menu.
+- The HUD now takes its layout from its real window size in device pixels, and drops optional controls (log, loop, volume) in priority order instead of clipping them.
+- A `More actions` menu opens on button press and is dismissed by the next click, Escape or WM_CANCELMODE like a normal popup menu.
+- A click that follows a movement reveal keeps the controls instead of hiding them instantly.
+- The auto-hide timer stays armed until the fade completes (previously it parked early, so toolbars sometimes never faded).
+- Toolbar pills slide 6 px while fading; panels, overlays and HUD keep their existing short ease-out motion.
+- Settings is now present on every full toolbar; responsive overflow appears only when an action cannot fit.
+- Removed the accidental “fewer actions at large window sizes” behaviour: full toolbars always expose crop/search/rotate/info/open-with/settings/fullscreen as appropriate.
+
+### Fixes
+- Folders, archives, certificates and shortcuts now share the same File info / Open with / Settings / Fullscreen toolbar as every other format, with an overflow menu when the window is narrow.
+- PDF, code, spreadsheet, SVG, font, Markdown and notebook toolbars no longer clip their rightmost action.
+- Fixed the file-info title drawing two bytes past the string literal.
+- Consistent close affordances (Settings, File Info, Search, Update popup) use the same X icon.
+- Corrected document/editor tooltips and context-menu labels to match the new wording; the context menu gained Open with, Show in folder and Copy path on every format.
+- Certificate and shortcut detail rows use sentence case labels ("Issued to", "Signature algorithm", "Working directory").
+
 ## [1.3.1] - 2026-11-11
 
 ### Stability & data safety

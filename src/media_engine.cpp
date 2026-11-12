@@ -37,6 +37,12 @@ LRESULT CALLBACK MediaEngine::VideoWndProc(HWND hwnd, UINT msg, WPARAM wParam, L
                 SendMessage(parent, WM_MOUSEWHEEL, wParam, lParam);
             }
             return 0;
+        case WM_RBUTTONUP:
+            if (parent) {
+                // Forward right-click so the video surface gets the same context menu
+                SendMessage(parent, WM_APP + 102 /* WM_APP_VIDEO_CONTEXT_MENU */, wParam, lParam);
+            }
+            return 0;
         case WM_KEYDOWN:
             if (parent) {
                 // Forward keyboard navigation

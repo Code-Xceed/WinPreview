@@ -647,11 +647,11 @@ void SystemEngine::Render(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D1_RECT
         rt->DrawRoundedRectangle(rPri, d2d.BrushText, 1.2f);
     }
 
-    std::wstring priText = L"Open File (Enter)";
+    std::wstring priText = L"Open file";
     if (m_itemType == SystemItemType::Binary) {
-        priText = (m_bin.binaryType == L"WINDOWS APPLICATION") ? L"Run Application (Enter)" : L"Open File (Enter)";
+        priText = (m_bin.binaryType == L"WINDOWS APPLICATION") ? L"Run application" : L"Open file";
     } else if (m_itemType == SystemItemType::Shortcut) {
-        priText = m_shortcut.isWebUrl ? L"Open in Browser (Enter)" : L"Open Target (Enter)";
+        priText = m_shortcut.isWebUrl ? L"Open in browser" : L"Open target";
     }
     rt->DrawText(priText.c_str(), (UINT32)priText.length(), d2d.FontButton, m_primaryBtnRect, d2d.BrushText);
 
@@ -659,7 +659,7 @@ void SystemEngine::Render(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D1_RECT
     D2D1_ROUNDED_RECT rSec = D2D1::RoundedRect(m_secondaryBtnRect, 19.0f, 19.0f);
     rt->FillRoundedRectangle(rSec, d2d.BrushCard);
     rt->DrawRoundedRectangle(rSec, (hoveredBtnId == 1002) ? d2d.BrushAccent : d2d.BrushBorder, 1.0f);
-    const wchar_t* secText = L"Show in Folder";
+    const wchar_t* secText = L"Show in folder";
     rt->DrawText(secText, (UINT32)wcslen(secText), d2d.FontButton, m_secondaryBtnRect, d2d.BrushText);
 }
 
@@ -966,11 +966,11 @@ void SystemEngine::RenderShortcut(ID2D1RenderTarget* rt, D2DEngine& d2d, const D
         rows.push_back({ L"Domain", m_shortcut.webDomain });
         rows.push_back({ L"Protocol", L"Hypertext Transfer Protocol (Web)" });
     } else {
-        rows.push_back({ L"Target Path", !m_shortcut.targetPath.empty() ? m_shortcut.targetPath : L"—" });
+        rows.push_back({ L"Target path", !m_shortcut.targetPath.empty() ? m_shortcut.targetPath : L"—" });
         rows.push_back({ L"Arguments", !m_shortcut.arguments.empty() ? m_shortcut.arguments : L"—" });
-        rows.push_back({ L"Working Dir", !m_shortcut.workingDirectory.empty() ? m_shortcut.workingDirectory : L"—" });
-        rows.push_back({ L"Target Type", !m_shortcut.targetType.empty() ? m_shortcut.targetType : L"—" });
-        rows.push_back({ L"Target Size", m_shortcut.targetExists ? m_shortcut.formattedTargetSize : L"—" });
+        rows.push_back({ L"Working directory", !m_shortcut.workingDirectory.empty() ? m_shortcut.workingDirectory : L"—" });
+        rows.push_back({ L"Target type", !m_shortcut.targetType.empty() ? m_shortcut.targetType : L"—" });
+        rows.push_back({ L"Target size", m_shortcut.targetExists ? m_shortcut.formattedTargetSize : L"—" });
     }
 
     float lblW = 120.0f;
@@ -1016,7 +1016,7 @@ void SystemEngine::RenderShortcut(ID2D1RenderTarget* rt, D2DEngine& d2d, const D
     rt->DrawRoundedRectangle(r, d2d.BrushBorder, 1.0f);
 
     D2D1_RECT_F tRect = D2D1::RectF(marginX + 18.0f, curY + 14.0f, marginX + contentW - 18.0f, curY + 34.0f);
-    rt->DrawText(L"SHORTCUT PROPERTIES", (UINT32)wcslen(L"SHORTCUT PROPERTIES"), d2d.FontBadge, tRect, d2d.BrushAccent);
+    rt->DrawText(L"Shortcut properties", (UINT32)wcslen(L"Shortcut properties"), d2d.FontBadge, tRect, d2d.BrushAccent);
 
     float rowY = curY + 44.0f;
     for (const auto& mr : mRows) {
@@ -1117,13 +1117,13 @@ void SystemEngine::RenderCertificate(ID2D1RenderTarget* rt, D2DEngine& d2d, cons
     curY += 16.0f;
 
     std::vector<std::pair<std::wstring, std::wstring>> rows = {
-        { L"Issued To", m_cert.subjectName },
-        { L"Issued By", m_cert.issuerName },
-        { L"Valid From", m_cert.validFromStr },
-        { L"Valid To", m_cert.validToStr },
-        { L"Signature Alg", m_cert.signatureAlgorithm },
-        { L"Public Key", m_cert.publicKeyInfo },
-        { L"Serial Number", m_cert.serialNumber },
+        { L"Issued to", m_cert.subjectName },
+        { L"Issued by", m_cert.issuerName },
+        { L"Valid from", m_cert.validFromStr },
+        { L"Valid to", m_cert.validToStr },
+        { L"Signature algorithm", m_cert.signatureAlgorithm },
+        { L"Public key", m_cert.publicKeyInfo },
+        { L"Serial number", m_cert.serialNumber },
         { L"Thumbprint (SHA-1)", m_cert.thumbprint }
     };
 
@@ -1170,7 +1170,7 @@ void SystemEngine::RenderCertificate(ID2D1RenderTarget* rt, D2DEngine& d2d, cons
     rt->DrawRoundedRectangle(r, d2d.BrushBorder, 1.0f);
 
     D2D1_RECT_F tRect = D2D1::RectF(marginX + 18.0f, curY + 14.0f, marginX + contentW - 18.0f, curY + 34.0f);
-    rt->DrawText(L"CERTIFICATE DETAILS", (UINT32)wcslen(L"CERTIFICATE DETAILS"), d2d.FontBadge, tRect, d2d.BrushAccent);
+    rt->DrawText(L"Certificate details", (UINT32)wcslen(L"Certificate details"), d2d.FontBadge, tRect, d2d.BrushAccent);
 
     float rowY = curY + 42.0f;
     for (const auto& mr : mRows) {

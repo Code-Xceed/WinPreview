@@ -102,7 +102,12 @@ enum ContextMenuCommand {
     IDM_CTX_INFO,
     IDM_CTX_SETTINGS,
     IDM_CTX_CHECK_UPDATES,
-    IDM_CTX_SIMULATE_UPDATE
+    IDM_CTX_SIMULATE_UPDATE,
+    IDM_CTX_OPEN_WITH,
+    IDM_CTX_REVEAL,
+    IDM_CTX_COPY_PATH,
+    IDM_CTX_PLAY_PAUSE,
+    IDM_CTX_LOOP
 };
 
 class AppWindow {
@@ -281,6 +286,10 @@ private:
     float m_targetZoom = 1.0f;
     bool m_isFitMode = true; // true while "Fit to Window" is the active view state
     bool m_modalDialogOpen = false; // native file dialog owns focus; never auto-hide
+    bool m_guiVisibleOnMouseDown = false; // click-to-toggle must use pre-click state
+    ULONGLONG m_guiRevealedAt = 0;        // suppress immediate hide after movement reveals chrome
+    float m_lastDownDipX = 0.0f;     // diagnostic: last WM_LBUTTONDOWN in DIP
+    float m_lastDownDipY = 0.0f;
     float m_panX = 0.0f;
     float m_panY = 0.0f;
     float m_targetPanX = 0.0f;
@@ -525,6 +534,7 @@ private:
     D2D1_RECT_F m_hudBtnMute = {};
     D2D1_RECT_F m_hudVolSlider = {};
     D2D1_RECT_F m_hudBtnFullscreen = {};
+    D2D1_RECT_F m_hudBtnMore = {};
     D2D1_POINT_2F m_hudMousePos = {};
     bool m_isHudMouseTracking = false;
 
@@ -578,6 +588,14 @@ private:
     void DrawHudIconButton(const D2D1_RECT_F& rect, IconType icon, int buttonId, bool enabled = true);
     void SetCursorVisibility(bool visible);
     void WakeAllUiAndCursor(const char* reason = "unknown");
+    // Diagnostics: prove which input wakes the idle timer (used by ui_flow_test).
+    int m_wakeCount = 0;
+    int m_wakeCode = 0;
+    ULONGLONG m_lastWakeTick = 0;
+    int m_activateCount = 0;
+    int m_contextMenuCount = 0;
+    float m_lastHudDipX = 0.0f;
+    float m_lastHudDipY = 0.0f;
     void WakeHudAndCursor() { WakeAllUiAndCursor("WakeHud"); }
     void ToggleGuiVisibility();
     void SetGuiVisibility(bool visible);

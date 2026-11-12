@@ -69,6 +69,7 @@ enum ButtonId {
     BTN_INSPECTOR_CLOSE = 54,
     BTN_INSPECTOR_COPY = 55,
     BTN_LOG_LUT = 56,
+    BTN_HUD_MORE = 57,
     BTN_SETTINGS_TAB_0 = 70,
     BTN_SETTINGS_TAB_1 = 71,
     BTN_SETTINGS_TAB_2 = 72,
@@ -488,7 +489,7 @@ bool AppWindow::OpenFile(const std::wstring& filePath) {
         }
     }
     if (m_openWithAppName.empty()) {
-        m_openWithAppName = L"Default App";
+        m_openWithAppName = L"default app";
     }
 
     bool success = false;
@@ -1015,22 +1016,20 @@ bool AppWindow::OpenFile(const std::wstring& filePath) {
         ScreenToClient(m_hwnd, &clPt);
         m_lastActiveMousePos = clPt;
 
-        // Clean Media Showcase:
-        // When opening visual media files (video, audio, image, svg, office, pdf), start in clean immersion:
-        // GUI hidden initially, toggled on click.
-        if (m_cleanShowcaseMode && (m_docType == DocumentType::Media || m_docType == DocumentType::Image ||
-                                    m_docType == DocumentType::Svg || m_docType == DocumentType::Office ||
-                                    m_docType == DocumentType::Pdf)) {
-            SetGuiVisibility(false);
-        } else {
-            WakeAllUiAndCursor();
+        // Controls start visible (like Quick Look / Photos) and fade out after a
+        // short idle period. Clicking the canvas toggles them at any time.
+        WakeAllUiAndCursor();
+        if (m_cleanShowcaseMode) {
+            m_dockOpacity = 1.0f;
+            m_dockTargetOpacity = 1.0f;
+            m_inactivityMs = 0;
         }
         // Space must type a space in both the code editor and the table editor,
         // not close the preview through the global QuickLook hook.
         SyncSpaceSuppression();
         if ((m_docType == DocumentType::Text || m_docType == DocumentType::Spreadsheet) &&
             m_text.IsReadOnly()) {
-            ShowToast(L"Large file opened read-only: editing is disabled above the 16 MB safety limit.");
+            ShowToast(L"Files over 16 MB open read-only.");
         }
         InvalidateRect(m_hwnd, NULL, FALSE);
     }
@@ -1734,7 +1733,7 @@ void AppWindow::DrawIconButton(const D2D1_RECT_F& rect, IconType icon, int butto
 
     float cx = rect.left + (rect.right - rect.left) / 2.0f;
     float cy = rect.top + (rect.bottom - rect.top) / 2.0f;
-    float iconSize = 16.0f;
+    float iconSize = 17.0f;
 
     bool isLoopActive = (buttonId == BTN_LOOP) && m_isLooping;
     bool isCropActive = (buttonId == BTN_CROP) && (m_isCropActive || (m_hasDetectedContentBounds && m_trimBlackBars));
@@ -1834,54 +1833,55 @@ void AppWindow::DrawTextButton(const D2D1_RECT_F& rect, const WCHAR* label, int 
 
 const WCHAR* AppWindow::GetButtonTooltip(int buttonId) const {
     switch (buttonId) {
-        case BTN_SIDEBAR: return m_showSidebar ? L"Hide Sidebar (S)" : L"Show Sidebar (S)";
-        case BTN_PREV_PAGE: return (m_docType == DocumentType::Pdf && m_totalPages > 1) ? L"Previous Page (←)" : L"Previous File (←)";
-        case BTN_NEXT_PAGE: return (m_docType == DocumentType::Pdf && m_totalPages > 1) ? L"Next Page (→)" : L"Next File (→)";
-        case BTN_ZOOM_OUT: return L"Zoom Out (-)";
-        case BTN_ZOOM_IN: return L"Zoom In (+)";
-        case BTN_ZOOM_FIT: return L"Fit to Window (0)";
-        case BTN_ZOOM_RESET: return L"Actual Size 100% (1)";
-        case BTN_ROTATE_L: return L"Rotate Left (L)";
-        case BTN_ROTATE_R: return L"Rotate Right (R)";
+        case BTN_SIDEBAR: return m_showSidebar ? L"Hide sidebar (S)" : L"Show sidebar (S)";
+        case BTN_PREV_PAGE: return (m_docType == DocumentType::Pdf && m_totalPages > 1) ? L"Previous page (←)" : L"Previous file (←)";
+        case BTN_NEXT_PAGE: return (m_docType == DocumentType::Pdf && m_totalPages > 1) ? L"Next page (→)" : L"Next file (→)";
+        case BTN_ZOOM_OUT: return L"Zoom out (-)";
+        case BTN_ZOOM_IN: return L"Zoom in (+)";
+        case BTN_ZOOM_FIT: return L"Fit to window (0)";
+        case BTN_ZOOM_RESET: return L"Actual size 100% (1)";
+        case BTN_ROTATE_L: return L"Rotate left (L)";
+        case BTN_ROTATE_R: return L"Rotate right (R)";
         case BTN_PLAY_PAUSE: return m_media.IsPlaying() ? L"Pause (Space)" : L"Play (Space)";
         case BTN_MUTE:
         case BTN_TOOLBAR_MUTE: return m_media.IsMuted() ? L"Unmute (M)" : L"Mute (M)";
         case BTN_FULLSCREEN:
-        case BTN_TOOLBAR_FS: return m_isFullscreen ? L"Exit Fullscreen (Esc)" : L"Fullscreen (F)";
+        case BTN_TOOLBAR_FS: return m_isFullscreen ? L"Exit fullscreen (Esc)" : L"Fullscreen (F)";
         case BTN_LOOP:
-        case BTN_HUD_LOOP: return m_isLooping ? L"Loop: On" : L"Loop: Off";
-        case BTN_SKIP_BACK: return L"Previous File (←)";
-        case BTN_SKIP_FORWARD: return L"Next File (→)";
-        case BTN_SEARCH: return L"Search Document (Ctrl+F)";
+        case BTN_HUD_LOOP: return m_isLooping ? L"Loop on" : L"Loop off";
+        case BTN_HUD_MORE: return L"More actions";
+        case BTN_SKIP_BACK: return L"Previous file (←)";
+        case BTN_SKIP_FORWARD: return L"Next file (→)";
+        case BTN_SEARCH: return L"Search document (Ctrl+F)";
         case BTN_CROP:
             if (m_hasDetectedContentBounds) {
-                return m_trimBlackBars ? L"Show Full Canvas (Include Black Bars) (Ctrl+T)" : L"Trim Black Bars (Fit Content) (Ctrl+T)";
+                return m_trimBlackBars ? L"Show black bars (Ctrl+T)" : L"Trim black bars (Ctrl+T)";
             }
-            return m_isCropActive ? L"Commit Crop (Enter)" : L"Crop Image (C)";
-        case BTN_INFO: return L"File Info (I)";
-        case BTN_SIDEBAR_TAB_THUMBS: return L"Thumbnails View";
-        case BTN_SIDEBAR_TAB_OUTLINE: return L"Table of Contents Outline";
-        case BTN_SEARCH_PREV: return L"Previous Match (Shift+Enter)";
-        case BTN_SEARCH_NEXT: return L"Next Match (Enter)";
-        case BTN_SEARCH_CLOSE: return L"Close Search (Esc)";
-        case BTN_INSPECTOR_CLOSE: return L"Close Inspector (Esc)";
-        case BTN_INSPECTOR_COPY: return L"Copy Details to Clipboard";
-        case BTN_UNSUPPORTED_OPEN: return L"Open File with Default Program (Enter)";
-        case BTN_UNSUPPORTED_REVEAL: return L"Reveal in File Explorer (Ctrl+Shift+R)";
-        case BTN_UNSUPPORTED_COPY: return L"Copy File Path to Clipboard (Ctrl+C)";
-        case BTN_SAVE_FILE: return m_text.IsModified() ? L"Save Changes (Ctrl+S)" : L"File Saved (Ctrl+S)";
+            return m_isCropActive ? L"Apply crop (Enter)" : L"Crop image (C)";
+        case BTN_INFO: return L"File info (I)";
+        case BTN_SIDEBAR_TAB_THUMBS: return L"Thumbnails";
+        case BTN_SIDEBAR_TAB_OUTLINE: return L"Contents";
+        case BTN_SEARCH_PREV: return L"Previous match (Shift+Enter)";
+        case BTN_SEARCH_NEXT: return L"Next match (Enter)";
+        case BTN_SEARCH_CLOSE: return L"Close search (Esc)";
+        case BTN_INSPECTOR_CLOSE: return L"Close file info (Esc)";
+        case BTN_INSPECTOR_COPY: return L"Copy details";
+        case BTN_UNSUPPORTED_OPEN: return L"Open file (Enter)";
+        case BTN_UNSUPPORTED_REVEAL: return L"Show in folder (Ctrl+Shift+R)";
+        case BTN_UNSUPPORTED_COPY: return L"Copy path (Ctrl+C)";
+        case BTN_SAVE_FILE: return m_text.IsModified() ? L"Save changes (Ctrl+S)" : L"Saved (Ctrl+S)";
         case BTN_UNDO: return L"Undo (Ctrl+Z)";
         case BTN_REDO: return L"Redo (Ctrl+Y)";
-        case BTN_CUT: return L"Cut Selection (Ctrl+X)";
-        case BTN_COPY_TEXT: return (m_docType == DocumentType::Spreadsheet && m_text.IsTableView()) ? L"Copy Table (Ctrl+C)" : (m_text.HasSelection() ? L"Copy Selection (Ctrl+C)" : L"Copy Line (Ctrl+C)");
+        case BTN_CUT: return L"Cut selection (Ctrl+X)";
+        case BTN_COPY_TEXT: return (m_docType == DocumentType::Spreadsheet && m_text.IsTableView()) ? L"Copy table (Ctrl+C)" : (m_text.HasSelection() ? L"Copy selection (Ctrl+C)" : L"Copy line (Ctrl+C)");
         case BTN_PASTE: return L"Paste (Ctrl+V)";
-        case BTN_WRAP_TEXT: return m_text.IsWordWrap() ? L"Disable Word Wrap (W)" : L"Enable Word Wrap (W)";
-        case BTN_TABLE_VIEW: return m_text.IsTableView() ? L"Switch to Raw Text Editor (T)" : L"Switch to Table Grid View (T)";
+        case BTN_WRAP_TEXT: return m_text.IsWordWrap() ? L"Turn off word wrap (W)" : L"Turn on word wrap (W)";
+        case BTN_TABLE_VIEW: return m_text.IsTableView() ? L"Switch to text view (T)" : L"Switch to table view (T)";
         case BTN_OPEN_WITH:
-            m_openWithTooltip = L"Open with " + (m_openWithAppName.empty() ? L"Default App" : m_openWithAppName) + L" (Enter)";
+            m_openWithTooltip = L"Open with " + (m_openWithAppName.empty() ? L"default app" : m_openWithAppName) + L" (Enter)";
             return m_openWithTooltip.c_str();
         case BTN_SETTINGS: return L"Settings (Ctrl+,)";
-        case BTN_OVERFLOW_MENU: return L"More Actions (⋯)";
+        case BTN_OVERFLOW_MENU: return L"More actions";
         case BTN_LOG_LUT: return m_media.GetLogProfileName(m_media.GetLogTransform());
         default: return nullptr;
     }
@@ -1900,8 +1900,11 @@ D2D1_RECT_F AppWindow::GetButtonRect(int buttonId) const {
         case BTN_ROTATE_R: return m_btnRotateRightRect;
         case BTN_PLAY_PAUSE: return m_hudBtnPlayPause;
         case BTN_LOOP: return m_hudBtnLoop;
+        case BTN_HUD_LOOP: return m_hudBtnLoop;
         case BTN_LOG_LUT: return m_hudBtnLog;
         case BTN_TOOLBAR_MUTE: return m_hudBtnMute;
+        case BTN_HUD_MORE: return m_hudBtnMore;
+        case BTN_FULLSCREEN: return m_hudBtnFullscreen;
         case BTN_TOOLBAR_FS: return m_btnToolbarFsRect;
         case BTN_SEARCH: return m_btnSearchRect;
         case BTN_CROP: return m_btnCropRect;
@@ -2069,7 +2072,9 @@ void AppWindow::Render(HDC outHdc) {
          m_docType == DocumentType::Text || m_docType == DocumentType::Spreadsheet ||
          m_docType == DocumentType::Office || m_docType == DocumentType::Markdown ||
          m_docType == DocumentType::Notebook || m_docType == DocumentType::Svg ||
-         m_docType == DocumentType::Font) && m_dockOpacity > 0.005f) {
+         m_docType == DocumentType::Font || m_docType == DocumentType::Folder ||
+         m_docType == DocumentType::Binary || m_docType == DocumentType::Shortcut ||
+         m_docType == DocumentType::Certificate) && m_dockOpacity > 0.005f) {
         if (!m_dockLayer) {
             rt->CreateLayer(NULL, &m_dockLayer);
         }
@@ -2246,7 +2251,9 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
         m_docType != DocumentType::Text && m_docType != DocumentType::Spreadsheet &&
         m_docType != DocumentType::Office && m_docType != DocumentType::Markdown &&
         m_docType != DocumentType::Notebook && m_docType != DocumentType::Svg &&
-        m_docType != DocumentType::Font) return;
+        m_docType != DocumentType::Font && m_docType != DocumentType::Folder &&
+        m_docType != DocumentType::Binary && m_docType != DocumentType::Shortcut &&
+        m_docType != DocumentType::Certificate) return;
     if (m_dockOpacity <= 0.005f) return;
 
     float totalW = rect.right - rect.left;
@@ -2254,7 +2261,7 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
     float availW = totalW - availLeft;
     float dockH = 38.0f;
     float dockRadius = dockH / 2.0f; // 19.0f smooth circular pill caps
-    float dockY = 12.0f;
+    float dockY = 12.0f + (1.0f - (std::clamp)(m_dockOpacity, 0.0f, 1.0f)) * -6.0f;
     float btnH = 30.0f;
     float btnY = dockY + (dockH - btnH) / 2.0f;
 
@@ -2264,19 +2271,19 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
     bool showPdfNav = (m_docType == DocumentType::Pdf && m_totalPages > 1);
 
     if (m_docType == DocumentType::Image) {
-        bool isFull = (availW >= 420.0f);
+        bool isFull = (availW >= 460.0f);
         bool isCompact = (availW < 250.0f);
         if (!isCompact) {
-            contentW = isFull ? 375.0f : 200.0f;
+            contentW = isFull ? 415.0f : 200.0f;
         } else {
             contentW = 126.0f;
         }
     } else if (m_docType == DocumentType::Pdf) {
         if (showPdfNav) {
-            bool isFull = (availW >= 600.0f);
+            bool isFull = (availW >= 650.0f);
             bool isCompact = (availW < 420.0f);
             if (!isCompact) {
-                contentW = isFull ? 553.0f : 372.0f;
+                contentW = isFull ? 587.0f : 372.0f;
             } else {
                 contentW = 234.0f;
             }
@@ -2290,35 +2297,41 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
             }
         }
     } else if (m_docType == DocumentType::Text) {
-        bool isFull = (availW >= 510.0f);
+        bool isFull = (availW >= 540.0f);
         bool isCompact = (availW < 390.0f);
         if (!isCompact) {
-            contentW = isFull ? 469.0f : 354.0f;
+            contentW = isFull ? 503.0f : 354.0f;
         } else {
             contentW = 222.0f;
         }
     } else if (m_docType == DocumentType::Spreadsheet) {
-        bool isFull = (availW >= 480.0f);
+        bool isFull = (availW >= 520.0f);
         bool isCompact = (availW < 390.0f);
         if (!isCompact) {
-            contentW = isFull ? 439.0f : 354.0f;
+            contentW = isFull ? 473.0f : 354.0f;
         } else {
             contentW = 222.0f;
         }
     } else if (m_docType == DocumentType::Office || m_docType == DocumentType::Svg) {
-        bool isFull = (availW >= 390.0f);
+        bool isFull = (availW >= 430.0f);
         bool isCompact = (availW < 240.0f);
         if (!isCompact) {
-            contentW = isFull ? 347.0f : 200.0f;
+            contentW = isFull ? 381.0f : 200.0f;
         } else {
             contentW = 126.0f;
         }
     } else if (m_docType == DocumentType::Markdown || m_docType == DocumentType::Notebook) {
-        bool isFull = (availW >= 200.0f);
-        contentW = isFull ? 145.0f : 77.0f;
+        bool isFull = (availW >= 230.0f);
+        contentW = isFull ? 179.0f : 77.0f;
     } else if (m_docType == DocumentType::Font) {
-        bool isFull = (availW >= 160.0f);
-        contentW = isFull ? 98.0f : 70.0f;
+        bool isFull = (availW >= 190.0f);
+        contentW = isFull ? 132.0f : 70.0f;
+    } else if (m_docType == DocumentType::Folder || m_docType == DocumentType::Binary ||
+               m_docType == DocumentType::Shortcut || m_docType == DocumentType::Certificate) {
+        // Utility viewers (folder, archive, binary, shortcut, certificate) get the same
+        // File info / Open with / Settings / Fullscreen set as every other format.
+        bool isFull = (availW >= 200.0f);
+        contentW = isFull ? 149.0f : 79.0f;
     }
 
     float dockW = contentW + kDockPaddingX * 2.0f;
@@ -2466,6 +2479,10 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
 
                 m_btnOpenWithRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
                 DrawIconButton(m_btnOpenWithRect, ICON_OPEN_WITH, BTN_OPEN_WITH, true);
+                curX += 34.0f;
+
+                m_btnSettingsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                DrawIconButton(m_btnSettingsRect, ICON_SETTINGS, BTN_SETTINGS, true);
                 curX += 34.0f;
 
                 m_btnToolbarFsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
@@ -2674,6 +2691,10 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
 
                     m_btnOpenWithRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
                     DrawIconButton(m_btnOpenWithRect, ICON_OPEN_WITH, BTN_OPEN_WITH, true);
+                    curX += 34.0f;
+
+                    m_btnSettingsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                    DrawIconButton(m_btnSettingsRect, ICON_SETTINGS, BTN_SETTINGS, true);
                     curX += 34.0f;
 
                     m_btnToolbarFsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
@@ -3016,6 +3037,10 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
                 DrawIconButton(m_btnOpenWithRect, ICON_OPEN_WITH, BTN_OPEN_WITH, true);
                 curX += 34.0f;
 
+                m_btnSettingsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                DrawIconButton(m_btnSettingsRect, ICON_SETTINGS, BTN_SETTINGS, true);
+                curX += 34.0f;
+
                 m_btnToolbarFsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
                 DrawIconButton(m_btnToolbarFsRect, ICON_FULLSCREEN, BTN_TOOLBAR_FS, true);
             } else {
@@ -3189,6 +3214,10 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
                 DrawIconButton(m_btnOpenWithRect, ICON_OPEN_WITH, BTN_OPEN_WITH, true);
                 curX += 34.0f;
 
+                m_btnSettingsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                DrawIconButton(m_btnSettingsRect, ICON_SETTINGS, BTN_SETTINGS, true);
+                curX += 34.0f;
+
                 m_btnToolbarFsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
                 DrawIconButton(m_btnToolbarFsRect, ICON_FULLSCREEN, BTN_TOOLBAR_FS, true);
             } else {
@@ -3345,6 +3374,10 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
                 DrawIconButton(m_btnOpenWithRect, ICON_OPEN_WITH, BTN_OPEN_WITH, true);
                 curX += 34.0f;
 
+                m_btnSettingsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+                DrawIconButton(m_btnSettingsRect, ICON_SETTINGS, BTN_SETTINGS, true);
+                curX += 34.0f;
+
                 m_btnToolbarFsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
                 DrawIconButton(m_btnToolbarFsRect, ICON_FULLSCREEN, BTN_TOOLBAR_FS, true);
             } else {
@@ -3412,6 +3445,10 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
             DrawIconButton(m_btnOpenWithRect, ICON_OPEN_WITH, BTN_OPEN_WITH, true);
             curX += 34.0f;
 
+            m_btnSettingsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+            DrawIconButton(m_btnSettingsRect, ICON_SETTINGS, BTN_SETTINGS, true);
+            curX += 34.0f;
+
             m_btnToolbarFsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
             DrawIconButton(m_btnToolbarFsRect, ICON_FULLSCREEN, BTN_TOOLBAR_FS, true);
         } else {
@@ -3437,6 +3474,47 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
             DrawIconButton(m_btnOpenWithRect, ICON_OPEN_WITH, BTN_OPEN_WITH, true);
             curX += 34.0f;
 
+            m_btnSettingsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+            DrawIconButton(m_btnSettingsRect, ICON_SETTINGS, BTN_SETTINGS, true);
+            curX += 34.0f;
+
+            m_btnToolbarFsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+            DrawIconButton(m_btnToolbarFsRect, ICON_FULLSCREEN, BTN_TOOLBAR_FS, true);
+        } else {
+            m_btnInfoRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+            DrawIconButton(m_btnInfoRect, ICON_INFO, BTN_INFO, true);
+            curX += 30.0f;
+
+            drawDivider(curX + 5.5f);
+            curX += 12.0f;
+
+            m_btnOverflowRect = D2D1::RectF(curX, btnY, curX + 28.0f, btnY + btnH);
+            DrawIconButton(m_btnOverflowRect, ICON_MORE, BTN_OVERFLOW_MENU, true);
+        }
+    }
+    // =========================================================================
+    // DOCK RENDERING: FOLDER / ARCHIVE / BINARY / SHORTCUT / CERTIFICATE
+    // =========================================================================
+    else if (m_docType == DocumentType::Folder || m_docType == DocumentType::Binary ||
+             m_docType == DocumentType::Shortcut || m_docType == DocumentType::Certificate) {
+        bool isFull = (availW >= 200.0f);
+
+        if (isFull) {
+            m_btnInfoRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+            DrawIconButton(m_btnInfoRect, ICON_INFO, BTN_INFO, true);
+            curX += 34.0f;
+
+            m_btnOpenWithRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+            DrawIconButton(m_btnOpenWithRect, ICON_OPEN_WITH, BTN_OPEN_WITH, true);
+            curX += 34.0f;
+
+            drawDivider(curX + 8.0f);
+            curX += 17.0f;
+
+            m_btnSettingsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
+            DrawIconButton(m_btnSettingsRect, ICON_SETTINGS, BTN_SETTINGS, true);
+            curX += 34.0f;
+
             m_btnToolbarFsRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
             DrawIconButton(m_btnToolbarFsRect, ICON_FULLSCREEN, BTN_TOOLBAR_FS, true);
         } else {
@@ -3455,79 +3533,89 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
 
 std::vector<AppWindow::OverflowMenuItem> AppWindow::GetCurrentOverflowItems() const {
     std::vector<OverflowMenuItem> items;
-    std::wstring appName = m_openWithAppName.empty() ? L"Default App" : m_openWithAppName;
+    std::wstring appName = m_openWithAppName.empty() ? L"default app" : m_openWithAppName;
     if (appName.length() > 18) {
         appName = appName.substr(0, 16) + L"...";
     }
     std::wstring openWithLabel = L"Open with " + appName;
 
     if (m_docType == DocumentType::Image) {
-        items.push_back({ BTN_ROTATE_L, ICON_ROTATE_LEFT, L"Rotate Left", L"L", false, false, true });
-        items.push_back({ BTN_ROTATE_R, ICON_ROTATE_RIGHT, L"Rotate Right", L"R", false, false, true });
+        items.push_back({ BTN_ROTATE_L, ICON_ROTATE_LEFT, L"Rotate left", L"L", false, false, true });
+        items.push_back({ BTN_ROTATE_R, ICON_ROTATE_RIGHT, L"Rotate right", L"R", false, false, true });
         items.push_back({ 0, ICON_MORE, L"", L"", true, false, false }); // divider
-        items.push_back({ BTN_CROP, ICON_CROP, L"Crop Image", L"C", false, false, true });
-        items.push_back({ BTN_INFO, ICON_INFO, L"File Info", L"I", false, false, true });
+        items.push_back({ BTN_CROP, ICON_CROP, L"Crop image", L"C", false, false, true });
+        items.push_back({ BTN_INFO, ICON_INFO, L"File info", L"I", false, false, true });
         items.push_back({ BTN_OPEN_WITH, ICON_OPEN_WITH, openWithLabel, L"Enter", false, false, true });
         items.push_back({ 0, ICON_MORE, L"", L"", true, false, false }); // divider
         items.push_back({ BTN_SETTINGS, ICON_SETTINGS, L"Settings", L"Ctrl+,", false, false, true });
-        items.push_back({ BTN_TOOLBAR_FS, ICON_FULLSCREEN, m_isFullscreen ? L"Exit Fullscreen" : L"Fullscreen", L"F", false, false, true });
+        items.push_back({ BTN_TOOLBAR_FS, ICON_FULLSCREEN, m_isFullscreen ? L"Exit fullscreen" : L"Fullscreen", L"F", false, false, true });
     } else if (m_docType == DocumentType::Pdf) {
         if (m_totalPages > 1) {
-            items.push_back({ BTN_SIDEBAR, ICON_SIDEBAR, m_showSidebar ? L"Hide Sidebar" : L"Show Sidebar", L"S", false, false, true });
+            items.push_back({ BTN_SIDEBAR, ICON_SIDEBAR, m_showSidebar ? L"Hide sidebar" : L"Show sidebar", L"S", false, false, true });
         }
-        items.push_back({ BTN_SEARCH, ICON_SEARCH, L"Search Document", L"Ctrl+F", false, false, true });
-        items.push_back({ BTN_ROTATE_L, ICON_ROTATE_LEFT, L"Rotate Left", L"L", false, false, true });
-        items.push_back({ BTN_ROTATE_R, ICON_ROTATE_RIGHT, L"Rotate Right", L"R", false, false, true });
+        items.push_back({ BTN_SEARCH, ICON_SEARCH, L"Search document", L"Ctrl+F", false, false, true });
+        items.push_back({ BTN_ROTATE_L, ICON_ROTATE_LEFT, L"Rotate left", L"L", false, false, true });
+        items.push_back({ BTN_ROTATE_R, ICON_ROTATE_RIGHT, L"Rotate right", L"R", false, false, true });
         items.push_back({ 0, ICON_MORE, L"", L"", true, false, false }); // divider
-        items.push_back({ BTN_INFO, ICON_INFO, L"File Info", L"I", false, false, true });
+        items.push_back({ BTN_INFO, ICON_INFO, L"File info", L"I", false, false, true });
         items.push_back({ BTN_OPEN_WITH, ICON_OPEN_WITH, openWithLabel, L"Enter", false, false, true });
         items.push_back({ 0, ICON_MORE, L"", L"", true, false, false }); // divider
         items.push_back({ BTN_SETTINGS, ICON_SETTINGS, L"Settings", L"Ctrl+,", false, false, true });
-        items.push_back({ BTN_TOOLBAR_FS, ICON_FULLSCREEN, m_isFullscreen ? L"Exit Fullscreen" : L"Fullscreen", L"F", false, false, true });
+        items.push_back({ BTN_TOOLBAR_FS, ICON_FULLSCREEN, m_isFullscreen ? L"Exit fullscreen" : L"Fullscreen", L"F", false, false, true });
     } else if (m_docType == DocumentType::Text) {
-        items.push_back({ BTN_CUT, ICON_CUT, L"Cut Selection", L"Ctrl+X", false, false, m_text.HasSelection() });
+        items.push_back({ BTN_CUT, ICON_CUT, L"Cut selection", L"Ctrl+X", false, false, m_text.HasSelection() });
         items.push_back({ BTN_COPY_TEXT, ICON_COPY, L"Copy", L"Ctrl+C", false, false, true });
         items.push_back({ BTN_PASTE, ICON_PASTE, L"Paste", L"Ctrl+V", false, false, true });
         items.push_back({ 0, ICON_MORE, L"", L"", true, false, false }); // divider
-        items.push_back({ BTN_WRAP_TEXT, ICON_WRAP, m_text.IsWordWrap() ? L"Disable Word Wrap" : L"Enable Word Wrap", L"W", false, m_text.IsWordWrap(), true });
-        items.push_back({ BTN_INFO, ICON_INFO, L"File Info", L"I", false, false, true });
+        items.push_back({ BTN_WRAP_TEXT, ICON_WRAP, m_text.IsWordWrap() ? L"Turn off word wrap" : L"Turn on word wrap", L"W", false, m_text.IsWordWrap(), true });
+        items.push_back({ BTN_INFO, ICON_INFO, L"File info", L"I", false, false, true });
         items.push_back({ BTN_OPEN_WITH, ICON_OPEN_WITH, openWithLabel, L"Enter", false, false, true });
         items.push_back({ 0, ICON_MORE, L"", L"", true, false, false }); // divider
         items.push_back({ BTN_SETTINGS, ICON_SETTINGS, L"Settings", L"Ctrl+,", false, false, true });
-        items.push_back({ BTN_TOOLBAR_FS, ICON_FULLSCREEN, m_isFullscreen ? L"Exit Fullscreen" : L"Fullscreen", L"F", false, false, true });
+        items.push_back({ BTN_TOOLBAR_FS, ICON_FULLSCREEN, m_isFullscreen ? L"Exit fullscreen" : L"Fullscreen", L"F", false, false, true });
     } else if (m_docType == DocumentType::Spreadsheet) {
-        items.push_back({ BTN_TABLE_VIEW, ICON_TABLE, m_text.IsTableView() ? L"Raw Text Editor" : L"Table Grid View", L"T", false, m_text.IsTableView(), true });
-        items.push_back({ BTN_COPY_TEXT, ICON_COPY, L"Copy Table / Text", L"Ctrl+C", false, false, true });
+        items.push_back({ BTN_TABLE_VIEW, ICON_TABLE, m_text.IsTableView() ? L"Text view" : L"Table view", L"T", false, m_text.IsTableView(), true });
+        items.push_back({ BTN_COPY_TEXT, ICON_COPY, L"Copy table", L"Ctrl+C", false, false, true });
         items.push_back({ BTN_PASTE, ICON_PASTE, L"Paste", L"Ctrl+V", false, false, true });
         items.push_back({ 0, ICON_MORE, L"", L"", true, false, false }); // divider
-        items.push_back({ BTN_INFO, ICON_INFO, L"File Info", L"I", false, false, true });
+        items.push_back({ BTN_INFO, ICON_INFO, L"File info", L"I", false, false, true });
         items.push_back({ BTN_OPEN_WITH, ICON_OPEN_WITH, openWithLabel, L"Enter", false, false, true });
         items.push_back({ 0, ICON_MORE, L"", L"", true, false, false }); // divider
         items.push_back({ BTN_SETTINGS, ICON_SETTINGS, L"Settings", L"Ctrl+,", false, false, true });
-        items.push_back({ BTN_TOOLBAR_FS, ICON_FULLSCREEN, m_isFullscreen ? L"Exit Fullscreen" : L"Fullscreen", L"F", false, false, true });
+        items.push_back({ BTN_TOOLBAR_FS, ICON_FULLSCREEN, m_isFullscreen ? L"Exit fullscreen" : L"Fullscreen", L"F", false, false, true });
     } else if (m_docType == DocumentType::Office || m_docType == DocumentType::Svg) {
-        items.push_back({ BTN_ROTATE_L, ICON_ROTATE_LEFT, L"Rotate Left", L"L", false, false, true });
-        items.push_back({ BTN_ROTATE_R, ICON_ROTATE_RIGHT, L"Rotate Right", L"R", false, false, true });
+        items.push_back({ BTN_ROTATE_L, ICON_ROTATE_LEFT, L"Rotate left", L"L", false, false, true });
+        items.push_back({ BTN_ROTATE_R, ICON_ROTATE_RIGHT, L"Rotate right", L"R", false, false, true });
         items.push_back({ 0, ICON_MORE, L"", L"", true, false, false }); // divider
-        items.push_back({ BTN_INFO, ICON_INFO, L"File Info", L"I", false, false, true });
+        items.push_back({ BTN_INFO, ICON_INFO, L"File info", L"I", false, false, true });
         items.push_back({ BTN_OPEN_WITH, ICON_OPEN_WITH, openWithLabel, L"Enter", false, false, true });
         items.push_back({ 0, ICON_MORE, L"", L"", true, false, false }); // divider
         items.push_back({ BTN_SETTINGS, ICON_SETTINGS, L"Settings", L"Ctrl+,", false, false, true });
-        items.push_back({ BTN_TOOLBAR_FS, ICON_FULLSCREEN, m_isFullscreen ? L"Exit Fullscreen" : L"Fullscreen", L"F", false, false, true });
+        items.push_back({ BTN_TOOLBAR_FS, ICON_FULLSCREEN, m_isFullscreen ? L"Exit fullscreen" : L"Fullscreen", L"F", false, false, true });
     } else if (m_docType == DocumentType::Markdown || m_docType == DocumentType::Notebook) {
-        items.push_back({ BTN_COPY_TEXT, ICON_COPY, L"Copy All Text", L"Ctrl+C", false, false, true });
+        items.push_back({ BTN_COPY_TEXT, ICON_COPY, L"Copy all text", L"Ctrl+C", false, false, true });
         items.push_back({ 0, ICON_MORE, L"", L"", true, false, false }); // divider
-        items.push_back({ BTN_INFO, ICON_INFO, L"File Info", L"I", false, false, true });
+        items.push_back({ BTN_INFO, ICON_INFO, L"File info", L"I", false, false, true });
         items.push_back({ BTN_OPEN_WITH, ICON_OPEN_WITH, openWithLabel, L"Enter", false, false, true });
         items.push_back({ 0, ICON_MORE, L"", L"", true, false, false }); // divider
         items.push_back({ BTN_SETTINGS, ICON_SETTINGS, L"Settings", L"Ctrl+,", false, false, true });
-        items.push_back({ BTN_TOOLBAR_FS, ICON_FULLSCREEN, m_isFullscreen ? L"Exit Fullscreen" : L"Fullscreen", L"F", false, false, true });
+        items.push_back({ BTN_TOOLBAR_FS, ICON_FULLSCREEN, m_isFullscreen ? L"Exit fullscreen" : L"Fullscreen", L"F", false, false, true });
     } else if (m_docType == DocumentType::Font) {
-        items.push_back({ BTN_INFO, ICON_INFO, L"Font Info", L"I", false, false, true });
+        items.push_back({ BTN_INFO, ICON_INFO, L"Font info", L"I", false, false, true });
         items.push_back({ BTN_OPEN_WITH, ICON_OPEN_WITH, openWithLabel, L"Enter", false, false, true });
         items.push_back({ 0, ICON_MORE, L"", L"", true, false, false }); // divider
         items.push_back({ BTN_SETTINGS, ICON_SETTINGS, L"Settings", L"Ctrl+,", false, false, true });
-        items.push_back({ BTN_TOOLBAR_FS, ICON_FULLSCREEN, m_isFullscreen ? L"Exit Fullscreen" : L"Fullscreen", L"F", false, false, true });
+        items.push_back({ BTN_TOOLBAR_FS, ICON_FULLSCREEN, m_isFullscreen ? L"Exit fullscreen" : L"Fullscreen", L"F", false, false, true });
+    } else if (m_docType == DocumentType::Folder || m_docType == DocumentType::Binary ||
+               m_docType == DocumentType::Shortcut || m_docType == DocumentType::Certificate) {
+        bool isArchive = m_folder.IsArchive();
+        items.push_back({ BTN_INFO, ICON_INFO, L"File info", L"I", false, false, true });
+        items.push_back({ BTN_OPEN_WITH, ICON_OPEN_WITH, openWithLabel, L"Enter", false, false, true });
+        items.push_back({ BTN_UNSUPPORTED_REVEAL, ICON_FOLDER, isArchive ? L"Show archive in folder" : L"Show in folder", L"Ctrl+Shift+R", false, false, true });
+        items.push_back({ BTN_UNSUPPORTED_COPY, ICON_COPY, L"Copy path", L"Ctrl+C", false, false, true });
+        items.push_back({ 0, ICON_MORE, L"", L"", true, false, false }); // divider
+        items.push_back({ BTN_SETTINGS, ICON_SETTINGS, L"Settings", L"Ctrl+,", false, false, true });
+        items.push_back({ BTN_TOOLBAR_FS, ICON_FULLSCREEN, m_isFullscreen ? L"Exit fullscreen" : L"Fullscreen", L"F", false, false, true });
     }
 
     return items;
@@ -3784,6 +3872,16 @@ void AppWindow::ExecuteOverflowCommand(int buttonId) {
         case BTN_OPEN_WITH:
             OpenCurrentFileInDefaultApp();
             break;
+        case BTN_UNSUPPORTED_REVEAL: {
+            std::wstring params = L"/select,\"" + m_currentFilePath + L"\"";
+            ShellExecuteW(NULL, L"open", L"explorer.exe", params.c_str(), NULL, SW_SHOWNORMAL);
+            break;
+        }
+        case BTN_UNSUPPORTED_COPY:
+            CopyTextToClipboard(m_hwnd, m_currentFilePath);
+            ShowToast(L"Copied file path");
+            InvalidateRect(m_hwnd, NULL, FALSE);
+            break;
         case BTN_SETTINGS:
             ToggleSettings();
             break;
@@ -3800,10 +3898,10 @@ void AppWindow::ExecuteOverflowCommand(int buttonId) {
         case BTN_COPY_TEXT:
             if (m_docType == DocumentType::Spreadsheet && m_text.IsTableView()) {
                 CopyTextToClipboard(m_hwnd, m_text.GetAllText());
-                ShowToast(L"Table copied to clipboard!");
+                ShowToast(L"Table copied");
             } else {
                 if (m_text.Copy(m_hwnd)) {
-                    ShowToast(m_text.HasSelection() ? L"Copied selection" : L"Copied text");
+                    ShowToast(m_text.HasSelection() ? L"Copied selection" : L"Copied line");
                 }
             }
             InvalidateRect(m_hwnd, NULL, FALSE);
@@ -3817,12 +3915,12 @@ void AppWindow::ExecuteOverflowCommand(int buttonId) {
             break;
         case BTN_WRAP_TEXT:
             m_text.ToggleWordWrap();
-            ShowToast(m_text.IsWordWrap() ? L"Word Wrap: ON" : L"Word Wrap: OFF");
+            ShowToast(m_text.IsWordWrap() ? L"Word wrap on" : L"Word wrap off");
             InvalidateRect(m_hwnd, NULL, FALSE);
             break;
         case BTN_TABLE_VIEW:
             m_text.ToggleTableView();
-            ShowToast(m_text.IsTableView() ? L"Grid View" : L"Raw Text View");
+            ShowToast(m_text.IsTableView() ? L"Table view" : L"Text view");
             InvalidateRect(m_hwnd, NULL, FALSE);
             break;
         default:
@@ -4082,7 +4180,7 @@ void AppWindow::RenderEmptyState(const D2D1_RECT_F& rect) {
 
     // 3. Monospace Category Subtitle & Botanical Amber Highlight
     float subY = titleY + 34.0f + 4.0f;
-    const WCHAR* subtitle = L"✨ INSTANT DIRECT2D GPU PIPELINE • ZERO LATENCY";
+    const WCHAR* subtitle = L"PRESS SPACE IN EXPLORER TO PREVIEW ANY FILE";
     D2D1_RECT_F subRect = D2D1::RectF(rect.left + 16.0f, subY, rect.right - 16.0f, subY + 18.0f);
     ID2D1Brush* subBrush = m_d2d.BrushGinkgo ? (ID2D1Brush*)m_d2d.BrushGinkgo : (ID2D1Brush*)m_d2d.BrushTextMuted;
     rt->DrawText(subtitle, (UINT32)wcslen(subtitle), m_d2d.FontUtilityMonoCenter ? m_d2d.FontUtilityMonoCenter : m_d2d.FontCaptionCenter, subRect, subBrush);
@@ -4104,7 +4202,7 @@ void AppWindow::RenderEmptyState(const D2D1_RECT_F& rect) {
     // Card Header Row: Section Label + Crimson Status Dot
     float metaY = cardY + 12.0f;
     D2D1_RECT_F metaLabelR = D2D1::RectF(cardLeft + 16.0f, metaY, cardLeft + 220.0f, metaY + 16.0f);
-    const WCHAR* metaLabel = L"FAST PREVIEW WORKFLOW";
+    const WCHAR* metaLabel = L"QUICK START";
     rt->DrawText(metaLabel, (UINT32)wcslen(metaLabel), m_d2d.FontUtilityMono ? m_d2d.FontUtilityMono : m_d2d.FontCaption, metaLabelR, m_d2d.BrushTextDim ? m_d2d.BrushTextDim : m_d2d.BrushTextMuted);
 
     D2D1_RECT_F statusDotR = D2D1::RectF(centerCard.right - 90.0f, metaY, centerCard.right - 16.0f, metaY + 16.0f);
@@ -4115,8 +4213,8 @@ void AppWindow::RenderEmptyState(const D2D1_RECT_F& rect) {
     float pillY = metaY + 22.0f;
     HotkeyConfig curCfg = ExplorerHook::GetHotkeyConfig();
     std::wstring keybindLabel = (width < 420.0f) ?
-        (L"[ " + curCfg.name + L" ]   Settings (Ctrl+,)") :
-        (L"Preview Keybind: [ " + curCfg.name + L" ]   •   Settings (Ctrl+,)");
+        (L"Preview with [ " + curCfg.name + L" ]   •   Settings (Ctrl+,)") :
+        (L"Preview with [ " + curCfg.name + L" ]   •   Settings (Ctrl+,)");
     float pillW = cardW - 32.0f;
     float pillH = 34.0f;
     float btnLeft = cardLeft + 16.0f;
@@ -4132,7 +4230,7 @@ void AppWindow::RenderEmptyState(const D2D1_RECT_F& rect) {
     // Micro prompt inside card
     float cardFootY = pillY + pillH + 6.0f;
     D2D1_RECT_F promptR = D2D1::RectF(cardLeft + 16.0f, cardFootY, centerCard.right - 16.0f, cardFootY + 16.0f);
-    const WCHAR* promptText = L"Select any file in Explorer and press Space  •  Drag & drop supported";
+    const WCHAR* promptText = L"Select a file in Explorer, then press Space  •  Drop files here too";
     rt->DrawText(promptText, (UINT32)wcslen(promptText), m_d2d.FontUtilityMonoCenter ? m_d2d.FontUtilityMonoCenter : m_d2d.FontCaptionCenter, promptR, m_d2d.BrushTextDim ? m_d2d.BrushTextDim : m_d2d.BrushTextMuted);
 
     // 5. Clean Monospace Utility Keyboard Legend at Bottom
@@ -4369,7 +4467,7 @@ void AppWindow::RenderUnsupportedState(const D2D1_RECT_F& rect) {
     } else {
         rt->FillRoundedRectangle(rOpenBtn, m_d2d.BrushAccent);
     }
-    const WCHAR* openText = L"Open File (Enter)";
+    const WCHAR* openText = L"Open file";
     rt->DrawText(openText, (UINT32)wcslen(openText), m_d2d.FontButton, m_unsupportedOpenBtnRect, m_d2d.BrushText);
 
     // Secondary: Show in Folder
@@ -4389,7 +4487,7 @@ void AppWindow::RenderUnsupportedState(const D2D1_RECT_F& rect) {
         rt->FillRoundedRectangle(rRevealBtn, m_d2d.BrushCard);
         rt->DrawRoundedRectangle(rRevealBtn, m_d2d.BrushBorder, 1.0f);
     }
-    const WCHAR* revealText = L"Show in Folder";
+    const WCHAR* revealText = L"Show in folder";
     rt->DrawText(revealText, (UINT32)wcslen(revealText), m_d2d.FontButton, m_unsupportedRevealBtnRect, m_d2d.BrushText);
 
     // Tertiary: Copy Path
@@ -4409,7 +4507,7 @@ void AppWindow::RenderUnsupportedState(const D2D1_RECT_F& rect) {
         rt->FillRoundedRectangle(rCopyBtn, m_d2d.BrushCard);
         rt->DrawRoundedRectangle(rCopyBtn, m_d2d.BrushBorder, 1.0f);
     }
-    const WCHAR* copyText = L"Copy Path";
+    const WCHAR* copyText = L"Copy path";
     rt->DrawText(copyText, (UINT32)wcslen(copyText), m_d2d.FontButton, m_unsupportedCopyBtnRect, m_d2d.BrushText);
 
     // 6. Clean bottom shortcuts legend pill
@@ -4672,7 +4770,7 @@ bool AppWindow::ShouldAutoCheckForUpdates() {
 
 void AppWindow::CheckForUpdates(bool isUserInitiated) {
     if (isUserInitiated) {
-        ShowToast(L"Checking for updates...");
+        ShowToast(L"Checking for updates…");
     }
     // Every network check (auto or user-initiated) fronts the 2h throttle; a manual
     // check must not leave the auto-checker free to run again minutes later.
@@ -4929,22 +5027,24 @@ void AppWindow::SyncSpaceSuppression() {
     ExplorerHook::SetSuppressSpaceClose(m_showSettings || m_isRecordingKeybind || editing);
 }
 
-void AppWindow::SaveCurrentTextFile() {    if (m_docType != DocumentType::Text && m_docType != DocumentType::Spreadsheet) return;
+void AppWindow::SaveCurrentTextFile() {
+    if (m_docType != DocumentType::Text && m_docType != DocumentType::Spreadsheet) return;
     if (m_text.IsReadOnly()) {
-        ShowToast(L"This file is read-only (over the 16 MB editing limit).");
+        ShowToast(L"This file is over 16 MB, so it's read-only.");
         return;
     }
     if (m_text.SaveFile()) {
-        ShowToast(L"Saved successfully (Ctrl+S)");
+        ShowToast(L"Saved");
         UpdateWindowTitle();
         InvalidateRect(m_hwnd, NULL, FALSE);
     } else {
-        ShowToast(L"Error saving file!");
+        ShowToast(L"Couldn't save the file.");
     }
 }
 
 void AppWindow::ShowContextMenu(int screenX, int screenY) {
     if (m_docType == DocumentType::None) return;
+    ++m_contextMenuCount;
 
     POINT ptScreen = { screenX, screenY };
     POINT ptClient = ptScreen;
@@ -4981,32 +5081,48 @@ void AppWindow::ShowContextMenu(int screenX, int screenY) {
         AppendMenuW(hMenu, (m_text.HasSelection() || !m_text.GetAllText().empty()) ? MF_STRING : (MF_STRING | MF_GRAYED), IDM_CTX_COPY, L"Copy\tCtrl+C");
         AppendMenuW(hMenu, IsClipboardFormatAvailable(CF_UNICODETEXT) ? MF_STRING : (MF_STRING | MF_GRAYED), IDM_CTX_PASTE, L"Paste\tCtrl+V");
         AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
-        AppendMenuW(hMenu, MF_STRING, IDM_CTX_SELECT_ALL, L"Select All\tCtrl+A");
+        AppendMenuW(hMenu, MF_STRING, IDM_CTX_SELECT_ALL, L"Select all\tCtrl+A");
         AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
-        AppendMenuW(hMenu, MF_STRING, IDM_CTX_SAVE, m_text.IsModified() ? L"Save File*\tCtrl+S" : L"Save File\tCtrl+S");
-        AppendMenuW(hMenu, MF_STRING | (m_text.IsWordWrap() ? MF_CHECKED : MF_UNCHECKED), IDM_CTX_WORD_WRAP, L"Word Wrap\tAlt+Z");
+        AppendMenuW(hMenu, MF_STRING, IDM_CTX_SAVE, m_text.IsModified() ? L"Save*\tCtrl+S" : L"Save\tCtrl+S");
+        AppendMenuW(hMenu, MF_STRING | (m_text.IsWordWrap() ? MF_CHECKED : MF_UNCHECKED), IDM_CTX_WORD_WRAP, L"Word wrap\tAlt+Z");
         if (m_docType == DocumentType::Spreadsheet) {
-            AppendMenuW(hMenu, MF_STRING | (m_text.IsTableView() ? MF_CHECKED : MF_UNCHECKED), IDM_CTX_TABLE_VIEW, L"Grid Table View\tT");
+            AppendMenuW(hMenu, MF_STRING | (m_text.IsTableView() ? MF_CHECKED : MF_UNCHECKED), IDM_CTX_TABLE_VIEW, L"Table view\tT");
         }
     } else if (m_docType == DocumentType::Image || m_docType == DocumentType::Pdf) {
-        AppendMenuW(hMenu, MF_STRING, IDM_CTX_ZOOM_IN, L"Zoom In\t+");
-        AppendMenuW(hMenu, MF_STRING, IDM_CTX_ZOOM_OUT, L"Zoom Out\t-");
-        AppendMenuW(hMenu, MF_STRING, IDM_CTX_ZOOM_RESET, L"Actual Size (100%)\t0");
+        AppendMenuW(hMenu, MF_STRING, IDM_CTX_ZOOM_IN, L"Zoom in\t+");
+        AppendMenuW(hMenu, MF_STRING, IDM_CTX_ZOOM_OUT, L"Zoom out\t-");
+        AppendMenuW(hMenu, MF_STRING, IDM_CTX_ZOOM_RESET, L"Actual size 100%\t0");
         AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
-        AppendMenuW(hMenu, MF_STRING, IDM_CTX_ROTATE_LEFT, L"Rotate Left\tCtrl+L");
-        AppendMenuW(hMenu, MF_STRING, IDM_CTX_ROTATE_RIGHT, L"Rotate Right\tCtrl+R");
+        AppendMenuW(hMenu, MF_STRING, IDM_CTX_ROTATE_LEFT, L"Rotate left\tCtrl+L");
+        AppendMenuW(hMenu, MF_STRING, IDM_CTX_ROTATE_RIGHT, L"Rotate right\tCtrl+R");
         AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
         AppendMenuW(hMenu, MF_STRING | (m_isFullscreen ? MF_CHECKED : MF_UNCHECKED), IDM_CTX_FULLSCREEN, L"Fullscreen\tF11");
-        AppendMenuW(hMenu, MF_STRING, IDM_CTX_INFO, L"File Inspector\tI");
+        AppendMenuW(hMenu, MF_STRING, IDM_CTX_INFO, L"File info\tI");
+        AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
+        AppendMenuW(hMenu, MF_STRING, IDM_CTX_OPEN_WITH, L"Open with...");
+        AppendMenuW(hMenu, MF_STRING, IDM_CTX_REVEAL, L"Show in folder\tCtrl+Shift+R");
+        AppendMenuW(hMenu, MF_STRING, IDM_CTX_COPY_PATH, L"Copy path\tCtrl+C");
     } else {
-        AppendMenuW(hMenu, MF_STRING | (m_isFullscreen ? MF_CHECKED : MF_UNCHECKED), IDM_CTX_FULLSCREEN, L"Fullscreen\tF11");
-        AppendMenuW(hMenu, MF_STRING, IDM_CTX_INFO, L"File Inspector\tI");
+        if (m_docType == DocumentType::Media) {
+            AppendMenuW(hMenu, MF_STRING, IDM_CTX_PLAY_PAUSE, m_media.IsPlaying() ? L"Pause\tSpace" : L"Play\tSpace");
+            AppendMenuW(hMenu, MF_STRING | (m_isLooping ? MF_CHECKED : MF_UNCHECKED), IDM_CTX_LOOP, L"Loop");
+            AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
+            AppendMenuW(hMenu, MF_STRING, IDM_CTX_INFO, L"File info\tI");
+            AppendMenuW(hMenu, MF_STRING | (m_isFullscreen ? MF_CHECKED : MF_UNCHECKED), IDM_CTX_FULLSCREEN, L"Fullscreen\tF11");
+        } else {
+            AppendMenuW(hMenu, MF_STRING, IDM_CTX_INFO, L"File info\tI");
+            AppendMenuW(hMenu, MF_STRING | (m_isFullscreen ? MF_CHECKED : MF_UNCHECKED), IDM_CTX_FULLSCREEN, L"Fullscreen\tF11");
+        }
+        AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
+        AppendMenuW(hMenu, MF_STRING, IDM_CTX_OPEN_WITH, L"Open with...");
+        AppendMenuW(hMenu, MF_STRING, IDM_CTX_REVEAL, L"Show in folder\tCtrl+Shift+R");
+        AppendMenuW(hMenu, MF_STRING, IDM_CTX_COPY_PATH, L"Copy path\tCtrl+C");
     }
 
     AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
-    AppendMenuW(hMenu, MF_STRING, IDM_CTX_SETTINGS, L"Settings...\tCtrl+,");
-    AppendMenuW(hMenu, MF_STRING, IDM_CTX_CHECK_UPDATES, L"Check for Updates...\tCtrl+U");
-    AppendMenuW(hMenu, MF_STRING, IDM_CTX_SIMULATE_UPDATE, L"Simulate Update Prompt (Test)\tCtrl+Shift+U");
+    AppendMenuW(hMenu, MF_STRING, IDM_CTX_SETTINGS, L"Settings\tCtrl+,");
+    AppendMenuW(hMenu, MF_STRING, IDM_CTX_CHECK_UPDATES, L"Check for updates\tCtrl+U");
+    AppendMenuW(hMenu, MF_STRING, IDM_CTX_SIMULATE_UPDATE, L"Simulate update prompt\tCtrl+Shift+U");
 
     SetForegroundWindow(m_hwnd);
     int cmd = TrackPopupMenu(hMenu, TPM_RIGHTBUTTON | TPM_LEFTALIGN | TPM_RETURNCMD, screenX, screenY, 0, m_hwnd, NULL);
@@ -5027,7 +5143,7 @@ void AppWindow::ShowContextMenu(int screenX, int screenY) {
         case IDM_CTX_COPY:
             if (m_docType == DocumentType::Spreadsheet && m_text.IsTableView()) {
                 CopyTextToClipboard(m_hwnd, m_text.GetAllText());
-                ShowToast(L"Copied table");
+                ShowToast(L"Table copied");
             } else if (m_docType == DocumentType::Text || m_docType == DocumentType::Spreadsheet) {
                 if (m_text.Copy(m_hwnd)) {
                     ShowToast(m_text.HasSelection() ? L"Copied selection" : L"Copied line");
@@ -5046,12 +5162,12 @@ void AppWindow::ShowContextMenu(int screenX, int screenY) {
             break;
         case IDM_CTX_WORD_WRAP:
             m_text.ToggleWordWrap();
-            ShowToast(m_text.IsWordWrap() ? L"Word Wrap: ON" : L"Word Wrap: OFF");
+            ShowToast(m_text.IsWordWrap() ? L"Word wrap on" : L"Word wrap off");
             InvalidateRect(m_hwnd, NULL, FALSE);
             break;
         case IDM_CTX_TABLE_VIEW:
             m_text.ToggleTableView();
-            ShowToast(m_text.IsTableView() ? L"Grid View" : L"Raw Text View");
+            ShowToast(m_text.IsTableView() ? L"Table view" : L"Text view");
             InvalidateRect(m_hwnd, NULL, FALSE);
             break;
         case IDM_CTX_ZOOM_IN:
@@ -5078,12 +5194,36 @@ void AppWindow::ShowContextMenu(int screenX, int screenY) {
         case IDM_CTX_SETTINGS:
             ToggleSettings();
             break;
+        case IDM_CTX_OPEN_WITH:
+            OpenCurrentFileInDefaultApp();
+            break;
+        case IDM_CTX_REVEAL: {
+            std::wstring params = L"/select,\"" + m_currentFilePath + L"\"";
+            ShellExecuteW(NULL, L"open", L"explorer.exe", params.c_str(), NULL, SW_SHOWNORMAL);
+            break;
+        }
+        case IDM_CTX_COPY_PATH:
+            CopyTextToClipboard(m_hwnd, m_currentFilePath);
+            ShowToast(L"Copied file path");
+            InvalidateRect(m_hwnd, NULL, FALSE);
+            break;
+        case IDM_CTX_PLAY_PAUSE:
+            m_media.TogglePlayPause();
+            EnsureAnimTimer();
+            InvalidateRect(m_hwnd, NULL, FALSE);
+            break;
+        case IDM_CTX_LOOP:
+            m_isLooping = !m_isLooping;
+            SaveLoopPref();
+            ShowToast(m_isLooping ? L"Loop on" : L"Loop off");
+            InvalidateRect(m_hwnd, NULL, FALSE);
+            break;
         case IDM_CTX_CHECK_UPDATES:
             CheckForUpdates(true);
             break;
         case IDM_CTX_SIMULATE_UPDATE:
             m_updater.SimulateUpdateForTesting();
-            ShowToast(L"Simulated Update: v1.1.0 Ready to Test");
+            ShowToast(L"Test update v1.1.0 is ready");
             InvalidateRect(m_hwnd, NULL, FALSE);
             break;
     }
@@ -5714,9 +5854,7 @@ void AppWindow::RenderSearchBar(const D2D1_RECT_F& canvasRect) {
     }
     float cx = m_searchCloseBtn.left + 11.0f;
     float cy = m_searchCloseBtn.top + 12.0f;
-    float cr = 4.0f;
-    rt->DrawLine(D2D1::Point2F(cx - cr, cy - cr), D2D1::Point2F(cx + cr, cy + cr), m_d2d.BrushTextMuted, 1.5f);
-    rt->DrawLine(D2D1::Point2F(cx + cr, cy - cr), D2D1::Point2F(cx - cr, cy + cr), m_d2d.BrushTextMuted, 1.5f);
+    m_d2d.DrawIconClose(cx, cy, 12.0f, m_d2d.BrushTextMuted);
 
     if (!m_showSearch) {
         m_searchBarRect = {};
@@ -5866,7 +6004,7 @@ void AppWindow::RenderInspector(const D2D1_RECT_F& canvasRect) {
 
     // Header bar (Zen Editorial Tech title with Amber accent dot)
     D2D1_RECT_F headerR = D2D1::RectF(cardX + 16.0f, cardY + 12.0f, cardX + cardW - 44.0f, cardY + 36.0f);
-    rt->DrawText(L"METADATA INSPECTOR", 20, m_d2d.FontUtilityMono ? m_d2d.FontUtilityMono : (m_d2d.FontTitle ? m_d2d.FontTitle : m_d2d.FontBody), headerR, m_d2d.BrushText);
+    rt->DrawText(L"FILE INFO", (UINT32)wcslen(L"FILE INFO"), m_d2d.FontUtilityMono ? m_d2d.FontUtilityMono : (m_d2d.FontTitle ? m_d2d.FontTitle : m_d2d.FontBody), headerR, m_d2d.BrushText);
 
     // Close button (24x24 hit area, optical center)
     float closeX = cardX + cardW - 24.0f;
@@ -5880,10 +6018,8 @@ void AppWindow::RenderInspector(const D2D1_RECT_F& canvasRect) {
     } else if (m_hoveredButtonId == BTN_INSPECTOR_CLOSE) {
         rt->FillRoundedRectangle(closeR, m_d2d.BrushHover);
     }
-    float cr = 4.5f;
     ID2D1Brush* closeBrush = (m_hoveredButtonId == BTN_INSPECTOR_CLOSE || m_pressedButtonId == BTN_INSPECTOR_CLOSE) ? (ID2D1Brush*)m_d2d.BrushText : (ID2D1Brush*)m_d2d.BrushTextMuted;
-    rt->DrawLine(D2D1::Point2F(closeX - cr, closeY - cr), D2D1::Point2F(closeX + cr, closeY + cr), closeBrush, 1.5f);
-    rt->DrawLine(D2D1::Point2F(closeX + cr, closeY - cr), D2D1::Point2F(closeX - cr, closeY + cr), closeBrush, 1.5f);
+    m_d2d.DrawIconClose(closeX, closeY, 13.0f, closeBrush);
 
     // Divider line
     rt->DrawLine(D2D1::Point2F(cardX + 16.0f, cardY + 44.0f), D2D1::Point2F(cardX + cardW - 16.0f, cardY + 44.0f), m_d2d.BrushBorderSubtle, 1.0f);
@@ -5903,7 +6039,7 @@ void AppWindow::RenderInspector(const D2D1_RECT_F& canvasRect) {
         rt->FillRoundedRectangle(copyR, m_d2d.BrushChipBg ? m_d2d.BrushChipBg : m_d2d.BrushCard);
         rt->DrawRoundedRectangle(copyR, m_d2d.BrushChipBorder ? m_d2d.BrushChipBorder : m_d2d.BrushBorderSubtle, 1.0f);
     }
-    const WCHAR* copyLabel = L"COPY METADATA ↗";
+    const WCHAR* copyLabel = L"COPY DETAILS";
     IDWriteTextFormat* copyFont = m_d2d.FontUtilityMonoCenter ? m_d2d.FontUtilityMonoCenter : (m_d2d.FontButton ? m_d2d.FontButton : m_d2d.FontCaption);
     rt->DrawText(copyLabel, (UINT32)wcslen(copyLabel), copyFont, m_inspectorCopyRect, m_d2d.BrushText);
 
@@ -6312,7 +6448,7 @@ void AppWindow::SaveImageFile(bool promptSaveAs) {
         m_isCropActive = false;
         m_cropDragHandle = 0;
         OpenFile(destPath);
-        ShowToast(L"Image saved successfully.");
+        ShowToast(L"Image saved");
     } else {
         ShowToast(L"Could not save image — the original file was left untouched.");
     }
@@ -6436,8 +6572,8 @@ void AppWindow::RenderSettingsModal(const D2D1_RECT_F& canvasRect) {
     ID2D1HwndRenderTarget* rt = m_d2d.GetRenderTarget();
     if (!rt) return;
 
-    // 1. Full-screen backdrop tint (#000000 at 58% * m_settingsAnim)
-    m_d2d.BrushShadowDark->SetOpacity(0.58f * m_settingsAnim);
+    // 1. Full-screen backdrop tint (#000000 at 68% * m_settingsAnim)
+    m_d2d.BrushShadowDark->SetOpacity(0.68f * m_settingsAnim);
     rt->FillRectangle(canvasRect, m_d2d.BrushShadowDark);
     m_d2d.BrushShadowDark->SetOpacity(0.40f);
 
@@ -6470,7 +6606,7 @@ void AppWindow::RenderSettingsModal(const D2D1_RECT_F& canvasRect) {
 
     // 3. Card Surface & Border (Obsidian Minimalist Surface)
     D2D1_ROUNDED_RECT cardR = D2D1::RoundedRect(m_settingsModalRect, 16.0f, 16.0f);
-    m_d2d.BrushCard->SetOpacity(0.98f);
+    m_d2d.BrushCard->SetOpacity(1.0f);
     rt->FillRoundedRectangle(cardR, m_d2d.BrushCard);
     m_d2d.BrushCard->SetOpacity(1.0f);
     rt->DrawRoundedRectangle(cardR, m_d2d.BrushBorder, 1.2f);
@@ -6487,11 +6623,11 @@ void AppWindow::RenderSettingsModal(const D2D1_RECT_F& canvasRect) {
 
     // Title & Subtitle (Monospace Section Header)
     D2D1_RECT_F titleR = D2D1::RectF(iconCx + 18.0f, curY, m_settingsModalRect.right - 60.0f, curY + 22.0f);
-    const WCHAR* titleText = L"PREFERENCES & SETTINGS";
+    const WCHAR* titleText = L"SETTINGS";
     rt->DrawText(titleText, (UINT32)wcslen(titleText), m_d2d.FontButton ? m_d2d.FontButton : m_d2d.FontCaption, titleR, m_d2d.BrushText);
 
     D2D1_RECT_F subR = D2D1::RectF(iconCx + 18.0f, curY + 22.0f, m_settingsModalRect.right - 60.0f, curY + 38.0f);
-    const WCHAR* subText = L"Configure global hotkeys, explorer behavior, viewer defaults & updates";
+    const WCHAR* subText = L"Keys, Explorer behavior, viewer defaults and updates";
     rt->DrawText(subText, (UINT32)wcslen(subText), m_d2d.FontBadge ? m_d2d.FontBadge : m_d2d.FontCaption, subR, m_d2d.BrushTextMuted);
 
     // Close button (X)
@@ -6504,8 +6640,7 @@ void AppWindow::RenderSettingsModal(const D2D1_RECT_F& canvasRect) {
     } else if (m_hoveredButtonId == BTN_SETTINGS_CLOSE) {
         rt->FillRoundedRectangle(D2D1::RoundedRect(m_settingsCloseBtn, 6.0f, 6.0f), m_d2d.BrushHover);
     }
-    rt->DrawLine(D2D1::Point2F(closeCx - 5.0f, closeCy - 5.0f), D2D1::Point2F(closeCx + 5.0f, closeCy + 5.0f), m_d2d.BrushTextMuted, 1.4f);
-    rt->DrawLine(D2D1::Point2F(closeCx + 5.0f, closeCy - 5.0f), D2D1::Point2F(closeCx - 5.0f, closeCy + 5.0f), m_d2d.BrushTextMuted, 1.4f);
+    m_d2d.DrawIconClose(closeCx, closeCy, 13.0f, m_d2d.BrushTextMuted);
 
     curY += 46.0f;
 
@@ -6516,7 +6651,7 @@ void AppWindow::RenderSettingsModal(const D2D1_RECT_F& canvasRect) {
     rt->FillRoundedRectangle(D2D1::RoundedRect(tabContainerR, 8.0f, 8.0f), m_d2d.BrushSidebar);
     rt->DrawRoundedRectangle(D2D1::RoundedRect(tabContainerR, 8.0f, 8.0f), m_d2d.BrushBorderSubtle, 1.0f);
 
-    const wchar_t* tabTitles[4] = { L"GENERAL", L"HOTKEYS & NAV", L"VIEWER & MEDIA", L"ABOUT" };
+    const wchar_t* tabTitles[4] = { L"GENERAL", L"KEYS", L"VIEWER", L"ABOUT" };
     float chipW = tabW / 4.0f;
     IDWriteTextFormat* btnCenterFont = m_d2d.FontUtilityMonoCenter ? m_d2d.FontUtilityMonoCenter : (m_d2d.FontCaptionCenter ? m_d2d.FontCaptionCenter : m_d2d.FontCaption);
 
@@ -6533,8 +6668,20 @@ void AppWindow::RenderSettingsModal(const D2D1_RECT_F& canvasRect) {
             rt->FillRoundedRectangle(chipR, m_d2d.BrushHover);
         }
 
-        rt->DrawText(tabTitles[i], (UINT32)wcslen(tabTitles[i]), btnCenterFont, m_settingsTabRects[i],
-                     isActiveTab ? (ID2D1Brush*)m_d2d.BrushText : (ID2D1Brush*)m_d2d.BrushTextMuted);
+        ID2D1Brush* tabBrush = isActiveTab ? (ID2D1Brush*)m_d2d.BrushText : (ID2D1Brush*)m_d2d.BrushTextMuted;
+        const float textW = (float)wcslen(tabTitles[i]) * 6.9f;
+        const float groupW = 14.0f + 6.0f + textW;
+        const float groupLeft = (m_settingsTabRects[i].left + m_settingsTabRects[i].right) / 2.0f - groupW / 2.0f;
+        float iconX = groupLeft + 7.0f;
+        switch (i) {
+            case 0: m_d2d.DrawIconSliders(iconX, curY + tabH / 2.0f, 14.0f, tabBrush); break;
+            case 1: m_d2d.DrawIconKeyboard(iconX, curY + tabH / 2.0f, 14.0f, tabBrush); break;
+            case 2: m_d2d.DrawIconMonitor(iconX, curY + tabH / 2.0f, 14.0f, tabBrush); break;
+            default: m_d2d.DrawIconInfo(iconX, curY + tabH / 2.0f, 14.0f, tabBrush); break;
+        }
+        D2D1_RECT_F labelRect = D2D1::RectF(groupLeft + 20.0f, m_settingsTabRects[i].top,
+                                            groupLeft + 20.0f + textW + 4.0f, m_settingsTabRects[i].bottom);
+        rt->DrawText(tabTitles[i], (UINT32)wcslen(tabTitles[i]), btnCenterFont, labelRect, tabBrush);
     }
 
     curY += tabH + 16.0f;
@@ -6549,11 +6696,13 @@ void AppWindow::RenderSettingsModal(const D2D1_RECT_F& canvasRect) {
             rt->FillRoundedRectangle(D2D1::RoundedRect(outHitRect, 6.0f, 6.0f), m_d2d.BrushHover);
         }
 
-        D2D1_RECT_F tR = D2D1::RectF(rowX + 16.0f, rowY + 9.0f, rowX + rowW - 68.0f, rowY + 28.0f);
-        rt->DrawText(title, (UINT32)wcslen(title), m_d2d.FontButton ? m_d2d.FontButton : m_d2d.FontCaption, tR, m_d2d.BrushText);
+        D2D1_RECT_F tR = D2D1::RectF(rowX + 16.0f, rowY + 8.0f, rowX + rowW - 68.0f, rowY + 28.0f);
+        IDWriteTextFormat* rowTitleFont = m_d2d.FontTitle ? m_d2d.FontTitle : (m_d2d.FontButton ? m_d2d.FontButton : m_d2d.FontCaption);
+        rt->DrawText(title, (UINT32)wcslen(title), rowTitleFont, tR, m_d2d.BrushText);
 
-        D2D1_RECT_F dR = D2D1::RectF(rowX + 16.0f, rowY + 28.0f, rowX + rowW - 68.0f, rowY + rowH - 4.0f);
-        rt->DrawText(desc, (UINT32)wcslen(desc), m_d2d.FontBadge ? m_d2d.FontBadge : m_d2d.FontCaption, dR, m_d2d.BrushTextMuted);
+        D2D1_RECT_F dR = D2D1::RectF(rowX + 16.0f, rowY + 27.0f, rowX + rowW - 68.0f, rowY + rowH - 2.0f);
+        IDWriteTextFormat* rowDescFont = m_d2d.FontCaption ? m_d2d.FontCaption : m_d2d.FontBadge;
+        rt->DrawText(desc, (UINT32)wcslen(desc), rowDescFont, dR, m_d2d.BrushTextMuted);
 
         float swH = 22.0f;
         float swW = 42.0f;
@@ -6581,19 +6730,19 @@ void AppWindow::RenderSettingsModal(const D2D1_RECT_F& canvasRect) {
             cardH = 4 * rH;
         }
         drawSettingRow(contentX, curY + 0 * rH, contentW, rH,
-                       L"Start WinPreview with Windows", L"Launch minimized on boot so file previewing is instantly ready.",
+                       L"Start with Windows", L"Launch minimized at sign-in so previews are ready.",
                        IsAutoStartEnabled(), BTN_SETTINGS_AUTOSTART, m_settingsAutostartBtn, false);
 
         drawSettingRow(contentX, curY + 1 * rH, contentW, rH,
-                       L"Close Preview on Focus Loss", L"Automatically dismiss preview when clicking another window or desktop.",
+                       L"Hide when focus moves away", L"Dismiss the preview when you click another window.",
                        m_closeOnFocusLoss, BTN_SETTINGS_TOGGLE_FOCUS_LOSS, m_settingsToggleFocusLossRect, false);
 
         drawSettingRow(contentX, curY + 2 * rH, contentW, rH,
-                       L"Keep Resident in Background", L"Close button hides window to system tray for instant 0ms previews.",
+                       L"Stay in the background", L"Closing the window keeps WinPreview one keystroke away.",
                        m_keepInMemory, BTN_SETTINGS_TOGGLE_KEEP_MEMORY, m_settingsToggleKeepMemoryRect, false);
 
         drawSettingRow(contentX, curY + 3 * rH, contentW, rH,
-                       L"Automatic Update Checks", L"Silently check for newer versions in background once every 2 hours.",
+                       L"Check for updates automatically", L"Look for a new version in the background every two hours.",
                        m_autoCheckUpdates, BTN_SETTINGS_TOGGLE_UPDATE_CHECK, m_settingsToggleUpdateCheckRect, true);
     }
     // TAB 1: HOTKEYS & NAV
@@ -6622,7 +6771,7 @@ void AppWindow::RenderSettingsModal(const D2D1_RECT_F& canvasRect) {
             rt->FillRoundedRectangle(badgeR, m_d2d.BrushActiveMatch);
             m_d2d.BrushActiveMatch->SetOpacity(1.0f);
             rt->DrawRoundedRectangle(badgeR, m_d2d.BrushAccent, 1.5f);
-            const WCHAR* recText = L"Press any key...";
+            const WCHAR* recText = L"Press a key or combo";
             rt->DrawText(recText, (UINT32)wcslen(recText), btnCenterFont, badgeRect, m_d2d.BrushAccent);
         } else {
             rt->FillRoundedRectangle(badgeR, m_d2d.BrushCard);
@@ -6651,7 +6800,7 @@ void AppWindow::RenderSettingsModal(const D2D1_RECT_F& canvasRect) {
             if (m_hoveredButtonId == BTN_SETTINGS_RECORD) rt->FillRoundedRectangle(recR, m_d2d.BrushHover);
             else rt->FillRoundedRectangle(recR, m_d2d.BrushCard);
             rt->DrawRoundedRectangle(recR, m_d2d.BrushBorder, 1.0f);
-            const WCHAR* txt = L"Record Shortcut";
+            const WCHAR* txt = L"Record shortcut";
             rt->DrawText(txt, (UINT32)wcslen(txt), btnCenterFont, m_settingsRecordBtn, m_d2d.BrushText);
         }
 
@@ -6665,7 +6814,7 @@ void AppWindow::RenderSettingsModal(const D2D1_RECT_F& canvasRect) {
 
         float presetY = curY + keyCardH + 14.0f;
         D2D1_RECT_F preLabelR = D2D1::RectF(contentX, presetY, contentX + contentW, presetY + 16.0f);
-        const WCHAR* preLabel = L"QUICK PRESET SHORTCUTS";
+        const WCHAR* preLabel = L"QUICK PRESETS";
         rt->DrawText(preLabel, (UINT32)wcslen(preLabel), m_d2d.FontBadge ? m_d2d.FontBadge : m_d2d.FontCaption, preLabelR, m_d2d.BrushTextMuted);
 
         presetY += 20.0f;
@@ -6715,11 +6864,11 @@ void AppWindow::RenderSettingsModal(const D2D1_RECT_F& canvasRect) {
 
         float rH = std::min(62.0f, navCardH * 0.5f);
         drawSettingRow(contentX, navCardY + 0 * rH, contentW, rH,
-                       L"Arrow Keys Navigate Files", L"Press Left / Right arrow keys to preview adjacent files in the folder.",
+                       L"Arrow keys browse files", L"Use ← and → to preview the next file in the folder.",
                        m_arrowKeyNavEnabled, BTN_SETTINGS_TOGGLE_ARROW_NAV, m_settingsToggleArrowNavRect, false);
 
         drawSettingRow(contentX, navCardY + 1 * rH, contentW, rH,
-                       L"Loop Folder Navigation", L"Wrap around to the first file when reaching the end of the folder.",
+                       L"Wrap around at folder ends", L"Continue from the first file after the last.",
                        m_loopFolderNav, BTN_SETTINGS_TOGGLE_LOOP_FOLDER, m_settingsToggleLoopFolderRect, true);
     }
     // TAB 2: VIEWER & MEDIA
@@ -6736,27 +6885,27 @@ void AppWindow::RenderSettingsModal(const D2D1_RECT_F& canvasRect) {
         rt->DrawRoundedRectangle(D2D1::RoundedRect(groupCard, 8.0f, 8.0f), m_d2d.BrushBorderSubtle, 1.0f);
 
         drawSettingRow(contentX, curY + 0 * rH, contentW, rH,
-                       L"Clean Media Showcase", L"Single click anywhere toggles GUI; media opens in full clean immersion.",
+                       L"Hide controls while viewing", L"Controls fade after a moment. Click the canvas to bring them back.",
                        m_cleanShowcaseMode, BTN_SETTINGS_TOGGLE_CLEAN_SHOWCASE, m_settingsToggleCleanShowcaseRect, false);
 
         drawSettingRow(contentX, curY + 1 * rH, contentW, rH,
-                       L"Auto-Play Videos & Audio", L"Automatically begin playback when opening video or audio files.",
+                       L"Autoplay media", L"Start playing video and audio as soon as they open.",
                        m_autoPlayMedia, BTN_SETTINGS_TOGGLE_AUTOPLAY, m_settingsToggleAutoplayRect, false);
 
         drawSettingRow(contentX, curY + 2 * rH, contentW, rH,
-                       L"Continuous Media Loop", L"Seamlessly loop video and audio playback.",
+                       L"Loop media", L"Repeat video and audio when they reach the end.",
                        m_isLooping, BTN_SETTINGS_TOGGLE_LOOP_MEDIA, m_settingsToggleLoopMediaRect, false);
 
         drawSettingRow(contentX, curY + 3 * rH, contentW, rH,
-                       L"Auto-Detect Cinema Log Footage", L"Automatically apply Rec.709 tone-map for Apple Log, Sony S-Log, etc.",
+                       L"Detect cinema log footage", L"Apply a Rec.709 look to Log video automatically.",
                        m_autoDetectLog, BTN_SETTINGS_TOGGLE_LOG_DETECT, m_settingsToggleLogDetectRect, false);
 
         drawSettingRow(contentX, curY + 4 * rH, contentW, rH,
-                       L"Show Format & Dimension Badge", L"Display resolution, page count, and codec pill in header dock.",
+                       L"Show format badge", L"Display resolution, page count or codec in the header.",
                        m_showFormatBadge, BTN_SETTINGS_TOGGLE_FORMAT_BADGE, m_settingsToggleFormatBadgeRect, false);
 
         drawSettingRow(contentX, curY + 5 * rH, contentW, rH,
-                       L"Remember Window Size", L"Keep window dimensions constant instead of adapting to file aspect ratio.",
+                       L"Keep window size", L"Don't resize the window to match each file.",
                        m_rememberWindowSize, BTN_SETTINGS_TOGGLE_REMEMBER_SIZE, m_settingsToggleRememberSizeRect, true);
     }
     // TAB 3: ABOUT & SYSTEM
@@ -6773,11 +6922,11 @@ void AppWindow::RenderSettingsModal(const D2D1_RECT_F& canvasRect) {
         m_d2d.DrawIconSettings(brandIconCx, brandIconCy, 24.0f, m_d2d.BrushAccent);
 
         D2D1_RECT_F bTitleR = D2D1::RectF(contentX + 56.0f, brandY, contentX + contentW - 20.0f, brandY + 20.0f);
-        const WCHAR* bTitle = L"WinPreview v" WINPREVIEW_VERSION_WSTR L" (Native Release Engine)";
-        rt->DrawText(bTitle, (UINT32)wcslen(bTitle), m_d2d.FontButton ? m_d2d.FontButton : m_d2d.FontCaption, bTitleR, m_d2d.BrushText);
+        const WCHAR* bTitle = L"WinPreview " WINPREVIEW_VERSION_WSTR;
+        rt->DrawText(bTitle, (UINT32)wcslen(bTitle), m_d2d.FontTitle ? m_d2d.FontTitle : (m_d2d.FontButton ? m_d2d.FontButton : m_d2d.FontCaption), bTitleR, m_d2d.BrushText);
 
         D2D1_RECT_F bSubR = D2D1::RectF(contentX + 56.0f, brandY + 20.0f, contentX + contentW - 20.0f, brandY + 36.0f);
-        const WCHAR* bSub = L"Engineered for Windows 10 & 11 • Zero Telemetry • 0.0% CPU at idle";
+        const WCHAR* bSub = L"Windows 10 & 11 · No telemetry · Quiet when idle";
         rt->DrawText(bSub, (UINT32)wcslen(bSub), m_d2d.FontBadge ? m_d2d.FontBadge : m_d2d.FontCaption, bSubR, m_d2d.BrushTextMuted);
 
         float divY = brandY + 46.0f;
@@ -6795,18 +6944,15 @@ void AppWindow::RenderSettingsModal(const D2D1_RECT_F& canvasRect) {
 
         float rowY = divY + 14.0f;
         bool hookOk = ExplorerHook::IsHookInstalled();
-        drawDiagRow(rowY, L"Explorer Integration",
-                    hookOk ? L"● Low-Level Keyboard Hook Active (Global)" : L"● Keyboard Hook Inactive",
+        drawDiagRow(rowY, L"Spacebar preview",
+                    hookOk ? L"Active in Explorer" : L"Inactive · restart WinPreview",
                     hookOk);
         rowY += 24.0f;
-        drawDiagRow(rowY, L"Rendering Engine", L"Direct2D 1.1 + Direct3D 11 Hardware Compositor", false);
-        rowY += 24.0f;
-        drawDiagRow(rowY, L"Memory Footprint", L"~25–40 MB Private Working Set", false);
+        drawDiagRow(rowY, L"Rendering", L"Direct2D · hardware accelerated", false);
         rowY += 24.0f;
         bool vlcOk = m_media.IsAvailable() || m_media.Initialize(m_hwnd);
-        drawDiagRow(rowY, L"Media Subsystem",
-                    vlcOk ? L"LibVLC 3.0 (hardware decoding active)"
-                          : L"VLC not found — playback disabled",
+        drawDiagRow(rowY, L"Media playback",
+                    vlcOk ? L"VLC detected" : L"Install VLC to play video",
                     false);
 
         float div2Y = rowY + 32.0f;
@@ -6822,7 +6968,7 @@ void AppWindow::RenderSettingsModal(const D2D1_RECT_F& canvasRect) {
         if (m_hoveredButtonId == BTN_SETTINGS_ABOUT_UPDATE_NOW) rt->FillRoundedRectangle(upR, m_d2d.BrushHover);
         else rt->FillRoundedRectangle(upR, m_d2d.BrushChipBg ? m_d2d.BrushChipBg : m_d2d.BrushCard);
         rt->DrawRoundedRectangle(upR, m_d2d.BrushChipBorder ? m_d2d.BrushChipBorder : m_d2d.BrushBorder, 1.0f);
-        const WCHAR* upTxt = L"Check for Updates Now";
+        const WCHAR* upTxt = L"Check for updates";
         rt->DrawText(upTxt, (UINT32)wcslen(upTxt), btnCenterFont, m_settingsAboutUpdateBtn, m_d2d.BrushText);
 
         m_settingsAboutGithubBtn = D2D1::RectF(m_settingsAboutUpdateBtn.right + 12.0f, actBtnY, m_settingsAboutUpdateBtn.right + 12.0f + 160.0f, actBtnY + actBtnH);
@@ -6830,7 +6976,7 @@ void AppWindow::RenderSettingsModal(const D2D1_RECT_F& canvasRect) {
         if (m_hoveredButtonId == BTN_SETTINGS_ABOUT_GITHUB) rt->FillRoundedRectangle(ghR, m_d2d.BrushHover);
         else rt->FillRoundedRectangle(ghR, m_d2d.BrushChipBg ? m_d2d.BrushChipBg : m_d2d.BrushCard);
         rt->DrawRoundedRectangle(ghR, m_d2d.BrushChipBorder ? m_d2d.BrushChipBorder : m_d2d.BrushBorder, 1.0f);
-        const WCHAR* ghTxt = L"GitHub Repository";
+        const WCHAR* ghTxt = L"View on GitHub";
         rt->DrawText(ghTxt, (UINT32)wcslen(ghTxt), btnCenterFont, m_settingsAboutGithubBtn, m_d2d.BrushTextMuted);
     }
 
@@ -6847,7 +6993,8 @@ void AppWindow::RenderSettingsModal(const D2D1_RECT_F& canvasRect) {
     rt->FillEllipse(statusDot, m_d2d.BrushGreen ? (ID2D1Brush*)m_d2d.BrushGreen : (ID2D1Brush*)m_d2d.BrushAccent);
 
     HotkeyConfig curCfg = ExplorerHook::GetHotkeyConfig();
-    std::wstring statusMsg = L"Hook Active & Ready • " + curCfg.name;
+    std::wstring statusMsg = (curCfg.name == L"Space") ? L"Spacebar preview is on"
+                                                       : (curCfg.name + L" preview is on");
     D2D1_RECT_F statusTextR = D2D1::RectF(dotX + 10.0f, footContentY + 6.0f, dotX + 350.0f, footContentY + 24.0f);
     rt->DrawText(statusMsg.c_str(), (UINT32)statusMsg.length(), m_d2d.FontBadge ? m_d2d.FontBadge : m_d2d.FontCaption, statusTextR,
                  m_d2d.BrushGreen ? (ID2D1Brush*)m_d2d.BrushGreen : (ID2D1Brush*)m_d2d.BrushAccent);
@@ -7009,6 +7156,7 @@ void AppWindow::UpdateHudPosition() {
             m_hudRenderTarget->Resize(D2D1::SizeU((UINT32)hudW, (UINT32)hudH));
             m_hudRenderTarget->SetDpi(96.0f * m_dpiScale, 96.0f * m_dpiScale);
         }
+        if (m_hudHwnd) InvalidateRect(m_hudHwnd, NULL, FALSE);
     } else {
         SetWindowPos(m_hudHwnd, HWND_TOP, pt.x, pt.y, hudW, hudH, SWP_NOACTIVATE | SWP_NOSIZE);
     }
@@ -7151,29 +7299,23 @@ void AppWindow::MaybeSleepAnimTimer(bool animationsActive) {
 
 void AppWindow::WakeAllUiAndCursor(const char* reason) {
     // Any input can start an animation (hover fades, dock reveal, playback); re-arm first.
+    ++m_wakeCount;
+    m_lastWakeTick = GetTickCount64();
+    if (reason) {
+        if (!strcmp(reason, "WM_MOUSEMOVE")) m_wakeCode = 1;
+        else if (!strcmp(reason, "WM_TIMER_FALLBACK")) m_wakeCode = 2;
+        else if (!strcmp(reason, "MOUSE_CLICK")) m_wakeCode = 3;
+        else if (!strcmp(reason, "WM_ACTIVATE")) m_wakeCode = 4;
+        else if (!strcmp(reason, "TOAST")) m_wakeCode = 5;
+        else m_wakeCode = 9;
+    }
     EnsureAnimTimer();
     m_inactivityMs = 0;
 
-    // In Clean Showcase mode, if GUI is currently hidden, mouse movement wakes the cursor only,
-    // without forcing the GUI docks/bars to pop up.
-    if (m_cleanShowcaseMode && !m_guiVisible &&
-        (m_docType == DocumentType::Media || m_docType == DocumentType::Image ||
-         m_docType == DocumentType::Svg || m_docType == DocumentType::Office ||
-         m_docType == DocumentType::Pdf)) {
-        m_dockTargetOpacity = 0.0f;
-        m_hudTargetOpacity = 0.0f;
-        SetCursorVisibility(true);
-        POINT curPos;
-        if (GetCursorPos(&curPos)) {
-            m_lastGlobalMousePos = curPos;
-            POINT clPt = curPos;
-            ScreenToClient(m_hwnd, &clPt);
-            m_lastActiveMousePos = clPt;
-        }
-        InvalidateRect(m_hwnd, NULL, FALSE);
-        return;
-    }
-
+    // Mouse movement always reveals the chrome. Auto-hide is handled by the
+    // inactivity timer, exactly like a normal video/image viewer.
+    if (!m_guiVisible) m_guiRevealedAt = GetTickCount64();
+    m_guiVisible = true;
     m_dockTargetOpacity = 1.0f;
 
     if (m_docType == DocumentType::Media && IsWindowVisible(m_hwnd) && !IsIconic(m_hwnd)) {
@@ -7209,6 +7351,7 @@ void AppWindow::ToggleGuiVisibility() {
 }
 
 void AppWindow::SetGuiVisibility(bool visible) {
+    if (visible && !m_guiVisible) m_guiRevealedAt = GetTickCount64();
     m_guiVisible = visible;
     m_inactivityMs = 0;
     EnsureAnimTimer();
@@ -7226,14 +7369,9 @@ void AppWindow::SetGuiVisibility(bool visible) {
         SetCursorVisibility(true);
     } else {
         m_dockTargetOpacity = 0.0f;
-        m_dockOpacity = 0.0f;
-        m_topDockRect = {};
         if (m_docType == DocumentType::Media) {
+            // Fade the HUD out; the timer hides the window once alpha reaches 0.
             m_hudTargetOpacity = 0.0f;
-            m_hudOpacity = 0.0f;
-            if (m_hudHwnd && IsWindowVisible(m_hudHwnd)) {
-                ShowWindow(m_hudHwnd, SW_HIDE);
-            }
         }
         m_showOverflowMenu = false;
         SetCursorVisibility(false);
@@ -7307,6 +7445,8 @@ void AppWindow::DrawHudIconButton(const D2D1_RECT_F& rect, IconType icon, int bu
         case ICON_LOOP:         m_d2d.DrawIconLoop(cx, cy, iconSize, m_isLooping, brush, m_hudRenderTarget); break;
         case ICON_VOLUME:       m_d2d.DrawIconVolume(cx, cy, iconSize, m_media.IsMuted(), brush, m_hudRenderTarget); break;
         case ICON_FULLSCREEN:   m_d2d.DrawIconFullscreen(cx, cy, iconSize, m_isFullscreen, brush, m_hudRenderTarget); break;
+        case ICON_MORE:         m_d2d.DrawIconHamburger(cx, cy, iconSize, brush, m_hudRenderTarget); break;
+        case ICON_SETTINGS:     m_d2d.DrawIconSettings(cx, cy, iconSize, brush, m_hudRenderTarget); break;
         default: break;
     }
 }
@@ -7314,12 +7454,27 @@ void AppWindow::DrawHudIconButton(const D2D1_RECT_F& rect, IconType icon, int bu
 void AppWindow::RenderHud() {
     if (!m_hudRenderTarget) return;
 
+    // Keep the render target in lockstep with the HUD window's real pixel size and
+    // DPI, so a resize can never leave the pill drawing past its own right edge.
+    {
+        RECT hrc = {};
+        GetClientRect(m_hudHwnd, &hrc);
+        UINT32 cw = (UINT32)(std::max)(1L, hrc.right);
+        UINT32 ch = (UINT32)(std::max)(1L, hrc.bottom);
+        D2D1_SIZE_U px = m_hudRenderTarget->GetPixelSize();
+        if (px.width != cw || px.height != ch) {
+            m_hudRenderTarget->Resize(D2D1::SizeU(cw, ch));
+        }
+        m_hudRenderTarget->SetDpi(96.0f * m_dpiScale, 96.0f * m_dpiScale);
+    }
+
     m_hudRenderTarget->BeginDraw();
     m_hudRenderTarget->Clear(D2D1::ColorF(0.047f, 0.047f, 0.059f, 0.96f));
 
-    D2D1_SIZE_F sz = m_hudRenderTarget->GetSize();
-    float hudW = sz.width;
-    float hudH = sz.height;
+    RECT clientRc = {};
+    GetClientRect(m_hudHwnd, &clientRc);
+    float hudW = PxToDip((std::max)(1L, clientRc.right));
+    float hudH = PxToDip((std::max)(1L, clientRc.bottom));
 
     D2D1_ROUNDED_RECT rrect = D2D1::RoundedRect(D2D1::RectF(0.5f, 0.5f, hudW - 0.5f, hudH - 0.5f), 26.0f, 26.0f);
     m_hudRenderTarget->DrawRoundedRectangle(rrect, m_hudBrushBorder, 1.2f);
@@ -7337,6 +7492,7 @@ void AppWindow::RenderHud() {
     m_hudBtnMute = {};
     m_hudVolSlider = {};
     m_hudBtnFullscreen = {};
+    m_hudBtnMore = {};
 
     float curLeftX = 14.0f;
 
@@ -7376,9 +7532,44 @@ void AppWindow::RenderHud() {
     m_hudBtnFullscreen = D2D1::RectF(curRightX, btnY, curRightX + 30.0f, btnY + btnH);
     DrawHudIconButton(m_hudBtnFullscreen, ICON_FULLSCREEN, BTN_FULLSCREEN);
 
-    // Volume slider & mute
-    bool showVolSlider = (hudW >= 460.0f);
-    bool showMute = (hudW >= 340.0f);
+    // Decide which optional controls still fit. Everything below is drawn right to
+    // left, so we reserve room for the scrubber and the duration readout first and
+    // drop the least important controls when the pill gets narrow.
+    const float kTimeReserve = timeTextW + 8.0f;
+    const float kScrubReserve = 46.0f;
+    bool showVolSlider = true;
+    bool showMute = true;
+    bool showLoop = true;
+    bool showLog = (!m_isAudioOnly);
+    const float kFullscreenW = 30.0f;
+    const float kMoreW = 32.0f;   // 4 gap + 28 button
+    const float kVolW = 58.0f;    // 8 gap + 50 slider
+    const float kMuteW = 34.0f;   // 4 gap + 30 button
+    const float kLoopW = 34.0f;
+    const float kLogW = 46.0f;    // 6 gap + 40 pill
+    const bool showMore = (hudW >= 300.0f);
+    const float rightBudget = hudW - 14.0f - curLeftX - kTimeReserve - kScrubReserve;
+    auto rightGroupW = [&]() {
+        float w = kFullscreenW;
+        if (showMore) w += kMoreW;
+        if (showVolSlider) w += kVolW;
+        if (showMute) w += kMuteW;
+        if (showLoop) w += kLoopW;
+        if (showLog) w += kLogW;
+        return w;
+    };
+    if (rightGroupW() > rightBudget && showLog) showLog = false;
+    if (rightGroupW() > rightBudget && showLoop) showLoop = false;
+    if (rightGroupW() > rightBudget && showVolSlider) showVolSlider = false;
+    if (rightGroupW() > rightBudget && showMute) showMute = false;
+
+    // More actions (file info, open with, settings) - same menu as a right-click
+    if (showMore) {
+        curRightX -= 4.0f;
+        curRightX -= 28.0f;
+        m_hudBtnMore = D2D1::RectF(curRightX, btnY, curRightX + 28.0f, btnY + btnH);
+        DrawHudIconButton(m_hudBtnMore, ICON_MORE, BTN_HUD_MORE);
+    }
 
     if (showVolSlider) {
         curRightX -= 8.0f;
@@ -7405,14 +7596,14 @@ void AppWindow::RenderHud() {
         DrawHudIconButton(m_hudBtnMute, ICON_VOLUME, BTN_MUTE);
     }
 
-    if (hudW >= 520.0f) {
+    if (showLoop) {
         curRightX -= 4.0f;
         curRightX -= 30.0f;
         m_hudBtnLoop = D2D1::RectF(curRightX, btnY, curRightX + 30.0f, btnY + btnH);
         DrawHudIconButton(m_hudBtnLoop, ICON_LOOP, BTN_HUD_LOOP);
     }
 
-    if (!m_isAudioOnly && hudW >= 470.0f) {
+    if (showLog) {
         curRightX -= 6.0f;
         float logBtnW = 40.0f;
         curRightX -= logBtnW;
@@ -7523,12 +7714,13 @@ void AppWindow::RenderHud() {
         D2D1_RECT_F tipBtnRect = {};
         switch (m_hudHoveredButtonId) {
             case BTN_PLAY_PAUSE: hudTipText = m_media.IsPlaying() ? L"Pause (Space)" : L"Play (Space)"; tipBtnRect = m_hudBtnPlayPause; break;
-            case BTN_SKIP_BACK: hudTipText = L"Previous File (←)"; tipBtnRect = m_hudBtnSkipBack; break;
-            case BTN_SKIP_FORWARD: hudTipText = L"Next File (→)"; tipBtnRect = m_hudBtnSkipForward; break;
-            case BTN_HUD_LOOP: hudTipText = m_isLooping ? L"Loop: On" : L"Loop: Off"; tipBtnRect = m_hudBtnLoop; break;
+            case BTN_SKIP_BACK: hudTipText = L"Previous file (←)"; tipBtnRect = m_hudBtnSkipBack; break;
+            case BTN_SKIP_FORWARD: hudTipText = L"Next file (→)"; tipBtnRect = m_hudBtnSkipForward; break;
+            case BTN_HUD_LOOP: hudTipText = m_isLooping ? L"Loop on" : L"Loop off"; tipBtnRect = m_hudBtnLoop; break;
             case BTN_LOG_LUT: hudTipText = m_media.IsLogTransformActive() ? L"Rec.709 Active (C)" : L"Convert Log to Rec.709 (C)"; tipBtnRect = m_hudBtnLog; break;
             case BTN_MUTE: hudTipText = m_media.IsMuted() ? L"Unmute (M)" : L"Mute (M)"; tipBtnRect = m_hudBtnMute; break;
-            case BTN_FULLSCREEN: hudTipText = m_isFullscreen ? L"Exit Fullscreen (Esc)" : L"Fullscreen (F)"; tipBtnRect = m_hudBtnFullscreen; break;
+            case BTN_FULLSCREEN: hudTipText = m_isFullscreen ? L"Exit fullscreen (Esc)" : L"Fullscreen (F)"; tipBtnRect = m_hudBtnFullscreen; break;
+            case BTN_HUD_MORE: hudTipText = L"More actions"; tipBtnRect = m_hudBtnMore; break;
         }
         if (hudTipText && tipBtnRect.right > tipBtnRect.left) {
             float tipCenterX = tipBtnRect.left + (tipBtnRect.right - tipBtnRect.left) / 2.0f;
@@ -7611,6 +7803,8 @@ LRESULT AppWindow::HandleHudMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
 
             POINT physPt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
             D2D1_POINT_2F pt = ClientToDip(physPt);
+            m_lastHudDipX = pt.x;
+            m_lastHudDipY = pt.y;
             m_hudMousePos = pt;
             int oldHover = m_hudHoveredButtonId;
             m_hudHoveredButtonId = 0;
@@ -7626,6 +7820,7 @@ LRESULT AppWindow::HandleHudMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             else if (hit(m_hudBtnLog)) m_hudHoveredButtonId = BTN_LOG_LUT;
             else if (hit(m_hudBtnMute)) m_hudHoveredButtonId = BTN_MUTE;
             else if (hit(m_hudBtnFullscreen)) m_hudHoveredButtonId = BTN_FULLSCREEN;
+            else if (hit(m_hudBtnMore)) m_hudHoveredButtonId = BTN_HUD_MORE;
             else if (hit(m_hudScrubber)) m_hudHoveredButtonId = 100;
             else if (hit(m_hudVolSlider)) m_hudHoveredButtonId = 101;
 
@@ -7671,6 +7866,8 @@ LRESULT AppWindow::HandleHudMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
 
             POINT physPt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
             D2D1_POINT_2F pt = ClientToDip(physPt);
+            m_lastHudDipX = pt.x;
+            m_lastHudDipY = pt.y;
             auto hit = [&](const D2D1_RECT_F& r) {
                 return pt.x >= r.left && pt.x <= r.right && pt.y >= r.top && pt.y <= r.bottom;
             };
@@ -7703,6 +7900,11 @@ LRESULT AppWindow::HandleHudMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             } else if (hit(m_hudBtnFullscreen)) {
                 m_hudPressedButtonId = BTN_FULLSCREEN;
                 ToggleFullscreen();
+            } else if (hit(m_hudBtnMore)) {
+                m_hudPressedButtonId = BTN_HUD_MORE;
+                // Open after this handler returns; running the modal menu loop inside a
+                // mouse-down callback would swallow the rest of the click.
+                PostMessageW(m_hwnd, WM_APP + 103, 0, 0);
             } else if (hit(m_hudScrubber)) {
                 m_isScrubbing = true;
                 float frac = (float)(pt.x - m_hudScrubber.left) / (m_hudScrubber.right - m_hudScrubber.left);
@@ -8193,7 +8395,7 @@ LRESULT CALLBACK AppWindow::UpdatePopupWndProc(HWND hwnd, UINT msg, WPARAM wPara
                 } else if (state == UpdateState::Downloaded) {
                     bool launched = self->m_updater.LaunchInstallerAndExit(self->m_hwnd);
                     if (!launched) {
-                        self->ShowToast(L"Failed to launch installer. Please run as admin.");
+                        self->ShowToast(L"Couldn't start the installer.");
                     }
                 }
                 InvalidateRect(hwnd, NULL, FALSE);
@@ -8215,9 +8417,9 @@ LRESULT CALLBACK AppWindow::UpdatePopupWndProc(HWND hwnd, UINT msg, WPARAM wPara
 
         case WM_UPDATE_DL_DONE:
             if (!wParam) {
-                self->ShowToast(L"Download failed. Click Retry.");
+                self->ShowToast(L"Download failed. Try again.");
             } else {
-                self->ShowToast(L"Update downloaded! Click Restart to install.");
+                self->ShowToast(L"Update downloaded. Restart to install.");
             }
             InvalidateRect(hwnd, NULL, FALSE);
             return 0;
@@ -8245,7 +8447,7 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                         m_updater.Dismiss();
                     } else {
                         ShowUpdatePopup();
-                        ShowToast(L"Update v" + info.remoteVersion + L" is ready! Click Update in popup.");
+                        ShowToast(L"Update v" + info.remoteVersion + L" is available in the update banner.");
                     }
                 } else if (!res->failed) {
                     // Server reports up to date: a previous dismissal is obsolete.
@@ -8301,7 +8503,7 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
 
         case WM_UPDATE_DL_DONE: {
             if (!wParam) {
-                ShowToast(L"Failed to download update.");
+                ShowToast(L"Download failed.");
             }
             InvalidateRect(m_hwnd, NULL, FALSE);
             return 0;
@@ -8577,7 +8779,8 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                     HideMainWindow();
                 }
             } else {
-                WakeAllUiAndCursor();
+                ++m_activateCount;
+                WakeAllUiAndCursor("WM_ACTIVATE");
                 if (m_docType == DocumentType::Media && m_hudHwnd && IsWindowVisible(m_hwnd) && !IsIconic(m_hwnd)) {
                     UpdateHudPosition();
                     SetWindowPos(m_hudHwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
@@ -8594,6 +8797,24 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             if (dx >= 2 || dy >= 2) {
                 m_lastGlobalMousePos = curPos;
                 WakeAllUiAndCursor("VIDEO_MOUSEMOVE");
+            }
+            return 0;
+        }
+
+        case WM_APP + 102: /* WM_APP_VIDEO_CONTEXT_MENU from VideoWndProc */ {
+            POINT curPos;
+            GetCursorPos(&curPos);
+            ShowContextMenu(curPos.x, curPos.y);
+            return 0;
+        }
+
+        case WM_APP + 103: /* WM_APP_HUD_MORE_MENU: open the HUD "More actions" menu */ {
+            if (m_hudHwnd && m_hudBtnMore.right > m_hudBtnMore.left) {
+                RECT hudRc = {};
+                GetWindowRect(m_hudHwnd, &hudRc);
+                int menuX = hudRc.left + (int)DipToPx(m_hudBtnMore.left) - 40;
+                int menuY = hudRc.top;
+                ShowContextMenu(menuX, menuY);
             }
             return 0;
         }
@@ -8617,6 +8838,52 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         case WM_APP + 204: /* Diagnostic: dock opacity (milli) */ {
             return (LRESULT)(m_dockOpacity * 1000.0f);
         }
+        case WM_APP + 226: /* Diagnostic: idle-timer wake count */ {            return (LRESULT)m_wakeCount;
+        }
+        case WM_APP + 227: /* Diagnostic: last wake reason code */ {
+            return (LRESULT)m_wakeCode;
+        }
+        case WM_APP + 228: /* Diagnostic: ms since last wake */ {
+            return (LRESULT)(GetTickCount64() - m_lastWakeTick);
+        }
+        case WM_APP + 229: /* Diagnostic: WM_ACTIVATE(active) count */ {
+            return (LRESULT)m_activateCount;
+        }
+        case WM_APP + 230: { /* Diagnostic: HUD render target size (dip and px, 16-bit lanes) */
+            if (!m_hudHwnd) return 0;
+            RECT wr; GetWindowRect(m_hudHwnd, &wr);
+            int wPx = wr.right - wr.left, hPx = wr.bottom - wr.top;
+            D2D1_SIZE_F s = m_hudRenderTarget ? m_hudRenderTarget->GetSize() : D2D1::SizeF(0, 0);
+            auto lane = [](int v) -> unsigned long long {
+                if (v < 0) v = 0; if (v > 65535) v = 65535;
+                return (unsigned long long)(unsigned short)v;
+            };
+            return (LRESULT)(lane((int)s.width) | (lane((int)s.height) << 16) |
+                             (lane(wPx) << 32) | (lane(hPx) << 48));
+        }
+        case WM_APP + 231: /* Diagnostic: media playback state */ {
+            return (LRESULT)((m_media.IsPlaying() ? 1 : 0) | (m_media.IsMuted() ? 2 : 0) | (m_isAudioOnly ? 4 : 0) | (m_isLooping ? 8 : 0));
+        }
+        case WM_APP + 232: /* Diagnostic: context menu invocations */ {
+            return (LRESULT)m_contextMenuCount;
+        }
+        case WM_APP + 233: /* Diagnostic: HUD pressed button id */ {
+            return (LRESULT)m_hudPressedButtonId;
+        }
+        case WM_APP + 234: /* Diagnostic: last HUD click point in DIP (x10) */ {
+            return (LRESULT)(((unsigned long long)(unsigned short)(int)(m_lastHudDipX * 10.0f)) |
+                             ((unsigned long long)(unsigned short)(int)(m_lastHudDipY * 10.0f) << 16));
+        }
+        case WM_APP + 235: /* Diagnostic: HUD opacity (0..255) */ {
+            return (LRESULT)(int)(m_hudOpacity + 0.5f);
+        }
+        case WM_APP + 236: /* Diagnostic: HUD layer visible */ {
+            if (!m_hudHwnd || !IsWindowVisible(m_hudHwnd)) return 0;
+            BYTE alpha = 0;
+            DWORD flags = 0, key = 0;
+            if (GetLayeredWindowAttributes(m_hudHwnd, &key, &alpha, &flags) && alpha > 0) return 1;
+            return (m_hudOpacity > 1.0f) ? 1 : 0;
+        }
 
         case WM_APP + 205: /* Diagnostic: editor dirty flag */ {
             return (LRESULT)(m_text.IsModified() ? 1 : 0);
@@ -8628,6 +8895,83 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
 
         case WM_APP + 207: /* Diagnostic: fullscreen state */ {
             return (LRESULT)(m_isFullscreen ? 1 : 0);
+        }
+
+        case WM_APP + 208: /* Diagnostic: settings open */ {
+            return (LRESULT)(m_showSettings ? 1 : 0);
+        }
+        case WM_APP + 209: /* Diagnostic: inspector open */ {
+            return (LRESULT)(m_showInspector ? 1 : 0);
+        }
+        case WM_APP + 210: /* Diagnostic: search open */ {
+            return (LRESULT)(m_showSearch ? 1 : 0);
+        }
+        case WM_APP + 211: /* Diagnostic: overflow menu open */ {
+            return (LRESULT)(m_showOverflowMenu ? 1 : 0);
+        }
+        case WM_APP + 212: /* Diagnostic: sidebar visible */ {
+            return (LRESULT)(m_showSidebar ? 1 : 0);
+        }
+        case WM_APP + 213: /* Diagnostic: current page */ {
+            return (LRESULT)m_currentPage;
+        }
+        case WM_APP + 214: /* Diagnostic: word wrap */ {
+            return (LRESULT)(m_text.IsWordWrap() ? 1 : 0);
+        }
+        case WM_APP + 215: /* Diagnostic: zoom (x1000) */ {
+            return (LRESULT)(m_zoom * 1000.0f);
+        }
+        case WM_APP + 216: /* Diagnostic: fit mode */ {
+            return (LRESULT)(m_isFitMode ? 1 : 0);
+        }
+        case WM_APP + 217: /* Diagnostic: rotation degrees */ {
+            return (LRESULT)m_rotation;
+        }
+        case WM_APP + 218: /* Diagnostic: table view */ {
+            return (LRESULT)(m_text.IsTableView() ? 1 : 0);
+        }
+        case WM_APP + 219: /* Diagnostic: DPI scale (x1000) */ {
+            return (LRESULT)(m_dpiScale * 1000.0f);
+        }
+        case WM_APP + 221: { /* Diagnostic: D2D size/pixel size */
+            ID2D1HwndRenderTarget* rt = m_d2d.GetRenderTarget();
+            if (!rt) return 0;
+            D2D1_SIZE_F s = rt->GetSize();
+            D2D1_SIZE_U p = rt->GetPixelSize();
+            return (LRESULT)(((unsigned long long)(unsigned short)(int)s.width) |
+                             ((unsigned long long)(unsigned short)(int)s.height << 16) |
+                             ((unsigned long long)(unsigned short)p.width << 32) |
+                             ((unsigned long long)(unsigned short)p.height << 48));
+        }
+        case WM_APP + 222: { /* Diagnostic: render target DPI */ 
+            ID2D1HwndRenderTarget* rt = m_d2d.GetRenderTarget();
+            if (!rt) return 0;
+            FLOAT dx = 0, dy = 0;
+            rt->GetDpi(&dx, &dy);
+            return (LRESULT)((int)(dx * 10.0f));
+        }
+        case WM_APP + 223: { /* Diagnostic: last click in DIP (x100) */
+            return (LRESULT)(((unsigned long long)(unsigned short)(int)(m_lastDownDipX * 100.0f)) |
+                             ((unsigned long long)(unsigned short)(int)(m_lastDownDipY * 100.0f) << 16));
+        }
+        case WM_APP + 225: { /* Diagnostic: top dock rect (16-bit lanes) */
+            D2D1_RECT_F r = m_topDockRect;
+            auto lane = [](float v) -> unsigned long long {
+                int i = (int)(v + 0.5f); if (i < 0) i = 0; if (i > 65535) i = 65535;
+                return (unsigned long long)(unsigned short)i;
+            };
+            return (LRESULT)(lane(r.left) | (lane(r.top) << 16) | (lane(r.right) << 32) | (lane(r.bottom) << 48));
+        }
+        case WM_APP + 220: { /* Diagnostic: packed button rect (l,t,r,b in 16-bit lanes) */
+            D2D1_RECT_F r = GetButtonRect((int)wParam);
+            if (r.right <= r.left || r.bottom <= r.top) return 0;
+            auto lane = [](float v) -> unsigned long long {
+                int i = (int)(v + 0.5f);
+                if (i < 0) i = 0;
+                if (i > 65535) i = 65535;
+                return (unsigned long long)(unsigned short)i;
+            };
+            return (LRESULT)(lane(r.left) | (lane(r.top) << 16) | (lane(r.right) << 32) | (lane(r.bottom) << 48));
         }
 
         case WM_TIMER: {
@@ -8683,7 +9027,7 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             bool canShowTooltip = (m_hoveredButtonId != BTN_NONE) && (!isDockBtn || m_dockOpacity > 0.5f);
 
             if (canShowTooltip) {
-                m_hoverTimeMs += 30;
+                m_hoverTimeMs += 16;
                 // Fast swap: if a tooltip was already active on an adjacent button, show immediately without waiting 400ms (Emil Kowalski)
                 if ((m_tooltipAlpha > 0.4f || m_hoverTimeMs > 400) && m_tooltipAlpha < 1.0f) {
                     m_tooltipAlpha += 0.35f;
@@ -8747,55 +9091,46 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             );
 
             // 4. Inactivity & Auto-Hide state machine
+            const bool isEditor = (m_docType == DocumentType::Text || m_docType == DocumentType::Spreadsheet);
+            const bool isVisual = (m_docType == DocumentType::Image || m_docType == DocumentType::Pdf ||
+                                   m_docType == DocumentType::Svg || m_docType == DocumentType::Office ||
+                                   m_docType == DocumentType::Font || m_docType == DocumentType::Markdown ||
+                                   m_docType == DocumentType::Notebook || m_docType == DocumentType::Media);
+
             if (isActivelyInteracting || m_showOverflowMenu || m_showInspector || m_showSearch || m_showSettings) {
-                // Actively holding mouse button down, dragging, or menu/modal open: keep 100% visible
+                // Dragging, scrubbing or an open menu/modal keeps the chrome pinned.
                 m_inactivityMs = 0;
+                m_guiVisible = true;
                 m_dockTargetOpacity = 1.0f;
                 if (m_docType == DocumentType::Media) m_hudTargetOpacity = 255.0f;
                 SetCursorVisibility(true);
-            } else if (m_cleanShowcaseMode && !m_guiVisible &&
-                       (m_docType == DocumentType::Media || m_docType == DocumentType::Image ||
-                        m_docType == DocumentType::Svg || m_docType == DocumentType::Office ||
-                        m_docType == DocumentType::Pdf)) {
-                // Clean Showcase: GUI is hidden
-                m_dockTargetOpacity = 0.0f;
-                if (m_docType == DocumentType::Media) m_hudTargetOpacity = 0.0f;
-                m_inactivityMs += elapsedMs;
-                if (m_inactivityMs >= 2000 && isCursorOverApp && m_cursorVisible) {
-                    SetCursorVisibility(false);
-                }
-            } else if (m_docType == DocumentType::Media && (!m_media.IsPlaying() || m_isAudioOnly) && !m_cleanShowcaseMode) {
-                // Video paused, stopped, ended, or audio (fallback when clean showcase mode disabled): keep permanently visible
+            } else if (isEditor || !m_cleanShowcaseMode || m_docType == DocumentType::None) {
+                // Editors and "controls always visible" mode never auto-hide.
                 m_inactivityMs = 0;
+                m_guiVisible = true;
                 m_dockTargetOpacity = 1.0f;
-                m_hudTargetOpacity = 255.0f;
-            } else if (m_docType == DocumentType::Text || m_docType == DocumentType::Spreadsheet) {
-                // Text Editor & Spreadsheets: keep permanently visible!
-                m_inactivityMs = 0;
-                m_dockTargetOpacity = 1.0f;
-                SetCursorVisibility(true);
-            } else if (m_docType != DocumentType::None) {
-                // Active document (Image, PDF, or Playing Video): track exact 3-second inactivity
+                if (m_docType == DocumentType::Media) m_hudTargetOpacity = 255.0f;
+                if (!m_cursorVisible) SetCursorVisibility(true);
+            } else if (isVisual) {
+                // Image/PDF/SVG/Office/Font/Markdown/Notebook/Media: fade chrome after 2.5 s.
                 m_inactivityMs += elapsedMs;
-                if (m_inactivityMs >= 3000) {
-                    m_guiVisible = false;
-                    m_dockTargetOpacity = 0.0f;
-                    if (m_docType == DocumentType::Media) m_hudTargetOpacity = 0.0f;
-                    if (isCursorOverApp) {
-                        if (m_cursorVisible) {
-                            SetCursorVisibility(false);
-                        }
-                    } else {
-                        if (!m_cursorVisible) {
-                            SetCursorVisibility(true);
-                        }
+                if (m_inactivityMs >= 2500) {
+                    if (m_guiVisible) {
+                        m_guiVisible = false;
+                        m_dockTargetOpacity = 0.0f;
+                        if (m_docType == DocumentType::Media) m_hudTargetOpacity = 0.0f;
+                    }
+                    if (isCursorOverApp && m_cursorVisible) {
+                        SetCursorVisibility(false);
+                    } else if (!isCursorOverApp && !m_cursorVisible) {
+                        SetCursorVisibility(true);
                     }
                 }
             } else {
-                // None / Empty state: keep permanently visible
+                // Folder / archive / binary / unsupported screens keep their chrome.
                 m_inactivityMs = 0;
+                m_guiVisible = true;
                 m_dockTargetOpacity = 1.0f;
-                if (m_docType == DocumentType::Media) m_hudTargetOpacity = 255.0f;
                 if (!m_cursorVisible) SetCursorVisibility(true);
             }
 
@@ -9012,6 +9347,7 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 isDockFading || isHudFading ||
                 m_toastOpacity > 0.01f ||
                 (m_tooltipAlpha > 0.0f && m_tooltipAlpha < 0.995f) ||
+                (isVisual && m_cleanShowcaseMode && m_guiVisible && m_inactivityMs < 2500.0f) ||
                 (m_docType == DocumentType::Text || m_docType == DocumentType::Spreadsheet) ||
                 (m_docType == DocumentType::Media &&
                     (m_media.IsPlaying() || m_isScrubbing || m_isVolDragging || m_isWaveformSeeking || isAudioAnimating)) ||
@@ -9304,8 +9640,12 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 WakeAllUiAndCursor();
                 ToggleFullscreen();
             } else if (cmdId == 1003) {
-                // ID_MEDIA_TOGGLE_GUI: Single click on video canvas toggles GUI showcase visibility
-                ToggleGuiVisibility();
+                // ID_MEDIA_TOGGLE_GUI: single click on the video canvas toggles chrome.
+                if (!m_guiVisible) {
+                    SetGuiVisibility(true);
+                } else if (GetTickCount64() - m_guiRevealedAt > 450) {
+                    SetGuiVisibility(false);
+                }
                 return 0;
             } else if (cmdId == IDM_TRAY_OPEN) {
                 if (IsIconic(m_hwnd)) ShowWindow(m_hwnd, SW_RESTORE);
@@ -9343,7 +9683,7 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             } else if (cmdId == BTN_COPY_TEXT) {
                 if (m_docType == DocumentType::Spreadsheet && m_text.IsTableView()) {
                     CopyTextToClipboard(m_hwnd, m_text.GetAllText());
-                    ShowToast(L"Table copied to clipboard!");
+                    ShowToast(L"Table copied");
                 } else {
                     if (m_text.Copy(m_hwnd)) { ShowToast(m_text.HasSelection() ? L"Copied selection" : L"Copied line"); }
                 }
@@ -9488,9 +9828,12 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             SetCapture(m_hwnd);
             POINT physPt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
             D2D1_POINT_2F pt = ClientToDip(physPt);
+            m_lastDownDipX = pt.x;
+            m_lastDownDipY = pt.y;
             m_lastMousePos = pt;
             m_mouseDownPos = pt;
             m_hasDraggedDistance = false;
+            m_guiVisibleOnMouseDown = m_guiVisible;
 
             WakeAllUiAndCursor();
 
@@ -9515,7 +9858,7 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                     } else if (updateState == UpdateState::Downloaded) {
                         bool launched = m_updater.LaunchInstallerAndExit(m_hwnd);
                         if (!launched) {
-                            ShowToast(L"Failed to launch installer. Please run as admin.");
+                            ShowToast(L"Couldn't start the installer.");
                             InvalidateRect(m_hwnd, NULL, FALSE);
                         }
                     }
@@ -9561,28 +9904,28 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                     // General
                     if (hit(m_settingsAutostartBtn)) {
                         SetAutoStartEnabled(!IsAutoStartEnabled());
-                        ShowToast(IsAutoStartEnabled() ? L"Auto-start on boot enabled" : L"Auto-start disabled");
+                        ShowToast(IsAutoStartEnabled() ? L"Opens with Windows" : L"Won't open with Windows");
                         InvalidateRect(m_hwnd, NULL, FALSE);
                         return 0;
                     }
                     if (hit(m_settingsToggleFocusLossRect)) {
                         m_closeOnFocusLoss = !m_closeOnFocusLoss;
                         SaveGeneralSettings();
-                        ShowToast(m_closeOnFocusLoss ? L"Close on focus loss enabled" : L"Close on focus loss disabled");
+                        ShowToast(m_closeOnFocusLoss ? L"Hides when you click away" : L"Stays open when you click away");
                         InvalidateRect(m_hwnd, NULL, FALSE);
                         return 0;
                     }
                     if (hit(m_settingsToggleKeepMemoryRect)) {
                         m_keepInMemory = !m_keepInMemory;
                         SaveGeneralSettings();
-                        ShowToast(m_keepInMemory ? L"Keep resident in background enabled" : L"Exit on window close enabled");
+                        ShowToast(m_keepInMemory ? L"Keeps running in the background" : L"Exits when the window closes");
                         InvalidateRect(m_hwnd, NULL, FALSE);
                         return 0;
                     }
                     if (hit(m_settingsToggleUpdateCheckRect)) {
                         m_autoCheckUpdates = !m_autoCheckUpdates;
                         SaveGeneralSettings();
-                        ShowToast(m_autoCheckUpdates ? L"Auto update checks enabled" : L"Auto update checks disabled");
+                        ShowToast(m_autoCheckUpdates ? L"Checks for updates automatically" : L"Update checks are off");
                         InvalidateRect(m_hwnd, NULL, FALSE);
                         return 0;
                     }
@@ -9606,7 +9949,7 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                         ExplorerHook::SaveHotkeyConfig();
                         ExplorerHook::ReapplyRegisteredHotkey(m_hwnd);
                         m_isRecordingKeybind = false;
-                        ShowToast(L"Keybind reset to Space");
+                        ShowToast(L"Shortcut reset to Space");
                         InvalidateRect(m_hwnd, NULL, FALSE);
                         return 0;
                     }
@@ -9632,14 +9975,14 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                     if (hit(m_settingsToggleArrowNavRect)) {
                         m_arrowKeyNavEnabled = !m_arrowKeyNavEnabled;
                         SaveGeneralSettings();
-                        ShowToast(m_arrowKeyNavEnabled ? L"Arrow keys file navigation enabled" : L"Arrow keys file navigation disabled");
+                        ShowToast(m_arrowKeyNavEnabled ? L"Arrow keys browse files" : L"Arrow key browsing is off");
                         InvalidateRect(m_hwnd, NULL, FALSE);
                         return 0;
                     }
                     if (hit(m_settingsToggleLoopFolderRect)) {
                         m_loopFolderNav = !m_loopFolderNav;
                         SaveGeneralSettings();
-                        ShowToast(m_loopFolderNav ? L"Loop folder navigation enabled" : L"Loop folder navigation disabled");
+                        ShowToast(m_loopFolderNav ? L"Wraps around at folder ends" : L"Stops at folder ends");
                         InvalidateRect(m_hwnd, NULL, FALSE);
                         return 0;
                     }
@@ -9649,28 +9992,28 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                     if (hit(m_settingsToggleCleanShowcaseRect)) {
                         m_cleanShowcaseMode = !m_cleanShowcaseMode;
                         SaveGeneralSettings();
-                        ShowToast(m_cleanShowcaseMode ? L"Clean media showcase enabled" : L"Clean media showcase disabled");
+                        ShowToast(m_cleanShowcaseMode ? L"Controls hide while viewing" : L"Controls stay visible");
                         InvalidateRect(m_hwnd, NULL, FALSE);
                         return 0;
                     }
                     if (hit(m_settingsToggleAutoplayRect)) {
                         m_autoPlayMedia = !m_autoPlayMedia;
                         SaveGeneralSettings();
-                        ShowToast(m_autoPlayMedia ? L"Media auto-play enabled" : L"Media auto-play disabled");
+                        ShowToast(m_autoPlayMedia ? L"Autoplay on" : L"Autoplay off");
                         InvalidateRect(m_hwnd, NULL, FALSE);
                         return 0;
                     }
                     if (hit(m_settingsToggleLoopMediaRect)) {
                         m_isLooping = !m_isLooping;
                         SaveLoopPref();
-                        ShowToast(m_isLooping ? L"Continuous media loop enabled" : L"Continuous media loop disabled");
+                        ShowToast(m_isLooping ? L"Looping on" : L"Looping off");
                         InvalidateRect(m_hwnd, NULL, FALSE);
                         return 0;
                     }
                     if (hit(m_settingsToggleLogDetectRect)) {
                         m_autoDetectLog = !m_autoDetectLog;
                         SaveGeneralSettings();
-                        ShowToast(m_autoDetectLog ? L"Cinema Log auto-detect enabled" : L"Cinema Log auto-detect disabled");
+                        ShowToast(m_autoDetectLog ? L"Log detection on" : L"Log detection off");
                         InvalidateRect(m_hwnd, NULL, FALSE);
                         return 0;
                     }
@@ -9685,7 +10028,7 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                     if (hit(m_settingsToggleRememberSizeRect)) {
                         m_rememberWindowSize = !m_rememberWindowSize;
                         SaveGeneralSettings();
-                        ShowToast(m_rememberWindowSize ? L"Remember window size enabled" : L"Adaptive window size enabled");
+                        ShowToast(m_rememberWindowSize ? L"Window keeps its size" : L"Window fits each file");
                         InvalidateRect(m_hwnd, NULL, FALSE);
                         return 0;
                     }
@@ -9810,6 +10153,10 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                     m_pressedButtonId = BTN_TOOLBAR_FS;
                     ToggleFullscreen();
                     InvalidateRect(m_hwnd, NULL, FALSE);
+                } else if (hit(m_btnSettingsRect)) {
+                    m_pressedButtonId = BTN_SETTINGS;
+                    ToggleSettings();
+                    InvalidateRect(m_hwnd, NULL, FALSE);
                 } else if (hit(m_btnSearchRect)) {
                     m_pressedButtonId = BTN_SEARCH;
                     ToggleSearch();
@@ -9858,7 +10205,7 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                     m_pressedButtonId = BTN_COPY_TEXT;
                     if (m_docType == DocumentType::Spreadsheet && m_text.IsTableView()) {
                         CopyTextToClipboard(m_hwnd, m_text.GetAllText());
-                        ShowToast(L"Table copied to clipboard!");
+                        ShowToast(L"Table copied");
                     } else {
                         if (m_text.Copy(m_hwnd)) {
                             ShowToast(m_text.HasSelection() ? L"Copied selection" : L"Copied line");
@@ -9875,12 +10222,12 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 } else if (hit(m_btnWrapTextRect)) {
                     m_pressedButtonId = BTN_WRAP_TEXT;
                     m_text.ToggleWordWrap();
-                    ShowToast(m_text.IsWordWrap() ? L"Word Wrap: ON" : L"Word Wrap: OFF");
+                    ShowToast(m_text.IsWordWrap() ? L"Word wrap on" : L"Word wrap off");
                     InvalidateRect(m_hwnd, NULL, FALSE);
                 } else if (hit(m_btnTableViewRect)) {
                     m_pressedButtonId = BTN_TABLE_VIEW;
                     m_text.ToggleTableView();
-                    ShowToast(m_text.IsTableView() ? L"Grid View" : L"Raw Text View");
+                    ShowToast(m_text.IsTableView() ? L"Table view" : L"Text view");
                     InvalidateRect(m_hwnd, NULL, FALSE);
                 } else if (hit(m_btnOpenWithRect)) {
                     m_pressedButtonId = BTN_OPEN_WITH;
@@ -9942,9 +10289,13 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                     if (m_hudHwnd) InvalidateRect(m_hudHwnd, NULL, FALSE);
                     return 0;
                 }
-                // Single touch / click anywhere on media canvas reveals/hides GUI
-                // No accidental play/pause on background click - playback is exclusively controlled via HUD or Spacebar
-                ToggleGuiVisibility();
+                // Single touch / click anywhere on media canvas reveals/hides GUI.
+                // No accidental play/pause on background click - use the HUD or Space.
+                if (!m_guiVisible) {
+                    SetGuiVisibility(true);
+                } else if (GetTickCount64() - m_guiRevealedAt > 450) {
+                    SetGuiVisibility(false);
+                }
                 return 0;
             }
 
@@ -10164,6 +10515,7 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 else if (hit(m_btnRotateLeftRect)) m_hoveredButtonId = BTN_ROTATE_L;
                 else if (hit(m_btnRotateRightRect)) m_hoveredButtonId = BTN_ROTATE_R;
                 else if (hit(m_btnToolbarFsRect)) m_hoveredButtonId = BTN_TOOLBAR_FS;
+                else if (hit(m_btnSettingsRect)) m_hoveredButtonId = BTN_SETTINGS;
                 else if (hit(m_btnSearchRect)) m_hoveredButtonId = BTN_SEARCH;
                 else if (hit(m_btnCropRect)) m_hoveredButtonId = BTN_CROP;
                 else if (hit(m_btnInfoRect)) m_hoveredButtonId = BTN_INFO;
@@ -10316,7 +10668,15 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 bool hitDock = (m_dockOpacity > 0.05f && hit(m_topDockRect));
                 bool hitSidebar = (m_showSidebar && pt.x < m_sidebarWidth);
                 if (!hitDock && !hitSidebar) {
-                    ToggleGuiVisibility();
+                    if (m_guiVisibleOnMouseDown) {
+                        // A click that arrives right after mouse movement revealed the
+                        // controls should keep them, not hide them instantly.
+                        if (GetTickCount64() - m_guiRevealedAt > 450) {
+                            ToggleGuiVisibility();
+                        }
+                    } else {
+                        SetGuiVisibility(true);
+                    }
                 }
             }
 
@@ -10568,7 +10928,7 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 if (!m_currentFilePath.empty()) {
                     std::wstring cur = m_currentFilePath;
                     OpenFile(cur);
-                    ShowToast(L"Reloaded preview • Checking for updates...");
+                    ShowToast(L"Reloaded. Checking for updates…");
                     return 0;
                 }
                 return 0;
@@ -10577,7 +10937,7 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             // Global shortcut: Ctrl+Shift+U -> Simulate update notification (Test UX)
             if (isCtrl && isShift && !isAlt && (wParam == 'U' || wParam == 'u')) {
                 m_updater.SimulateUpdateForTesting();
-                ShowToast(L"Simulated Update: v1.1.0 Ready to Test");
+                ShowToast(L"Test update v1.1.0 is ready");
                 ShowUpdatePopup();
                 return 0;
             }
@@ -10648,7 +11008,7 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 // Alt+Z toggles word wrap in VS Code!
                 if (isAlt && (wParam == 'Z' || wParam == 'z')) {
                     m_text.ToggleWordWrap();
-                    ShowToast(m_text.IsWordWrap() ? L"Word Wrap: ON" : L"Word Wrap: OFF");
+                    ShowToast(m_text.IsWordWrap() ? L"Word wrap on" : L"Word wrap off");
                     InvalidateRect(m_hwnd, NULL, FALSE);
                     return 0;
                 }
@@ -10770,7 +11130,7 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             } else if (m_docType == DocumentType::Spreadsheet && m_text.IsTableView()) {
                 if (isCtrl && wParam == 'C') {
                     CopyTextToClipboard(m_hwnd, m_text.GetAllText());
-                    ShowToast(L"Table copied to clipboard!");
+                    ShowToast(L"Table copied");
                     return 0;
                 }
             }
@@ -10932,7 +11292,7 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 case 'W':
                     if (m_docType == DocumentType::Text && !isCtrl) {
                         m_text.ToggleWordWrap();
-                        ShowToast(m_text.IsWordWrap() ? L"Word Wrap: ON" : L"Word Wrap: OFF");
+                        ShowToast(m_text.IsWordWrap() ? L"Word wrap on" : L"Word wrap off");
                         InvalidateRect(m_hwnd, NULL, FALSE);
                         return 0;
                     }
@@ -10951,7 +11311,7 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                         InvalidateRect(m_hwnd, NULL, FALSE);
                     } else if (m_docType == DocumentType::Spreadsheet && !isCtrl) {
                         m_text.ToggleTableView();
-                        ShowToast(m_text.IsTableView() ? L"Grid View" : L"Raw Text View");
+                        ShowToast(m_text.IsTableView() ? L"Table view" : L"Text view");
                         InvalidateRect(m_hwnd, NULL, FALSE);
                         return 0;
                     }
