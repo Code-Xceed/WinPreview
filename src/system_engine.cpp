@@ -809,11 +809,11 @@ void SystemEngine::RenderBinary(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D
     };
 
     std::vector<std::pair<std::wstring, std::wstring>> col1 = {
-        { L"Product Name", !m_bin.productName.empty() ? m_bin.productName : L"—" },
+        { L"Product name", !m_bin.productName.empty() ? m_bin.productName : L"—" },
         { L"Description", !m_bin.fileDescription.empty() ? m_bin.fileDescription : L"—" },
         { L"Publisher", !m_bin.companyName.empty() ? m_bin.companyName : L"—" },
-        { L"File Version", !m_bin.fileVersion.empty() ? m_bin.fileVersion : L"—" },
-        { L"Product Version", !m_bin.productVersion.empty() ? m_bin.productVersion : L"—" },
+        { L"File version", !m_bin.fileVersion.empty() ? m_bin.fileVersion : L"—" },
+        { L"Product version", !m_bin.productVersion.empty() ? m_bin.productVersion : L"—" },
         { L"Copyright", !m_bin.copyright.empty() ? m_bin.copyright : L"—" }
     };
 
@@ -830,9 +830,9 @@ void SystemEngine::RenderBinary(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D
     std::vector<std::pair<std::wstring, std::wstring>> col2 = {
         { L"Architecture", !m_bin.architecture.empty() ? m_bin.architecture : L"—" },
         { L"Subsystem", !m_bin.subsystem.empty() ? (m_bin.subsystem + L" (" + m_bin.subsystemVersion + L")") : L"—" },
-        { L"PE Sections", peSectStr },
-        { L"Entry Point", entryHex },
-        { L"File Size", m_bin.formattedSize + L" (" + std::to_wstring(m_bin.fileSizeBytes) + L" bytes)" },
+        { L"PE sections", peSectStr },
+        { L"Entry point", entryHex },
+        { L"File size", m_bin.formattedSize + L" (" + std::to_wstring(m_bin.fileSizeBytes) + L" bytes)" },
         { L"Modified", m_bin.formattedDate }
     };
 
@@ -861,8 +861,8 @@ void SystemEngine::RenderBinary(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D
         }
     };
 
-    renderMeasuredCard(marginX, curY, L"PRODUCT & IDENTITY", mCol1);
-    renderMeasuredCard(marginX + cardW + 18.0f, curY, L"BINARY ARCHITECTURE & SPECS", mCol2);
+    renderMeasuredCard(marginX, curY, L"Product & identity", mCol1);
+    renderMeasuredCard(marginX + cardW + 18.0f, curY, L"Binary architecture & specs", mCol2);
 
     for (auto& mr : mCol1) { if (mr.layout) mr.layout->Release(); }
     for (auto& mr : mCol2) { if (mr.layout) mr.layout->Release(); }
