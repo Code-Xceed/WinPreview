@@ -587,8 +587,32 @@ bool AppWindow::OpenFile(const std::wstring& filePath) {
     auto isAudioExt = [](const std::wstring& e) {
         return (e == L".mp3" || e == L".wav" || e == L".flac" || e == L".aac" || e == L".m4a" ||
                 e == L".ogg" || e == L".wma" || e == L".opus" || e == L".weba" || e == L".aiff" ||
-                e == L".aif" || e == L".ac3" || e == L".mka" || e == L".ape" || e == L".mid" || e == L".midi");
+                e == L".aif" || e == L".ac3" || e == L".mka" || e == L".ape" || e == L".mid" || e == L".midi" ||
+                e == L".m4b");
     };
+
+    // .ts / .mts are both MPEG transport streams and TypeScript sources. Sniff the
+    // bytes: real transport streams carry 0x47 sync bytes and binary padding, while
+    // TypeScript is plain text. Without this, every .ts file opened as a video.
+    auto looksLikeTextFile = [](const std::wstring& path) -> bool {
+        HANDLE h = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                               NULL, OPEN_EXISTING, 0, NULL);
+        if (h == INVALID_HANDLE_VALUE) return false;
+        BYTE buf[2048] = {};
+        DWORD read = 0;
+        bool ok = ReadFile(h, buf, sizeof(buf), &read, NULL) && read > 0;
+        CloseHandle(h);
+        if (!ok) return false;
+        int control = 0;
+        for (DWORD i = 0; i < read; ++i) {
+            BYTE b = buf[i];
+            if (b == 0) return false; // binary padding / UTF-16 nulls
+            if (b < 0x09 || (b > 0x0D && b < 0x20)) ++control;
+        }
+        return (control * 50) < (int)read; // < 2% control characters
+    };
+    const bool ambiguousMediaText = (ext == L".ts" || ext == L".mts");
+    const bool forceTextForAmbiguous = ambiguousMediaText && looksLikeTextFile(filePath);
 
     auto isMarkdownExt = [](const std::wstring& e) {
         return (e == L".md" || e == L".markdown" || e == L".mb" || e == L".mdown" || e == L".mkd" || e == L".mdx");
@@ -629,7 +653,7 @@ bool AppWindow::OpenFile(const std::wstring& filePath) {
         }
     }
     // 2. Video / Audio
-    else if (isMediaExt(ext)) {
+    else if (isMediaExt(ext) && !forceTextForAmbiguous) {
         m_isAudioOnly = isAudioExt(ext);
         if (!m_hudHwnd) {
             CreateHudWindow();
@@ -923,7 +947,7 @@ bool AppWindow::OpenFile(const std::wstring& filePath) {
         }
     }
     // 14. Image (via WIC)
-    else if (isImageExt(ext) || ext.empty()) {
+    else if ((isImageExt(ext) || ext.empty()) && !(ext.empty() && looksLikeTextFile(filePath))) {
         m_hasDetectedContentBounds = false;
         m_trimBlackBars = true;
         D2D1_RECT_F bounds = {};
@@ -8876,6 +8900,9 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         }
         case WM_APP + 235: /* Diagnostic: HUD opacity (0..255) */ {
             return (LRESULT)(int)(m_hudOpacity + 0.5f);
+        }
+        case WM_APP + 237: /* Diagnostic: document type */ {
+            return (LRESULT)(int)m_docType;
         }
         case WM_APP + 236: /* Diagnostic: HUD layer visible */ {
             if (!m_hudHwnd || !IsWindowVisible(m_hudHwnd)) return 0;

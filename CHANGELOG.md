@@ -26,6 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Removed the accidental “fewer actions at large window sizes” behaviour: full toolbars always expose crop/search/rotate/info/open-with/settings/fullscreen as appropriate.
 
 ### Fixes
+- `.ts` and `.mts` files were opened as video because they are also MPEG transport-stream extensions. The loader now sniffs the bytes: TypeScript opens in the code editor, real transport streams stay video.
+- `.m4b` audiobooks now use the audio layout instead of the video path.
+- Extensionless files that are plain text (README, LICENSE, notes) now open in the text viewer instead of showing a large generic file icon; extensionless images still open as images.
 - Folders, archives, certificates and shortcuts now share the same File info / Open with / Settings / Fullscreen toolbar as every other format, with an overflow menu when the window is narrow.
 - PDF, code, spreadsheet, SVG, font, Markdown and notebook toolbars no longer clip their rightmost action.
 - Fixed the file-info title drawing two bytes past the string literal.
