@@ -38,3 +38,8 @@ Thumbs.db
 Desktop.ini
 $RECYCLE.BIN/
 Run-WinPreview.bat
+
+# Local development assets (kept out of the public source tree)
+/tests/
+/samples/
+/docs/
