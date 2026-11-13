@@ -57,16 +57,16 @@ Tested on Windows 11 Pro 64-bit (Intel Core i7 / 16GB RAM / NVMe SSD):
 | Category | Supported Extensions | Engine / Capabilities |
 | :--- | :--- | :--- |
 | **Documents & PDFs** | `.pdf` | Chromium PDFium vector rendering, multi-page sidebar, smooth zoom |
-| **Images & RAW Photos** | `.heic`, `.heif`, `.avif`, `.webp`, `.png`, `.jpg`, `.jpeg`, `.tiff`, `.bmp`, `.ico`, `.cr2`, `.cr3`, `.nef`, `.arw`, `.dng`, `.raw`, `.orf`, `.rw2`, `.pef`, `.raf` | Multi-tier LibHEIF + WIC hardware decoding, embedded Camera RAW preview extraction, Display P3 wide-gamut, EXIF inspector metadata |
-| **Cinema Video & Audio** | `.mov`, `.mp4`, `.mxf`, `.prores`, `.braw`, `.r3d`, `.mkv`, `.m4v`, `.webm`, `.avi`, `.wmv`, `.flv`, `.ts`, `.mts`, `.m2ts`, `.mp3`, `.wav`, `.flac`, `.m4a`, `.aac` | LibVLC playback when VLC 3.x is installed (or a portable `libvlc` folder is placed next to the EXE); real-time Log-to-Rec.709 Cinema Tone-Mapping, acrylic transport HUD. File metadata still previews without VLC. |
+| **Images & RAW Photos** | `.heic`, `.heif`, `.avif`, `.webp`, `.png`, `.jpg`, `.jpeg`, `.gif`, `.tiff`, `.tif`, `.bmp`, `.ico`, `.cr2`, `.nef`, `.arw`, `.dng`, `.raw`, `.orf`, `.rw2`, `.pef` | Multi-tier LibHEIF + WIC hardware decoding, embedded Camera RAW preview extraction, Display P3 wide-gamut, EXIF inspector metadata |
+| **Video & Audio** | `.mov`, `.mp4`, `.mkv`, `.m4v`, `.webm`, `.avi`, `.wmv`, `.flv`, `.ts`*, `.m2ts`, `.mts`*, `.mxf`, `.vob`, `.3gp`, `.ogv`, `.mp3`, `.wav`, `.flac`, `.m4a`, `.m4b`, `.aac`, `.ogg`, `.opus`, `.wma`, `.aiff`, `.ac3`, `.mka`, `.ape` | LibVLC playback when VLC 3.x is installed (or a portable `libvlc` folder next to the EXE); real-time Log-to-Rec.709 tone-mapping, acrylic transport HUD. `*` `.ts`/`.mts` are byte-sniffed: TypeScript opens in the code editor, transport streams play as video. |
 | **Programming Languages** | `.cpp`, `.c`, `.h`, `.hpp`, `.cs`, `.py`, `.rs`, `.go`, `.js`, `.ts`, `.tsx`, `.jsx`, `.swift`, `.kt`, `.zig`, `.lua`, `.php`, `.rb`, `.java`, `.r`, `.sql`, `.dart` | DirectWrite hardware text rendering, fast keyword/string/comment tinting, line numbers, caret navigation, editing & save (`Ctrl+S`) |
 | **Scripts & Shells** | `.ps1`, `.bat`, `.cmd`, `.sh`, `.bash`, `.zsh` | Shell syntax highlighting, line wrapping toggle |
 | **Web & Stylesheets** | `.html`, `.htm`, `.css`, `.scss`, `.less` | Semantic tag & property coloring |
 | **Data & Configs** | `.json`, `.yaml`, `.yml`, `.toml`, `.xml`, `.ini`, `.env`, `.conf`, `.properties` | Key-value formatting, bracket matching |
 | **Spreadsheets & Tables**| `.csv`, `.tsv`, `.tab`, `.psv` | Automatic column alignment, alternating row zebra striping |
 | **Documentation** | `.md`, `.markdown`, `.diff`, `.patch`, `.txt`, `.log`, `.ipynb` | Markdown structure parser, unified diff highlighting, Jupyter JSON parsing |
-| **Vector & Fonts** | `.svg`, `.ttf`, `.otf` | Direct2D SVG vector geometry rasterizer, typography previewer with font metrics |
-| **System & Archives** | `.zip`, `.reg`, `.cer`, `[Binary / Unknown]` | ZIP archive file explorer, Windows Registry script viewer, X.509 certificate viewer, fallback Direct2D Hex Inspector |
+| **Vector & Fonts** | `.svg`, `.ttf`, `.otf`, `.woff`, `.woff2` | Direct2D SVG vector geometry rasterizer, typography previewer with font metrics |
+| **System & Archives** | `.zip` (and zip-based `.jar`, `.apk`, `.nupkg`, `.vsix`, `.cbz`, `.epub` as listings), `.exe`, `.dll`, `.lnk`, `.url`, `.reg`, `.cer`, `.crt`, `.der`, `.pem`, `[Binary / Unknown]` | ZIP archive explorer, PE version/architecture cards, shortcut and certificate viewers, fallback Direct2D hex inspector |
 
 ---
 
@@ -154,11 +154,9 @@ The compiled binaries will be placed in `dist\WinPreview\` and the self-containe
 
 ### Production Verification
 
-```powershell
-powershell -ExecutionPolicy Bypass -File tests\production_check.ps1 -PackageDir dist\WinPreview
-```
+`publish.ps1` runs the local verification suite when it is present in the development tree: version consistency across `version.json`, `version.h`, the installer script and the release manifest; the x64 PE and every required runtime library; 16 representative documents rendered through the real Direct2D pipeline (`--screenshot` mode) plus Settings, Inspector and update-banner states; the scripted interaction suite; and a crash-log / orphan-process check.
 
-The suite checks version consistency across `version.json`, `version.h`, the installer script and the release manifest; validates the x64 PE and every required runtime library; renders 16 representative documents through the real Direct2D pipeline (`--screenshot` mode), plus Settings, Inspector and update-banner states; and fails on a new crash log or an orphaned process. CI runs the same suite on every push and pull request.
+CI (`.github/workflows/ci-cd.yml`) builds the installer with LLVM-MinGW and Inno Setup, verifies that the generated version files are committed, validates the artifacts and uploads them. Tagging `v*` publishes them as a GitHub Release with the installer, portable ZIP and updater manifest.
 
 ### Update Integrity
 
