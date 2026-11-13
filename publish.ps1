@@ -78,14 +78,18 @@ $versionHeader = @"
 
 #endif // WINPREVIEW_VERSION_H
 "@
-Set-Content -Path (Join-Path $ScriptDir "src\version.h") -Value $versionHeader -Encoding ASCII
+# Write deterministically (UTF-8 without BOM, single trailing newline) so that
+# repeated runs never produce a spurious diff for CI's "generated files" check.
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+$versionHeaderPath = Join-Path $ScriptDir "src\version.h"
+[System.IO.File]::WriteAllText($versionHeaderPath, ($versionHeader.TrimEnd("`r", "`n") + "`r`n"), $utf8NoBom)
 
 $issPath = Join-Path $ScriptDir "installer\WinPreview.iss"
 if (-not (Test-Path $issPath)) { Fail "Installer script not found: $issPath" }
 $issContent = Get-Content $issPath -Raw
 $issContent = [regex]::Replace($issContent, '(?m)^#define\s+MyAppVersion\s+".*"$', "#define MyAppVersion `"$releaseVersion`"")
 $issContent = [regex]::Replace($issContent, '(?m)^VersionInfoVersion=.*$', "VersionInfoVersion=$verQuad")
-Set-Content -Path $issPath -Value $issContent -Encoding UTF8
+[System.IO.File]::WriteAllText($issPath, ($issContent.TrimEnd("`r", "`n") + "`r`n"), $utf8NoBom)
 
 Write-Host "[0/5] Version sync: version.json ($releaseVersion) -> src/version.h + installer/WinPreview.iss" -ForegroundColor Yellow
 
