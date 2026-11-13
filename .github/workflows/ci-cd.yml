@@ -55,9 +55,23 @@ jobs:
 
       - name: Compile, verify & package
         shell: powershell
+        env:
+          WINPREVIEW_UPDATE_KEY: ${{ secrets.WINPREVIEW_UPDATE_KEY }}
         run: |
           powershell -ExecutionPolicy Bypass -File publish.ps1 -NoLaunch
           if ($LASTEXITCODE -ne 0) { throw "publish.ps1 failed with exit code $LASTEXITCODE" }
+
+      - name: Verify signed update manifest
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          if (-not (Test-Path dist/Installer/version.json.sig)) {
+            Write-Host "::error::Refusing to publish an unsigned release. Add the repository secret WINPREVIEW_UPDATE_KEY (see tools/update-keygen.ps1)."
+            exit 1
+          }
+          $sig = (Get-Content dist/Installer/version.json.sig -Raw).Trim()
+          if ($sig.Length -lt 80) { throw "Signature file looks truncated." }
+          Write-Host "Signed manifest present ($($sig.Length) base64 chars)."
 
       - name: Verify generated files are committed
         shell: pwsh
@@ -85,6 +99,7 @@ jobs:
             dist/Installer/WinPreview-Setup-x64.exe
             dist/Installer/WinPreview-Portable-x64.zip
             dist/Installer/version.json
+            dist/Installer/version.json.sig
             version.json
           if-no-files-found: error
           retention-days: 30
@@ -122,6 +137,7 @@ jobs:
             release-assets/dist/Installer/WinPreview-Setup-x64.exe
             release-assets/dist/Installer/WinPreview-Portable-x64.zip
             release-assets/dist/Installer/version.json
+            release-assets/dist/Installer/version.json.sig
           draft: false
           prerelease: false
           generate_release_notes: true

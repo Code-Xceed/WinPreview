@@ -84,10 +84,49 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     int screenshotSettingsTab = 0;
     bool screenshotSimulateUpdate = false;
 
+    std::wstring applyUpdateInstaller;
+    std::wstring applyUpdateRelaunch = L"visible";
+    std::wstring applyUpdateLog;
+    std::wstring applyUpdateResult;
+    unsigned long applyUpdateWaitPid = 0;
+    bool runUpdateSelfTest = false;
+    bool forceUpdateCheck = false;
+    bool downloadUpdateTest = false;
+    bool openUpdateSheet = false;
+    std::wstring updateManifestOverride;
+    std::wstring updateChannel;
+    std::wstring failedUpdateCode;
+
     if (argv) {
         for (int i = 1; i < argc; ++i) {
             if (_wcsicmp(argv[i], L"--background") == 0 || _wcsicmp(argv[i], L"/background") == 0) {
                 isBackground = true;
+            } else if ((_wcsicmp(argv[i], L"--apply-update") == 0) && i + 1 < argc) {
+                applyUpdateInstaller = argv[++i];
+            } else if ((_wcsicmp(argv[i], L"--wait-pid") == 0) && i + 1 < argc) {
+                applyUpdateWaitPid = (unsigned long)_wtoi(argv[++i]);
+            } else if ((_wcsicmp(argv[i], L"--relaunch") == 0) && i + 1 < argc) {
+                applyUpdateRelaunch = argv[++i];
+            } else if ((_wcsicmp(argv[i], L"--log") == 0) && i + 1 < argc) {
+                applyUpdateLog = argv[++i];
+            } else if ((_wcsicmp(argv[i], L"--result") == 0) && i + 1 < argc) {
+                applyUpdateResult = argv[++i];
+            } else if (_wcsicmp(argv[i], L"--selftest-update") == 0) {
+                runUpdateSelfTest = true;
+            } else if (_wcsicmp(argv[i], L"--force-update-check") == 0) {
+                forceUpdateCheck = true;
+            } else if (_wcsicmp(argv[i], L"--download-update-test") == 0) {
+                downloadUpdateTest = true;
+            } else if (_wcsicmp(argv[i], L"--open-update-sheet") == 0) {
+                openUpdateSheet = true;
+            } else if ((_wcsicmp(argv[i], L"--update-url") == 0) && i + 1 < argc) {
+                updateManifestOverride = argv[++i];
+            } else if ((_wcsicmp(argv[i], L"--update-channel") == 0) && i + 1 < argc) {
+                updateChannel = argv[++i];
+            } else if (_wcsicmp(argv[i], L"--restored") == 0) {
+                // First launch after a successful update.
+            } else if ((_wcsicmp(argv[i], L"--update-failed") == 0) && i + 1 < argc) {
+                failedUpdateCode = argv[++i];
             } else if ((_wcsicmp(argv[i], L"--screenshot") == 0 || _wcsicmp(argv[i], L"/screenshot") == 0) && i + 1 < argc) {
                 screenshotPath = argv[++i];
             } else if ((_wcsicmp(argv[i], L"--width") == 0 || _wcsicmp(argv[i], L"-w") == 0) && i + 1 < argc) {
@@ -147,6 +186,17 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     }
     if (argv) LocalFree(argv);
 
+    // -----------------------------------------------------------------------
+    // Update helper / self-test run before any window, mutex or COM setup.
+    // -----------------------------------------------------------------------
+    if (!applyUpdateInstaller.empty()) {
+        return WinPreview::RunUpdateHelper(applyUpdateInstaller, applyUpdateWaitPid,
+                                           applyUpdateRelaunch, applyUpdateLog, applyUpdateResult);
+    }
+    if (runUpdateSelfTest) {
+        return WinPreview::RunUpdateSelfTest();
+    }
+
     // High-DPI Awareness V2
     HMODULE hUser32 = GetModuleHandleW(L"user32.dll");
     if (hUser32) {
@@ -174,11 +224,19 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     int exitCode = 0;
     {
         WinPreview::AppWindow app;
+        if (!updateManifestOverride.empty()) app.GetUpdater().SetManifestUrlOverride(updateManifestOverride);
+        if (!updateChannel.empty()) app.GetUpdater().SetChannel(updateChannel);
+        app.GetUpdater().SetRelaunchBackground(isBackground);
         if (!app.Create(hInstance, initialShow, showTrayBalloon)) {
             LogTime("app.Create FAILED!");
             exitCode = 1;
         } else {
             LogTime("Window created");
+            if (!failedUpdateCode.empty()) app.NotifyUpdateFailed(failedUpdateCode);
+            if (forceUpdateCheck) app.StartUpdateCheckForTesting();
+            if (downloadUpdateTest) app.DownloadUpdateForTesting();
+            if (openUpdateSheet) app.SetShowUpdateSheet(true);
+            if (std::wstring(pCmdLine).find(L"--restored") != std::wstring::npos) app.NotifyUpdateApplied();
 
             // Open file argument if provided
             if (!fileToOpen.empty()) {
@@ -214,6 +272,19 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
                 // message loop until the frame settles or a short deadline elapses.
                 LogTime("Settling async render for screenshot");
                 DWORD settleDeadline = GetTickCount() + 500;
+                if (openUpdateSheet) {
+                    // Wait for the manifest fetch that fills the sheet.
+                    DWORD sheetDeadline = GetTickCount() + 5000;
+                    while (GetTickCount() < sheetDeadline &&
+                           app.GetUpdater().GetState() != WinPreview::UpdateState::UpdateAvailable) {
+                        MSG waitMsg;
+                        while (PeekMessageW(&waitMsg, NULL, 0, 0, PM_REMOVE)) {
+                            TranslateMessage(&waitMsg);
+                            DispatchMessageW(&waitMsg);
+                        }
+                        Sleep(20);
+                    }
+                }
                 while (GetTickCount() < settleDeadline) {
                     MSG settleMsg;
                     while (PeekMessageW(&settleMsg, NULL, 0, 0, PM_REMOVE)) {

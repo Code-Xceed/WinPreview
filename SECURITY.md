@@ -13,6 +13,8 @@ Only the latest release of WinPreview receives security updates and vulnerabilit
 
 - Previews are rendered in-process from untrusted files. PDFium, LibHEIF/WIC decoders and PDF text extraction are treated as attack surface: page/file sizes are capped, recursive metadata (Exif SubIFDs, PDF bookmark trees) is depth-limited, archive/CSV structures are bounded, and text previews above 16 MB open read-only.
 - The updater downloads only over HTTPS, requires the release manifest's SHA-256 and byte size to match the downloaded installer, rejects malformed manifests and non-HTTPS URLs, and re-verifies the hash immediately before execution.
+- Update manifests are signed with ECDSA P-256 (SHA-256). The public key is pinned in the binary; the private key lives only in the CI secret store and is loaded from `%LOCALAPPDATA%\\WinPreview\\keys` for local builds. A manifest whose signature does not verify is rejected, and downloads are restricted to GitHub release hosts.
+- The silent update handoff runs the installer through a separate helper invocation (`--apply-update`), which waits for the app to exit, records the installer exit code and relaunches the app; no update payload is ever executed from a user-writable search path.
 - LibHEIF and PDFium are loaded only from the application directory (never from `%APPDATA%`, the current directory, or arbitrary user-writable DLL search paths).
 - The Explorer keyboard hook never performs registry or file I/O inside the hook callback and reads a lock-free POD snapshot of the hotkey configuration.
 

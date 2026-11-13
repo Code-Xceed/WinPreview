@@ -124,6 +124,26 @@ public:
     void SetShowSettings(bool show) { m_showSettings = show; m_settingsAnim = show ? 1.0f : 0.0f; }
     void SetSettingsActiveTab(int tab) { m_settingsActiveTab = tab; }
     UpdateEngine& GetUpdater() { return m_updater; }
+    // Update helper relaunch hooks.
+    void NotifyUpdateApplied();
+    void NotifyUpdateFailed(const std::wstring& code);
+    // Deterministic update-flow hooks used by tests/update_flow_test.ps1.
+    void StartUpdateCheckForTesting();
+    void DownloadUpdateForTesting();
+    // Update sheet ("what's new" + consent + install-on-close).
+    void SetShowUpdateSheet(bool show);
+    void RenderUpdateSheet(const D2D1_RECT_F& canvasRect);
+    void StartUpdateDownload();
+    void SetInstallOnClose(bool enable);
+    bool m_showUpdateSheet = false;
+    float m_updateSheetAnim = 0.0f;
+    D2D1_RECT_F m_updateSheetRect = {};
+    D2D1_RECT_F m_updateSheetPrimary = {};
+    D2D1_RECT_F m_updateSheetSecondary = {};
+    D2D1_RECT_F m_updateSheetTertiary = {};
+    D2D1_RECT_F m_updateSheetClose = {};
+    bool m_installOnClose = false;
+    bool m_testAutoDownload = false;   // starts the download as soon as the check finds an update
     void RunMessageLoop();
 
     HWND GetHwnd() const { return m_hwnd; }

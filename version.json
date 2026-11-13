@@ -1,6 +1,12 @@
 {
-  "version": "1.3.2",
-  "release_date": "2026-11-11",
-  "download_url": "https://github.com/Code-Xceed/WinPreview/releases/latest/download/WinPreview-Setup-x64.exe",
-  "changelog": "WinPreview v1.3.2 - Interface & Interaction Release: one Lucide-based icon system across every toolbar, panel and the media HUD; redesigned Settings with tab icons and readable rows; Settings and File info now reachable from every format, including folders, archives, certificates, shortcuts, images, PDFs, Office, SVG, Markdown, notebooks, fonts, code, spreadsheets, audio and video; a new More actions menu on the media transport HUD plus right-click on video; controls start visible, fade after 2.5 seconds, reveal on mouse movement and toggle on click everywhere; the HUD now sizes itself to its window so controls never clip; human sentence-case copy throughout; fixed file-info header, close icons and toolbar clipping."
+  "version": "1.3.3",
+  "release_date": "2026-11-13",
+  "channel": "stable",
+  "rollout": 10,
+  "paused": false,
+  "mandatory": false,
+  "min_supported": "",
+  "notes": "What's new\n\n- Updates are now one click: WinPreview downloads in the background, verifies the release, installs silently and reopens itself.\n- A proper update window shows the version, size and release notes, with Update now, Later and Skip this version.\n- Install when I close, so an update never interrupts what you are doing.\n- The update manifest is signed and checked against a key inside the app, and downloads only come from GitHub.\n- Failed downloads retry automatically, and a failed install reopens the previous version with the error and a log.\n- TypeScript files open as code, and progress, staging and cleanup no longer leave stray installers behind.",
+  "changelog": "WinPreview 1.3.3 - Update System v2: signed update manifests (ECDSA P-256), one-click silent install with relaunch, what's-new sheet with release notes, install-on-close, download retry and integrity verification, staged rollout and kill switch support, update log, and clearer failure recovery.",
+  "download_url": "https://github.com/Code-Xceed/WinPreview/releases/latest/download/WinPreview-Setup-x64.exe"
 }

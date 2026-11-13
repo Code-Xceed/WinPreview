@@ -5,6 +5,9 @@
 #include <shellapi.h>
 #include <shlobj.h>
 #include <softpub.h>
+#include <bcrypt.h>
+#include <wintrust.h>
+#include <netlistmgr.h>
 #include <algorithm>
 #include <cctype>
 #include <cwchar>
@@ -12,10 +15,30 @@
 #include <string>
 #include <vector>
 
+#pragma comment(lib, "bcrypt.lib")
+
 namespace WinPreview {
 
 static const wchar_t* UPDATE_META_URL = L"https://github.com/Code-Xceed/WinPreview/releases/latest/download/version.json";
+static const wchar_t* UPDATE_META_URL_BETA = L"https://github.com/Code-Xceed/WinPreview/releases/download/beta/version.json";
 static const wchar_t* DEFAULT_INSTALLER_URL = L"https://github.com/Code-Xceed/WinPreview/releases/latest/download/WinPreview-Setup-x64.exe";
+
+// ECDSA P-256 public key (BCRYPT_ECC_PUBLIC_BLOB, base64) pinned in the binary.
+// The matching private key lives only in CI (%WINPREVIEW_UPDATE_KEY%).
+// Generated with tools\update-keygen.ps1.
+static const wchar_t* kUpdatePublicKeyBlobBase64 =
+    L"RUNTMSAAAADLCVWMUsLCsE4eMJbzjb5X2RGYlB0nklnPlQJvkrH+Gu7s7Nmb7xFJVdf/1tN+znQ0dNkiua6/ABHW4LFrobyn";
+
+// When true a manifest without a valid signature is rejected. Flip this to true
+// in the release that first ships with a signing key configured in CI.
+static const bool kRequireSignedManifest = false;
+
+// Self-test vectors (signed offline with the release key). See RunUpdateSelfTest.
+static const char* kSelfTestManifest =
+    "{\"schema\":2,\"version\":\"9.9.9\",\"channel\":\"stable\",\"rollout\":100,\"paused\":false,"
+    "\"mandatory\":false,\"notes\":\"Self-test vector\"}";
+static const wchar_t* kSelfTestSignature =
+    L"6qDq2BvVqS2bq9/YVRB780L4UffuBhG2rtyZREb/viZl3CS0AXnT3sFBvKP2ScUCgIMAp+f5bgkQXCIvz5Sz/g==";
 static const wchar_t* USER_AGENT = L"WinPreview-AutoUpdater/1.1 (Windows NT; x64)";
 
 // Bounded network waits so shutdown never hangs indefinitely behind a dead socket.
@@ -74,8 +97,247 @@ static std::wstring NormalizeSha256(const std::wstring& value) {
     return out;
 }
 
+// Appends a line to %LOCALAPPDATA%\WinPreview\logs\update.log (best effort).
+static std::string WideToUtf8(const std::wstring& str);
+static void LogUpdateEvent(const std::wstring& message) {
+    WCHAR localAppData[MAX_PATH] = {};
+    if (!GetEnvironmentVariableW(L"LOCALAPPDATA", localAppData, MAX_PATH)) return;
+    std::wstring dir = std::wstring(localAppData) + L"\\WinPreview\\logs";
+    CreateDirectoryW((std::wstring(localAppData) + L"\\WinPreview").c_str(), NULL);
+    CreateDirectoryW(dir.c_str(), NULL);
+    std::wstring path = dir + L"\\update.log";
+    SYSTEMTIME st{};
+    GetLocalTime(&st);
+    WCHAR stamp[64];
+    swprintf_s(stamp, L"%04d-%02d-%02d %02d:%02d:%02d ", st.wYear, st.wMonth, st.wDay,
+               st.wHour, st.wMinute, st.wSecond);
+    std::string utf8 = WideToUtf8(std::wstring(stamp) + message + L"\r\n");
+    HANDLE h = CreateFileW(path.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                           NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h != INVALID_HANDLE_VALUE) {
+        DWORD written = 0;
+        WriteFile(h, utf8.data(), (DWORD)utf8.size(), &written, NULL);
+        CloseHandle(h);
+    }
+}
+
 static bool IsHttpsUrl(const std::wstring& url) {
     return url.size() > 8 && _wcsnicmp(url.c_str(), L"https://", 8) == 0;
+}
+
+// Only GitHub's release infrastructure may serve update payloads. Anything else
+// (including a redirect target) is rejected before a byte is downloaded.
+static bool IsAllowedUpdateHost(const std::wstring& url) {
+    if (!IsHttpsUrl(url)) return false;
+    size_t start = 8;
+    size_t end = url.find_first_of(L"/?#", start);
+    std::wstring host = (end == std::wstring::npos) ? url.substr(start) : url.substr(start, end - start);
+    std::transform(host.begin(), host.end(), host.begin(), ::towlower);
+    return host == L"github.com" ||
+           host == L"objects.githubusercontent.com" ||
+           host == L"release-assets.githubusercontent.com";
+}
+
+// Loopback HTTP is accepted only when the manifest URL was explicitly overridden
+// on the command line (local end-to-end update tests). Never in a normal run.
+static bool IsLocalhostUrl(const std::wstring& url) {
+    return url.size() > 7 && _wcsnicmp(url.c_str(), L"http://", 7) == 0 &&
+           (url.find(L"127.0.0.1") == 7 || url.find(L"localhost") == 7);
+}
+
+static std::string WideToUtf8(const std::wstring& str) {
+    if (str.empty()) return "";
+    int count = WideCharToMultiByte(CP_UTF8, 0, str.c_str(), (int)str.length(), NULL, 0, NULL, NULL);
+    if (count <= 0) return "";
+    std::string out(count, 0);
+    WideCharToMultiByte(CP_UTF8, 0, str.c_str(), (int)str.length(), &out[0], count, NULL, NULL);
+    return out;
+}
+
+static std::vector<BYTE> Base64Decode(const std::wstring& text) {
+    std::vector<BYTE> out;
+    int value = 0, bits = -8;
+    for (wchar_t c : text) {
+        if (c == L'=') break;
+        int d = -1;
+        if (c >= L'A' && c <= L'Z') d = c - L'A';
+        else if (c >= L'a' && c <= L'z') d = c - L'a' + 26;
+        else if (c >= L'0' && c <= L'9') d = c - L'0' + 52;
+        else if (c == L'+') d = 62;
+        else if (c == L'/') d = 63;
+        else if (c == L'\r' || c == L'\n' || c == L' ' || c == L'\t') continue;
+        else return {};
+        value = (value << 6) | d;
+        bits += 6;
+        if (bits >= 0) {
+            out.push_back((BYTE)((value >> bits) & 0xFF));
+            bits -= 8;
+        }
+    }
+    return out;
+}
+
+static bool Sha256Bytes(const void* data, size_t length, BYTE out[32]) {
+    BCRYPT_ALG_HANDLE hAlg = NULL;
+    if (BCryptOpenAlgorithmProvider(&hAlg, BCRYPT_SHA256_ALGORITHM, NULL, 0) < 0) return false;
+    BCRYPT_HASH_HANDLE hHash = NULL;
+    bool ok = false;
+    DWORD hashLen = 0, resultLen = 0;
+    if (BCryptGetProperty(hAlg, BCRYPT_HASH_LENGTH, (PUCHAR)&hashLen, sizeof(hashLen), &resultLen, 0) >= 0 &&
+        hashLen == 32 &&
+        BCryptCreateHash(hAlg, &hHash, NULL, 0, NULL, 0, 0) >= 0) {
+        if (BCryptHashData(hHash, (PUCHAR)data, (ULONG)length, 0) >= 0 &&
+            BCryptFinishHash(hHash, out, 32, 0) >= 0) {
+            ok = true;
+        }
+        BCryptDestroyHash(hHash);
+    }
+    BCryptCloseAlgorithmProvider(hAlg, 0);
+    return ok;
+}
+
+// ECDSA P-256/SHA-256 verification with the key pinned above.
+static bool VerifyEcdsaP256Signature(const std::string& payload, const std::wstring& signatureBase64) {
+    std::vector<BYTE> signature = Base64Decode(signatureBase64);
+    if (signature.size() != 64) return false;
+
+    std::vector<BYTE> publicBlob = Base64Decode(kUpdatePublicKeyBlobBase64);
+    if (publicBlob.size() < 8) return false;
+
+    BYTE digest[32] = {};
+    if (!Sha256Bytes(payload.data(), payload.size(), digest)) return false;
+
+    BCRYPT_ALG_HANDLE hAlg = NULL;
+    if (BCryptOpenAlgorithmProvider(&hAlg, BCRYPT_ECDSA_P256_ALGORITHM, NULL, 0) < 0) return false;
+
+    BCRYPT_KEY_HANDLE hKey = NULL;
+    bool ok = false;
+    if (BCryptImportKeyPair(hAlg, NULL, BCRYPT_ECCPUBLIC_BLOB, &hKey,
+                            publicBlob.data(), (ULONG)publicBlob.size(), 0) >= 0) {
+        ok = BCryptVerifySignature(hKey, NULL, digest, sizeof(digest),
+                                   signature.data(), (ULONG)signature.size(), 0) >= 0;
+        BCryptDestroyKey(hKey);
+    }
+    BCryptCloseAlgorithmProvider(hAlg, 0);
+    return ok;
+}
+
+static std::wstring TrimWide(const std::wstring& value) {
+    size_t start = value.find_first_not_of(L" \t\r\n");
+    if (start == std::wstring::npos) return L"";
+    size_t end = value.find_last_not_of(L" \t\r\n");
+    return value.substr(start, end - start + 1);
+}
+
+static bool ExtractJsonBool(const std::string& json, const std::string& field, bool fallback = false) {
+    std::string needle = "\"" + field + "\"";
+    size_t pos = json.find(needle);
+    if (pos == std::string::npos) return fallback;
+    pos = json.find(':', pos + needle.length());
+    if (pos == std::string::npos) return fallback;
+    ++pos;
+    while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\t' || json[pos] == '\r' || json[pos] == '\n')) ++pos;
+    if (json.compare(pos, 4, "true") == 0) return true;
+    if (json.compare(pos, 5, "false") == 0) return false;
+    return fallback;
+}
+
+// Decodes the JSON escapes used by release notes (\n, \r, \t, \", \\, \uXXXX).
+static std::wstring UnescapeJson(const std::string& raw) {
+    std::string out;
+    out.reserve(raw.size());
+    for (size_t i = 0; i < raw.size(); ++i) {
+        char c = raw[i];
+        if (c != '\\' || i + 1 >= raw.size()) { out.push_back(c); continue; }
+        char e = raw[++i];
+        switch (e) {
+            case 'n': out.push_back('\n'); break;
+            case 'r': out.push_back('\r'); break;
+            case 't': out.push_back('\t'); break;
+            case '"': out.push_back('"'); break;
+            case '\\': out.push_back('\\'); break;
+            case '/': out.push_back('/'); break;
+            case 'u': {
+                if (i + 4 < raw.size()) {
+                    unsigned code = 0;
+                    for (int k = 1; k <= 4; ++k) {
+                        char h = raw[i + k];
+                        code <<= 4;
+                        if (h >= '0' && h <= '9') code |= (unsigned)(h - '0');
+                        else if (h >= 'a' && h <= 'f') code |= (unsigned)(h - 'a' + 10);
+                        else if (h >= 'A' && h <= 'F') code |= (unsigned)(h - 'A' + 10);
+                    }
+                    i += 4;
+                    // UTF-8 encode the BMP code point.
+                    if (code < 0x80) out.push_back((char)code);
+                    else if (code < 0x800) {
+                        out.push_back((char)(0xC0 | (code >> 6)));
+                        out.push_back((char)(0x80 | (code & 0x3F)));
+                    } else {
+                        out.push_back((char)(0xE0 | (code >> 12)));
+                        out.push_back((char)(0x80 | ((code >> 6) & 0x3F)));
+                        out.push_back((char)(0x80 | (code & 0x3F)));
+                    }
+                }
+                break;
+            }
+            default: out.push_back(e); break;
+        }
+    }
+    return Utf8ToWide(out);
+}
+
+static std::wstring ExtractJsonStringUnescaped(const std::string& json, const std::string& field) {
+    std::string needle = "\"" + field + "\"";
+    size_t pos = json.find(needle);
+    if (pos == std::string::npos) return L"";
+    pos = json.find(':', pos + needle.length());
+    if (pos == std::string::npos) return L"";
+    pos = json.find('"', pos + 1);
+    if (pos == std::string::npos) return L"";
+    size_t cursor = pos + 1;
+    std::string raw;
+    while (cursor < json.size()) {
+        char c = json[cursor];
+        if (c == '\\' && cursor + 1 < json.size()) {
+            raw.push_back(c);
+            raw.push_back(json[cursor + 1]);
+            cursor += 2;
+            continue;
+        }
+        if (c == '"') break;
+        raw.push_back(c);
+        ++cursor;
+    }
+    return UnescapeJson(raw);
+}
+
+static std::wstring ReadMachineGuid() {
+    WCHAR buffer[128] = {};
+    DWORD size = sizeof(buffer) - sizeof(WCHAR);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Cryptography", L"MachineGuid",
+                     RRF_RT_REG_SZ, NULL, buffer, &size) == ERROR_SUCCESS) {
+        return buffer;
+    }
+    return L"unknown-machine";
+}
+
+// Deterministic 0..99 bucket used for staged rollout. Same machine + version
+// always lands in the same bucket, so a user never flip-flops between eligible
+// and not eligible.
+static int RolloutBucket(const std::wstring& version) {
+    std::string seed = WideToUtf8(ReadMachineGuid() + L":" + version);
+    BYTE digest[32] = {};
+    if (!Sha256Bytes(seed.data(), seed.size(), digest)) return 100;
+    unsigned value = ((unsigned)digest[0] << 24) | ((unsigned)digest[1] << 16) |
+                     ((unsigned)digest[2] << 8) | (unsigned)digest[3];
+    return (int)(value % 100u);
+}
+
+static std::wstring BuildSignatureUrl(const std::wstring& manifestUrl) {
+    size_t pos = manifestUrl.rfind(L"version.json");
+    if (pos == std::wstring::npos) return manifestUrl + L".sig";
+    return manifestUrl.substr(0, pos) + L"version.json.sig";
 }
 
 static bool IsVersionGreater(const std::wstring& remote, const std::wstring& current) {
@@ -227,6 +489,20 @@ std::wstring UpdateEngine::GetDownloadedInstallerPath() const {
 
 void UpdateEngine::CommitInfo(UpdateState state, const UpdateInfo& info) {
     {
+        static const wchar_t* names[] = { L"Idle", L"Checking", L"UpdateAvailable", L"UpToDate",
+                                          L"Downloading", L"Downloaded", L"Failed" };
+        int idx = (int)state;
+        std::wstring line = std::wstring(L"state=") +
+            ((idx >= 0 && idx < 7) ? names[idx] : L"?") +
+            L" remote=" + (info.remoteVersion.empty() ? L"-" : info.remoteVersion) +
+            L" current=" + info.currentVersion +
+            L" channel=" + info.channel +
+            L" rollout=" + std::to_wstring(info.rolloutPercent) +
+            L" signed=" + (info.signaturePresent ? (info.signatureValid ? L"valid" : L"invalid") : L"none");
+        if (!info.errorMessage.empty()) line += L" error=" + info.errorMessage;
+        LogUpdateEvent(line);
+    }
+    {
         std::lock_guard<std::mutex> lock(m_infoMutex);
         m_info = info;
     }
@@ -299,10 +575,21 @@ void UpdateEngine::SimulateUpdateForTesting() {
     m_isSimulated.store(true);
 }
 
+std::wstring UpdateEngine::GetManifestUrl() const {
+    if (!m_manifestUrlOverride.empty()) return m_manifestUrlOverride;
+    return (m_channel == L"beta") ? UPDATE_META_URL_BETA : UPDATE_META_URL;
+}
+
+void UpdateEngine::SetChannel(const std::wstring& channel) {
+    m_channel = (channel == L"beta") ? L"beta" : L"stable";
+}
+
 void UpdateEngine::FetchUpdateInfoSync(UpdateInfo& result) {
     result.currentVersion = QueryModuleFileVersion();
     result.isAvailable = false;
     result.errorMessage.clear();
+    result.signaturePresent = false;
+    result.signatureValid = false;
 
     HINTERNET hInternet = InternetOpenW(USER_AGENT, INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
     if (!hInternet) {
@@ -312,9 +599,11 @@ void UpdateEngine::FetchUpdateInfoSync(UpdateInfo& result) {
     }
     ApplyWinInetTimeouts(hInternet);
 
-    auto fetchFromUrl = [&](const wchar_t* url) -> std::string {
-        HINTERNET hUrl = InternetOpenUrlW(hInternet, url, NULL, 0,
-            INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_SECURE, 0);
+    auto fetchFromUrl = [&](const std::wstring& url) -> std::string {
+        if (url.empty()) return "";
+        DWORD flags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE;
+        if (IsHttpsUrl(url)) flags |= INTERNET_FLAG_SECURE;
+        HINTERNET hUrl = InternetOpenUrlW(hInternet, url.c_str(), NULL, 0, flags, 0);
         if (!hUrl) return "";
         DWORD statusCode = 0, statusSize = sizeof(statusCode), index = 0;
         if (HttpQueryInfoW(hUrl, HTTP_QUERY_STATUS_CODE | HTTP_QUERY_FLAG_NUMBER, &statusCode, &statusSize, &index)) {
@@ -336,8 +625,11 @@ void UpdateEngine::FetchUpdateInfoSync(UpdateInfo& result) {
 
     // releases/latest is the only trust anchor: the manifest is published as a
     // release asset so it can never advertise a version whose installer does not
-    // exist yet (the old raw-main fallback caused exactly that).
-    std::string responseBody = fetchFromUrl(UPDATE_META_URL);
+    // exist yet.
+    const std::wstring manifestUrl = GetManifestUrl();
+    const bool testOverride = !m_manifestUrlOverride.empty();
+    std::string responseBody = fetchFromUrl(manifestUrl);
+    std::wstring signatureText = TrimWide(Utf8ToWide(fetchFromUrl(BuildSignatureUrl(manifestUrl))));
     InternetCloseHandle(hInternet);
 
     if (responseBody.empty()) {
@@ -346,12 +638,45 @@ void UpdateEngine::FetchUpdateInfoSync(UpdateInfo& result) {
         return;
     }
 
+    // ---------------------------------------------------------------------
+    // Integrity: the manifest is signed with the key pinned in this binary.
+    // A present signature must verify; a missing one is only tolerated while
+    // kRequireSignedManifest is false (pre-signing releases).
+    // ---------------------------------------------------------------------
+    result.signaturePresent = !signatureText.empty();
+    if (result.signaturePresent) {
+        result.signatureValid = VerifyEcdsaP256Signature(responseBody, signatureText);
+        if (!result.signatureValid) {
+            result.errorMessage = L"The update manifest signature is not valid.";
+            result.isAvailable = false;
+            CommitInfo(UpdateState::Failed, result);
+            return;
+        }
+    } else if (kRequireSignedManifest) {
+        result.errorMessage = L"This update manifest is not signed.";
+        result.isAvailable = false;
+        CommitInfo(UpdateState::Failed, result);
+        return;
+    }
+
     result.remoteVersion = ExtractJsonString(responseBody, "version");
     result.downloadUrl = ExtractJsonString(responseBody, "download_url");
-    result.changelog = ExtractJsonString(responseBody, "changelog");
+    result.changelog = ExtractJsonStringUnescaped(responseBody, "changelog");
     result.releaseDate = ExtractJsonString(responseBody, "release_date");
     result.installerSha256 = NormalizeSha256(ExtractJsonString(responseBody, "installer_sha256"));
     result.installerSize = ExtractJsonInteger(responseBody, "installer_size");
+
+    // Manifest v2 metadata (all optional; legacy manifests keep working).
+    std::wstring channel = ExtractJsonString(responseBody, "channel");
+    result.channel = channel.empty() ? L"stable" : channel;
+    result.rolloutPercent = (int)ExtractJsonInteger(responseBody, "rollout", 100);
+    if (result.rolloutPercent < 0) result.rolloutPercent = 0;
+    if (result.rolloutPercent > 100) result.rolloutPercent = 100;
+    result.paused = ExtractJsonBool(responseBody, "paused", false);
+    result.mandatory = ExtractJsonBool(responseBody, "mandatory", false);
+    result.minSupported = ExtractJsonString(responseBody, "min_supported");
+    result.notes = ExtractJsonStringUnescaped(responseBody, "notes");
+    if (result.notes.empty()) result.notes = result.changelog;
 
     if (result.remoteVersion.empty()) {
         result.errorMessage = L"Invalid update metadata format.";
@@ -362,8 +687,9 @@ void UpdateEngine::FetchUpdateInfoSync(UpdateInfo& result) {
     if (result.downloadUrl.empty()) {
         result.downloadUrl = DEFAULT_INSTALLER_URL;
     }
-    if (!IsHttpsUrl(result.downloadUrl)) {
-        result.errorMessage = L"Update manifest supplied a non-HTTPS download URL.";
+    if (!IsAllowedUpdateHost(result.downloadUrl) &&
+        !(testOverride && IsLocalhostUrl(result.downloadUrl))) {
+        result.errorMessage = L"The update manifest points to an untrusted download host.";
         result.isAvailable = false;
         CommitInfo(UpdateState::Failed, result);
         return;
@@ -379,7 +705,25 @@ void UpdateEngine::FetchUpdateInfoSync(UpdateInfo& result) {
         }
     }
 
+    // Security floor: below min_supported the update is forced.
+    if (!result.minSupported.empty() &&
+        !IsVersionGreater(result.currentVersion, result.minSupported)) {
+        result.mandatory = true;
+    }
+
+    if (result.paused) {
+        result.isAvailable = false;   // kill switch
+        CommitInfo(UpdateState::UpToDate, result);
+        return;
+    }
+
     if (IsVersionGreater(result.remoteVersion, result.currentVersion)) {
+        if (result.rolloutPercent < 100 &&
+            RolloutBucket(result.remoteVersion) >= result.rolloutPercent) {
+            result.isAvailable = false;   // staged rollout cohort
+            CommitInfo(UpdateState::UpToDate, result);
+            return;
+        }
         result.isAvailable = true;
         CommitInfo(UpdateState::UpdateAvailable, result);
     } else {
@@ -391,6 +735,94 @@ void UpdateEngine::FetchUpdateInfoSync(UpdateInfo& result) {
 // ---------------------------------------------------------------------------
 // Download
 // ---------------------------------------------------------------------------
+
+// One download attempt: WinINet streamed (with progress), then URLDownloadToFile
+// as a fallback. Returns true only when a plausible installer landed on disk.
+static bool TryDownloadInstaller(const std::wstring& url, const std::wstring& targetPath,
+                                 const std::function<void(int)>& progress) {
+    bool downloadSuccess = false;
+
+    HINTERNET hInternet = InternetOpenW(USER_AGENT, INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
+    if (hInternet) {
+        ApplyWinInetTimeouts(hInternet);
+        DWORD flags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE;
+        if (IsHttpsUrl(url)) flags |= INTERNET_FLAG_SECURE;
+        HINTERNET hUrl = InternetOpenUrlW(hInternet, url.c_str(), NULL, 0, flags, 0);
+        if (hUrl) {
+            DWORD statusCode = 0;
+            DWORD statusSize = sizeof(statusCode);
+            DWORD statusIdx = 0;
+            bool statusOk = true;
+            if (HttpQueryInfoW(hUrl, HTTP_QUERY_STATUS_CODE | HTTP_QUERY_FLAG_NUMBER, &statusCode, &statusSize, &statusIdx)) {
+                if (statusCode < 200 || statusCode >= 300) statusOk = false;
+            }
+
+            if (statusOk) {
+                DWORD contentLength = 0;
+                DWORD headerLength = sizeof(contentLength);
+                DWORD index = 0;
+                HttpQueryInfoW(hUrl, HTTP_QUERY_CONTENT_LENGTH | HTTP_QUERY_FLAG_NUMBER, &contentLength, &headerLength, &index);
+
+                HANDLE hFile = CreateFileW(targetPath.c_str(), GENERIC_WRITE,
+                                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                           NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+                if (hFile != INVALID_HANDLE_VALUE) {
+                    std::vector<char> buffer(128 * 1024);
+                    DWORD bytesRead = 0;
+                    unsigned long long totalBytesRead = 0;
+                    bool writeFailed = false;
+
+                    for (;;) {
+                        if (!InternetReadFile(hUrl, buffer.data(), (DWORD)buffer.size(), &bytesRead)) {
+                            writeFailed = true; // never treat a truncated stream as a complete installer
+                            break;
+                        }
+                        if (bytesRead == 0) break;
+                        DWORD bytesWritten = 0;
+                        if (!WriteFile(hFile, buffer.data(), bytesRead, &bytesWritten, NULL) || bytesWritten != bytesRead) {
+                            writeFailed = true;
+                            break;
+                        }
+                        totalBytesRead += bytesRead;
+                        if (contentLength > 0 && progress) {
+                            int percent = (int)((totalBytesRead * 100ULL) / contentLength);
+                            if (percent > 99) percent = 99;
+                            progress(percent);
+                        }
+                    }
+                    FlushFileBuffers(hFile);
+                    CloseHandle(hFile);
+
+                    if (!writeFailed && totalBytesRead >= (unsigned long long)MIN_INSTALLER_BYTES) {
+                        downloadSuccess = true;
+                    }
+                }
+            }
+            InternetCloseHandle(hUrl);
+        }
+        InternetCloseHandle(hInternet);
+    }
+
+    // Fallback for environments where the streamed transfer is blocked.
+    if (!downloadSuccess) {
+        DeleteFileW(targetPath.c_str());
+        if (progress) progress(35);
+        HRESULT hr = URLDownloadToFileW(NULL, url.c_str(), targetPath.c_str(), 0, NULL);
+        if (SUCCEEDED(hr)) {
+            HANDLE hCheck = CreateFileW(targetPath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+            if (hCheck != INVALID_HANDLE_VALUE) {
+                LARGE_INTEGER sz{};
+                if (GetFileSizeEx(hCheck, &sz) && sz.QuadPart >= MIN_INSTALLER_BYTES) {
+                    downloadSuccess = true;
+                }
+                CloseHandle(hCheck);
+            }
+        }
+    }
+
+    if (!downloadSuccess) DeleteFileW(targetPath.c_str());
+    return downloadSuccess;
+}
 
 void UpdateEngine::DownloadUpdateAsync(std::function<void(int percent)> onProgress,
                                       std::function<void(bool success, const std::wstring& filePath)> onComplete) {
@@ -404,7 +836,9 @@ void UpdateEngine::DownloadUpdateAsync(std::function<void(int percent)> onProgre
         if (onComplete) onComplete(false, L"");
         return;
     }
-    if (!m_isSimulated.load() && !IsHttpsUrl(info.downloadUrl)) {
+    const bool allowLocalTestHost = !m_manifestUrlOverride.empty() && IsLocalhostUrl(info.downloadUrl);
+    if (!m_isSimulated.load() && !IsHttpsUrl(info.downloadUrl) && !allowLocalTestHost) {
+        LogUpdateEvent(L"download rejected: download URL is not HTTPS");
         m_state.store(UpdateState::Failed);
         if (onComplete) onComplete(false, L"");
         return;
@@ -427,7 +861,6 @@ void UpdateEngine::DownloadUpdateAsync(std::function<void(int percent)> onProgre
         });
         return;
     }
-
     EnqueueJob([this, info, onProgress, onComplete]() {
         WCHAR tempPath[MAX_PATH];
         GetTempPathW(MAX_PATH, tempPath);
@@ -438,93 +871,34 @@ void UpdateEngine::DownloadUpdateAsync(std::function<void(int percent)> onProgre
                                   L"-" + std::to_wstring(GetTickCount64()) + L".exe";
         SetDownloadedInstallerPath(targetPath);
 
-        bool downloadSuccess = false;
-
-        // =====================================================================
-        // TIER 1: WinINet streamed download with live progress.
-        // =====================================================================
-        HINTERNET hInternet = InternetOpenW(USER_AGENT, INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
-        if (hInternet) {
-            ApplyWinInetTimeouts(hInternet);
-            HINTERNET hUrl = InternetOpenUrlW(hInternet, info.downloadUrl.c_str(), NULL, 0,
-                INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_SECURE, 0);
-            if (hUrl) {
-                DWORD statusCode = 0;
-                DWORD statusSize = sizeof(statusCode);
-                DWORD statusIdx = 0;
-                bool statusOk = true;
-                if (HttpQueryInfoW(hUrl, HTTP_QUERY_STATUS_CODE | HTTP_QUERY_FLAG_NUMBER, &statusCode, &statusSize, &statusIdx)) {
-                    if (statusCode < 200 || statusCode >= 300) statusOk = false;
-                }
-
-                if (statusOk) {
-                    DWORD contentLength = 0;
-                    DWORD headerLength = sizeof(contentLength);
-                    DWORD index = 0;
-                    HttpQueryInfoW(hUrl, HTTP_QUERY_CONTENT_LENGTH | HTTP_QUERY_FLAG_NUMBER, &contentLength, &headerLength, &index);
-
-                    HANDLE hFile = CreateFileW(targetPath.c_str(), GENERIC_WRITE,
-                                               FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                                               NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-                    if (hFile != INVALID_HANDLE_VALUE) {
-                        std::vector<char> buffer(128 * 1024);
-                        DWORD bytesRead = 0;
-                        unsigned long long totalBytesRead = 0;
-                        bool writeFailed = false;
-
-                        for (;;) {
-                            if (m_cancelJob.load()) break;
-                            if (!InternetReadFile(hUrl, buffer.data(), (DWORD)buffer.size(), &bytesRead)) {
-                                writeFailed = true; // never treat a truncated stream as a complete installer
-                                break;
-                            }
-                            if (bytesRead == 0) break;
-                            DWORD bytesWritten = 0;
-                            if (!WriteFile(hFile, buffer.data(), bytesRead, &bytesWritten, NULL) || bytesWritten != bytesRead) {
-                                writeFailed = true;
-                                break;
-                            }
-                            totalBytesRead += bytesRead;
-                            if (contentLength > 0) {
-                                int percent = (int)((totalBytesRead * 100ULL) / contentLength);
-                                if (percent > 99) percent = 99;
-                                m_downloadProgress.store(percent);
-                                if (onProgress) onProgress(percent);
-                            }
-                        }
-                        FlushFileBuffers(hFile);
-                        CloseHandle(hFile);
-
-                        if (!writeFailed && totalBytesRead >= (unsigned long long)MIN_INSTALLER_BYTES) {
-                            downloadSuccess = true;
-                        } else {
-                            DeleteFileW(targetPath.c_str());
-                        }
-                    }
-                }
-                InternetCloseHandle(hUrl);
+        // Pre-flight: refuse to start when the target volume cannot hold the file.
+        LogUpdateEvent(L"download start: " + info.downloadUrl);
+        if (info.installerSize > 0) {
+            ULARGE_INTEGER freeBytes{};
+            if (GetDiskFreeSpaceExW(tempPath, &freeBytes, NULL, NULL) &&
+                freeBytes.QuadPart < (ULONGLONG)info.installerSize * 3ULL) {
+                m_state.store(UpdateState::Failed);
+                if (onComplete) onComplete(false, L"");
+                return;
             }
-            InternetCloseHandle(hInternet);
         }
 
-        // =====================================================================
-        // TIER 2: URLDownloadToFileW fallback.
-        // =====================================================================
-        if (!downloadSuccess && !m_cancelJob.load()) {
-            DeleteFileW(targetPath.c_str());
-            if (onProgress) onProgress(35);
+        bool downloadSuccess = false;
+        int bestPercent = 0;
+        auto reportProgress = [&](int percent) {
+            // Never let a retry move the bar backwards.
+            if (percent > bestPercent) {
+                bestPercent = percent;
+                m_downloadProgress.store(percent);
+                if (onProgress) onProgress(percent);
+            }
+        };
 
-            HRESULT hr = URLDownloadToFileW(NULL, info.downloadUrl.c_str(), targetPath.c_str(), 0, NULL);
-            if (SUCCEEDED(hr)) {
-                HANDLE hCheck = CreateFileW(targetPath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
-                if (hCheck != INVALID_HANDLE_VALUE) {
-                    LARGE_INTEGER sz{};
-                    if (GetFileSizeEx(hCheck, &sz) && sz.QuadPart >= MIN_INSTALLER_BYTES) {
-                        downloadSuccess = true;
-                    }
-                    CloseHandle(hCheck);
-                }
-                if (!downloadSuccess) DeleteFileW(targetPath.c_str());
+        for (int attempt = 1; attempt <= 3 && !downloadSuccess && !m_cancelJob.load(); ++attempt) {
+            DeleteFileW(targetPath.c_str());
+            downloadSuccess = TryDownloadInstaller(info.downloadUrl, targetPath, reportProgress);
+            if (!downloadSuccess && attempt < 3 && !m_cancelJob.load()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(attempt == 1 ? 2000 : 5000));
             }
         }
 
@@ -537,8 +911,8 @@ void UpdateEngine::DownloadUpdateAsync(std::function<void(int percent)> onProgre
         }
 
         // =====================================================================
-        // Integrity gate: size + SHA-256 from the release manifest. A file that
-        // fails this is deleted and never offered to the launch path.
+        // Integrity gate: size + SHA-256 from the signed release manifest. A file
+        // that fails this is deleted and never offered to the launch path.
         // =====================================================================
         if (downloadSuccess) {
             WIN32_FILE_ATTRIBUTE_DATA attrs{};
@@ -560,11 +934,13 @@ void UpdateEngine::DownloadUpdateAsync(std::function<void(int percent)> onProgre
         }
 
         if (downloadSuccess) {
+            LogUpdateEvent(L"download complete: " + targetPath);
             m_downloadProgress.store(100);
             m_state.store(UpdateState::Downloaded);
             if (onProgress) onProgress(100);
             if (onComplete) onComplete(true, targetPath);
         } else {
+            LogUpdateEvent(L"download failed: " + info.downloadUrl);
             DeleteFileW(targetPath.c_str());
             SetDownloadedInstallerPath(L"");
             m_state.store(UpdateState::Failed);
@@ -689,13 +1065,157 @@ bool UpdateEngine::LaunchInstallerAndExit(HWND parentHwnd) {
         return false;
     }
 
-    HINSTANCE hInst = ShellExecuteW(NULL, L"open", installerPath.c_str(),
-                                    L"", NULL, SW_SHOWNORMAL);
-    if ((INT_PTR)hInst > 32) {
-        // Release file locks on WinPreview.exe / pdfium.dll before the installer runs.
+    WCHAR selfPath[MAX_PATH] = {};
+    if (!GetModuleFileNameW(NULL, selfPath, MAX_PATH)) return false;
+
+    WCHAR tempDir[MAX_PATH] = {};
+    GetTempPathW(MAX_PATH, tempDir);
+    const std::wstring logPath = std::wstring(tempDir) + L"WinPreview-update.log";
+    const std::wstring resultPath = std::wstring(tempDir) + L"WinPreview-update-result.json";
+    const std::wstring relaunch = m_relaunchBackground ? L"background" : L"visible";
+
+    // Hand off to the helper: it waits for this process to exit, runs the
+    // installer silently, records the result and relaunches the app.
+    std::wstring command = L"\"" + std::wstring(selfPath) + L"\" --apply-update \"" + installerPath +
+        L"\" --wait-pid " + std::to_wstring(GetCurrentProcessId()) +
+        L" --relaunch " + relaunch +
+        L" --log \"" + logPath + L"\" --result \"" + resultPath + L"\"";
+
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi{};
+    std::vector<wchar_t> mutableCommand(command.begin(), command.end());
+    mutableCommand.push_back(0);
+
+    if (CreateProcessW(NULL, mutableCommand.data(), NULL, NULL, FALSE,
+                       CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+        // Release file locks on WinPreview.exe / pdfium.dll so the installer can
+        // replace them; the helper is already waiting on our PID.
         ExitProcess(0);
     }
     return false;
+}
+
+// ---------------------------------------------------------------------------
+// Update helper: applies a downloaded installer after the app exits.
+// ---------------------------------------------------------------------------
+
+static void WriteUpdateResult(const std::wstring& path, const std::wstring& installer,
+                              unsigned long exitCode, const std::wstring& logPath,
+                              const std::wstring& relaunchMode) {
+    if (path.empty()) return;
+    SYSTEMTIME st{};
+    GetLocalTime(&st);
+    WCHAR stamp[64];
+    swprintf_s(stamp, L"%04d-%02d-%02dT%02d:%02d:%02d", st.wYear, st.wMonth, st.wDay,
+               st.wHour, st.wMinute, st.wSecond);
+    auto escape = [](const std::wstring& value) {
+        std::wstring out;
+        for (wchar_t c : value) {
+            if (c == L'\\') out += L"\\\\";
+            else if (c == L'"') out += L"\\\"";
+            else out.push_back(c);
+        }
+        return out;
+    };
+    std::wstring json = L"{\n";
+    json += L"  \"installer\": \"" + escape(installer) + L"\",\n";
+    json += L"  \"exit_code\": " + std::to_wstring(exitCode) + L",\n";
+    json += L"  \"relaunch\": \"" + escape(relaunchMode) + L"\",\n";
+    json += L"  \"log\": \"" + escape(logPath) + L"\",\n";
+    json += L"  \"finished\": \"" + std::wstring(stamp) + L"\"\n}\n";
+    std::string utf8 = WideToUtf8(json);
+    HANDLE h = CreateFileW(path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, NULL,
+                           CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h != INVALID_HANDLE_VALUE) {
+        DWORD written = 0;
+        WriteFile(h, utf8.data(), (DWORD)utf8.size(), &written, NULL);
+        CloseHandle(h);
+    }
+}
+
+int RunUpdateHelper(const std::wstring& installerPath, unsigned long waitPid,
+                    const std::wstring& relaunchMode, const std::wstring& logPath,
+                    const std::wstring& resultPath) {
+    if (installerPath.empty() || GetFileAttributesW(installerPath.c_str()) == INVALID_FILE_ATTRIBUTES) {
+        return 2;
+    }
+
+    // Wait for the old instance to release its file handles (bounded).
+    if (waitPid != 0) {
+        HANDLE hProcess = OpenProcess(SYNCHRONIZE, FALSE, waitPid);
+        if (hProcess) {
+            WaitForSingleObject(hProcess, 90000);
+            CloseHandle(hProcess);
+        }
+    }
+    Sleep(350);
+
+    std::wstring command = L"\"" + installerPath + L"\" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART"
+                           L" /CLOSEAPPLICATIONS /RESTARTAPPLICATIONS /RELAUNCHMODE=" + relaunchMode;
+    if (!logPath.empty()) {
+        command += L" /LOG=\"" + logPath + L"\"";
+    }
+    std::vector<wchar_t> mutableCommand(command.begin(), command.end());
+    mutableCommand.push_back(0);
+
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi{};
+    DWORD exitCode = (DWORD)-1;
+    if (CreateProcessW(NULL, mutableCommand.data(), NULL, NULL, FALSE,
+                       CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+        WaitForSingleObject(pi.hProcess, 10 * 60 * 1000);
+        GetExitCodeProcess(pi.hProcess, &exitCode);
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+    }
+
+    WriteUpdateResult(resultPath, installerPath, exitCode, logPath, relaunchMode);
+
+    // Relaunch: the new build on success, the old build (with the failure code)
+    // on error so the user is never left with nothing running.
+    WCHAR selfPath[MAX_PATH] = {};
+    if (GetModuleFileNameW(NULL, selfPath, MAX_PATH)) {
+        std::wstring args;
+        if (exitCode == 0) {
+            args = (relaunchMode == L"background") ? L"--restored --background" : L"--restored";
+        } else {
+            args = L"--update-failed " + std::to_wstring(exitCode) +
+                   ((relaunchMode == L"background") ? L" --background" : L"");
+        }
+        ShellExecuteW(NULL, L"open", selfPath, args.c_str(), NULL,
+                      (relaunchMode == L"background") ? SW_HIDE : SW_SHOWNORMAL);
+    }
+
+    return (exitCode == 0) ? 0 : 1;
+}
+
+int RunUpdateSelfTest() {
+    int failures = 0;
+    const std::string manifest(kSelfTestManifest);
+
+    if (!VerifyEcdsaP256Signature(manifest, kSelfTestSignature)) ++failures;
+    std::string tampered = manifest;
+    size_t versionPos = tampered.find("9.9.9");
+    if (versionPos != std::string::npos) {
+        tampered[versionPos + 4] = '8';
+        if (VerifyEcdsaP256Signature(tampered, kSelfTestSignature)) ++failures;
+    } else {
+        ++failures;
+    }
+
+    if (Base64Decode(kUpdatePublicKeyBlobBase64).size() != 72) ++failures;
+    if (!IsVersionGreater(L"1.4.0", L"1.3.2")) ++failures;
+    if (IsVersionGreater(L"1.3.2", L"1.4.0")) ++failures;
+    if (IsVersionGreater(L"1.3.2", L"1.3.2")) ++failures;
+    if (!IsAllowedUpdateHost(L"https://github.com/owner/repo/releases/download/v1/version.json")) ++failures;
+    if (IsAllowedUpdateHost(L"http://github.com/owner/repo")) ++failures;
+    if (IsAllowedUpdateHost(L"https://evil.example.com/version.json")) ++failures;
+
+    return failures == 0 ? 0 : 1;
 }
 
 } // namespace WinPreview

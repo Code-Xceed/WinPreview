@@ -33,6 +33,16 @@ struct UpdateInfo {
     long long installerSize = 0;
     bool isAvailable = false;
     std::wstring errorMessage;
+
+    // Manifest v2 metadata.
+    std::wstring channel = L"stable";
+    int rolloutPercent = 100;
+    bool paused = false;
+    bool mandatory = false;
+    std::wstring minSupported;
+    std::wstring notes;
+    bool signaturePresent = false;
+    bool signatureValid = false;
 };
 
 class UpdateEngine {
@@ -56,6 +66,18 @@ public:
 
     // Verifies and launches the downloaded installer, then exits the process.
     bool LaunchInstallerAndExit(HWND parentHwnd);
+
+    // Update channel and (test-only) manifest URL override.
+    void SetChannel(const std::wstring& channel);
+    void SetManifestUrlOverride(const std::wstring& url) { m_manifestUrlOverride = url; }
+    std::wstring GetManifestUrl() const;
+
+    // Relaunch target for the update helper ("visible" or "background").
+    void SetRelaunchBackground(bool background) { m_relaunchBackground = background; }
+
+
+    // Aborts an in-flight download and forgets the partial file.
+    void CancelDownload() { m_cancelJob.store(true); }
 
     // Deterministic UI test hook.
     void SimulateUpdateForTesting();
@@ -96,6 +118,26 @@ private:
     std::deque<std::function<void()>> m_jobs;
     std::thread m_workerThread;
     bool m_stopping = false;
+
+    std::wstring m_channel = L"stable";
+    std::wstring m_manifestUrlOverride;
+    bool m_relaunchBackground = false;
 };
+
+// ---------------------------------------------------------------------------
+// Update helper / self-test entry points (implemented in update_engine.cpp)
+// ---------------------------------------------------------------------------
+
+// Applies a downloaded installer after the running app has exited:
+// waits for waitPid, runs the installer silently, records the result and
+// relaunches the app (in `relaunchMode`: "background" or "visible").
+// Returns 0 when the update was applied, non-zero otherwise.
+int RunUpdateHelper(const std::wstring& installerPath, unsigned long waitPid,
+                    const std::wstring& relaunchMode, const std::wstring& logPath,
+                    const std::wstring& resultPath);
+
+// Offline verification of the signing key and manifest parser. Used by CI.
+// Returns 0 when every self-test passes.
+int RunUpdateSelfTest();
 
 } // namespace WinPreview

@@ -246,9 +246,26 @@ $installerHash = if ($builtInstaller) { Get-Sha256 $installerPath } else { "" }
 $portableSize = (Get-Item $portableZip).Length
 $portableHash = Get-Sha256 $portableZip
 
+# Manifest v2 controls (all optional in version.json).
+$updateChannel      = if ($versionJson.channel) { [string]$versionJson.channel } else { "stable" }
+$updateRollout      = if ($null -ne $versionJson.rollout) { [int]$versionJson.rollout } else { 100 }
+$updatePaused       = if ($null -ne $versionJson.paused) { [bool]$versionJson.paused } else { $false }
+$updateMandatory    = if ($null -ne $versionJson.mandatory) { [bool]$versionJson.mandatory } else { $false }
+$updateMinSupported = if ($versionJson.min_supported) { [string]$versionJson.min_supported } else { "" }
+$updateNotes        = if ($versionJson.notes) { [string]$versionJson.notes } else { "" }
+if ($updateRollout -lt 0) { $updateRollout = 0 }
+if ($updateRollout -gt 100) { $updateRollout = 100 }
+
 $manifest = [ordered]@{
+    schema           = 2
     version          = $releaseVersion
+    channel          = $updateChannel
     release_date     = $releaseDate
+    paused           = $updatePaused
+    rollout          = $updateRollout
+    mandatory        = $updateMandatory
+    min_supported    = $updateMinSupported
+    notes            = $updateNotes
     download_url     = $downloadUrl
     changelog        = $changelog
     installer_size   = $installerSize
@@ -256,7 +273,46 @@ $manifest = [ordered]@{
     portable_size    = $portableSize
     portable_sha256  = $portableHash
 }
-$manifest | ConvertTo-Json -Depth 4 | Set-Content -Path $manifestPath -Encoding UTF8
+
+# Write without a BOM and sign the exact bytes, so the signature the app checks
+# is over the file as published (including whitespace).
+$manifestJson = $manifest | ConvertTo-Json -Depth 4
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+[System.IO.File]::WriteAllText($manifestPath, $manifestJson + "`r`n", $utf8NoBom)
+
+# ---------------------------------------------------------------------------
+# Sign the manifest with the ECDSA P-256 update key (ECDSA over SHA-256).
+# The public half is pinned in src/update_engine.cpp.
+# ---------------------------------------------------------------------------
+$signaturePath = "$manifestPath.sig"
+if (Test-Path $signaturePath) { Remove-Item -LiteralPath $signaturePath -Force }
+
+$updateKeyBase64 = $env:WINPREVIEW_UPDATE_KEY
+if (-not $updateKeyBase64) {
+    $keyFile = Join-Path $env:LOCALAPPDATA "WinPreview\keys\update-signing-key.txt"
+    if (Test-Path $keyFile) { $updateKeyBase64 = (Get-Content $keyFile -Raw).Trim() }
+}
+
+if ($updateKeyBase64) {
+    try {
+        $privateBlob = [Convert]::FromBase64String($updateKeyBase64.Trim())
+        $cngKey = [System.Security.Cryptography.CngKey]::Import(
+            $privateBlob, [System.Security.Cryptography.CngKeyBlobFormat]::EccPrivateBlob)
+        $ecdsa = New-Object System.Security.Cryptography.ECDsaCng($cngKey)
+        $manifestBytes = [System.IO.File]::ReadAllBytes($manifestPath)
+        $signature = $ecdsa.SignData($manifestBytes, [System.Security.Cryptography.HashAlgorithmName]::SHA256)
+        [System.IO.File]::WriteAllText($signaturePath, [Convert]::ToBase64String($signature), $utf8NoBom)
+        $ecdsa.Dispose(); $cngKey.Dispose()
+        Write-Host "  Manifest signed: $signaturePath" -ForegroundColor Green
+    } catch {
+        Fail "Update manifest signing failed: $($_.Exception.Message)"
+    }
+} elseif ($env:GITHUB_ACTIONS -and $env:GITHUB_REF -like "refs/tags/v*") {
+    Fail "Refusing to publish an unsigned release: WINPREVIEW_UPDATE_KEY is not set. Add the signing key as a repository secret (see tools\update-keygen.ps1)."
+} else {
+    Write-Host "  [WARN] No update signing key available - manifest left unsigned (local build)." -ForegroundColor Yellow
+}
+
 Write-Host "  Release manifest: $manifestPath" -ForegroundColor Green
 
 # Hard guarantee: the binary the installer ships reports the version we advertise.

@@ -57,7 +57,7 @@ echo [WinPreview Native] Compiling C++20 engine with Clang -O3 -flto -static -mu
     -Wl,--gc-sections -Wl,--no-insert-timestamp ^
     main.cpp app_window.cpp d2d_engine.cpp icon_engine.cpp wic_decoder.cpp heif_decoder.cpp pdf_engine.cpp media_engine.cpp text_engine.cpp explorer_hook.cpp svg_engine.cpp font_engine.cpp folder_engine.cpp markdown_engine.cpp system_engine.cpp update_engine.cpp resources.res ^
     -o WinPreview.exe ^
-    -ld2d1 -ldwrite -lwindowscodecs -ld3d11 -ldwmapi -lole32 -loleaut32 -lshell32 -lshcore -lshlwapi -luxtheme -lcomdlg32 -lpropsys -luuid -lversion -lwintrust -ladvapi32 -lcrypt32 -lwininet -lurlmon -lwinmm
+    -ld2d1 -ldwrite -lwindowscodecs -ld3d11 -ldwmapi -lole32 -loleaut32 -lshell32 -lshcore -lshlwapi -luxtheme -lcomdlg32 -lpropsys -luuid -lversion -lwintrust -ladvapi32 -lcrypt32 -lwininet -lurlmon -lwinmm -lbcrypt -lole32
 
 if %ERRORLEVEL% neq 0 (
     echo [ERROR] Compilation failed.

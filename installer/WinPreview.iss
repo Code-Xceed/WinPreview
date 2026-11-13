@@ -4,7 +4,7 @@
 ; =====================================================================
 
 #define MyAppName "WinPreview"
-#define MyAppVersion "1.3.2"
+#define MyAppVersion "1.3.3"
 #define MyAppPublisher "Code-Xceed"
 #define MyAppURL "https://github.com/Code-Xceed/WinPreview"
 #define MyAppExeName "WinPreview.exe"
@@ -35,14 +35,15 @@ SolidCompression=yes
 WizardStyle=modern
 SetupLogging=yes
 UsePreviousAppDir=yes
+UsePreviousTasks=yes
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog commandline
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
-CloseApplications=no
+CloseApplications=yes
 RestartApplications=no
 DisableProgramGroupPage=yes
-VersionInfoVersion=1.3.2.0
+VersionInfoVersion=1.3.3.0
 VersionInfoCompany={#MyAppPublisher}
 VersionInfoDescription=WinPreview - Apple Preview for Windows
 VersionInfoCopyright=Copyright (C) 2026 Code-Xceed
@@ -160,15 +161,25 @@ Root: HKA; Subkey: "Software\Classes\WinPreview.Document.Media\DefaultIcon"; Val
 Root: HKA; Subkey: "Software\Classes\WinPreview.Document.Media\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""; Tasks: fileassoc
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Parameters: "--background"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+; Silent update: relaunch in the mode the app asked for (the update helper waits
+; for this setup to finish before starting the new build).
+Filename: "{app}\{#MyAppExeName}"; Parameters: "{code:GetRelaunchParams}"; Flags: nowait; Check: IsSilentUpdate
+; Interactive install: keep starting quietly in the tray.
+Filename: "{app}\{#MyAppExeName}"; Parameters: "--background"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall; Check: not IsSilentUpdate
 
 [Code]
-function PrepareToInstall(var NeedsRestart: Boolean): String;
-var
-  ResultCode: Integer;
+function IsSilentUpdate: Boolean;
 begin
-  // Terminate any running WinPreview instance cleanly before installing/updating
-  Exec('cmd.exe', '/c taskkill /f /im WinPreview.exe >nul 2>&1', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-  Sleep(150);
-  Result := '';
+  Result := WizardSilent;
+end;
+
+function GetRelaunchParams(Param: String): String;
+var
+  Mode: String;
+begin
+  Mode := ExpandConstant('{param:RELAUNCHMODE|visible}');
+  if CompareText(Mode, 'background') = 0 then
+    Result := '--restored --background'
+  else
+    Result := '--restored';
 end;

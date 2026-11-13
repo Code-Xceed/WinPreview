@@ -70,6 +70,10 @@ enum ButtonId {
     BTN_INSPECTOR_COPY = 55,
     BTN_LOG_LUT = 56,
     BTN_HUD_MORE = 57,
+    BTN_UPDATE_PRIMARY = 90,
+    BTN_UPDATE_SECONDARY = 91,
+    BTN_UPDATE_TERTIARY = 92,
+    BTN_UPDATE_CLOSE = 93,
     BTN_SETTINGS_TAB_0 = 70,
     BTN_SETTINGS_TAB_1 = 71,
     BTN_SETTINGS_TAB_2 = 72,
@@ -1928,6 +1932,10 @@ D2D1_RECT_F AppWindow::GetButtonRect(int buttonId) const {
         case BTN_LOG_LUT: return m_hudBtnLog;
         case BTN_TOOLBAR_MUTE: return m_hudBtnMute;
         case BTN_HUD_MORE: return m_hudBtnMore;
+        case BTN_UPDATE_PRIMARY: return m_updateSheetPrimary;
+        case BTN_UPDATE_SECONDARY: return m_updateSheetSecondary;
+        case BTN_UPDATE_TERTIARY: return m_updateSheetTertiary;
+        case BTN_UPDATE_CLOSE: return m_updateSheetClose;
         case BTN_FULLSCREEN: return m_hudBtnFullscreen;
         case BTN_TOOLBAR_FS: return m_btnToolbarFsRect;
         case BTN_SEARCH: return m_btnSearchRect;
@@ -1966,6 +1974,8 @@ bool AppWindow::SaveScreenshot(const std::wstring& outPath) {
     m_dockOpacity = 1.0f;
     m_dockTargetOpacity = 1.0f;
     m_guiVisible = true;
+    if (m_showUpdateSheet) m_updateSheetAnim = 1.0f;
+    if (m_showSettings) m_settingsAnim = 1.0f;
     UpdateLayout();
     ID2D1HwndRenderTarget* rt = m_d2d.GetRenderTarget();
     if (!rt) return false;
@@ -2156,6 +2166,9 @@ void AppWindow::Render(HDC outHdc) {
     }
     if (m_showInspector) {
         RenderInspector(canvasRect);
+    }
+    if (m_showUpdateSheet || m_updateSheetAnim > 0.005f) {
+        RenderUpdateSheet(canvasRect);
     }
     if (m_showSettings) {
         RenderSettingsModal(canvasRect);
@@ -4823,6 +4836,7 @@ void AppWindow::CheckForUpdates(bool isUserInitiated) {
 }
 
 void AppWindow::RenderUpdateBanner(const D2D1_RECT_F& rect) {
+    if (m_showUpdateSheet) return;
     UpdateState state = m_updater.GetState();
     if (state != UpdateState::UpdateAvailable && state != UpdateState::Downloading && state != UpdateState::Downloaded) {
         return;
@@ -5974,6 +5988,214 @@ void AppWindow::RenderCropOverlay(const D2D1_RECT_F& canvasRect) {
     rt->DrawText(dimBuf, (UINT32)wcslen(dimBuf), m_d2d.FontCaption, textR, m_d2d.BrushText);
 }
 
+// ---------------------------------------------------------------------------
+// Update sheet: what's new, download consent and install-on-close.
+// ---------------------------------------------------------------------------
+
+void AppWindow::SetShowUpdateSheet(bool show) {
+    m_showUpdateSheet = show;
+    if (show) {
+        EnsureAnimTimer();
+        m_showSettings = false;          // never stack modals
+        m_settingsAnim = 0.0f;
+        m_showOverflowMenu = false;
+        m_overflowMenuAnim = 0.0f;
+    }
+    InvalidateRect(m_hwnd, NULL, FALSE);
+}
+
+void AppWindow::StartUpdateDownload() {
+    if (m_updater.GetState() != UpdateState::UpdateAvailable) return;
+    m_updater.DownloadUpdateAsync(
+        [this](int) {
+            EnsureAnimTimer();
+            InvalidateRect(m_hwnd, NULL, FALSE);
+        },
+        [this](bool ok, const std::wstring&) {
+            if (!ok) ShowToast(L"The download failed. Check your connection and try again.");
+            EnsureAnimTimer();
+            InvalidateRect(m_hwnd, NULL, FALSE);
+        });
+}
+
+void AppWindow::SetInstallOnClose(bool enable) {
+    m_installOnClose = enable;
+    if (enable) {
+        HKEY hKey = NULL;
+        if (RegOpenKeyExW(HKEY_CURRENT_USER, REG_KEY_SETTINGS_APP, 0, KEY_WRITE | KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
+            DWORD one = 1;
+            RegSetValueExW(hKey, L"InstallOnClose", 0, REG_DWORD, (const BYTE*)&one, sizeof(one));
+            RegCloseKey(hKey);
+        }
+        ShowToast(L"WinPreview will install the update when you close it.");
+    }
+    InvalidateRect(m_hwnd, NULL, FALSE);
+}
+
+void AppWindow::RenderUpdateSheet(const D2D1_RECT_F& canvasRect) {
+    if (!m_showUpdateSheet && m_updateSheetAnim <= 0.005f) {
+        m_updateSheetRect = {};
+        m_updateSheetPrimary = {};
+        m_updateSheetSecondary = {};
+        m_updateSheetTertiary = {};
+        m_updateSheetClose = {};
+        return;
+    }
+    ID2D1HwndRenderTarget* rt = m_d2d.GetRenderTarget();
+    if (!rt) return;
+
+    const float anim = (std::clamp)(m_updateSheetAnim, 0.0f, 1.0f);
+    if (!m_showUpdateSheet) {
+        m_updateSheetPrimary = {};
+        m_updateSheetSecondary = {};
+        m_updateSheetTertiary = {};
+        m_updateSheetClose = {};
+    }
+
+    // Backdrop
+    m_d2d.BrushShadowDark->SetOpacity(0.62f * anim);
+    rt->FillRectangle(canvasRect, m_d2d.BrushShadowDark);
+    m_d2d.BrushShadowDark->SetOpacity(0.40f);
+
+    const float availW = canvasRect.right - canvasRect.left;
+    const float availH = canvasRect.bottom - canvasRect.top;
+    const float w = std::floor((std::min)(560.0f, availW - 40.0f) + 0.5f);
+    const float h = std::floor((std::min)(430.0f, availH - 80.0f) + 0.5f);
+    const float x = std::floor(canvasRect.left + (availW - w) / 2.0f + 0.5f);
+    const float y = std::floor(canvasRect.top + (availH - h) / 2.0f + (1.0f - anim) * 10.0f + 0.5f);
+    m_updateSheetRect = D2D1::RectF(x, y, x + w, y + h);
+
+    D2D1_ROUNDED_RECT card = D2D1::RoundedRect(m_updateSheetRect, 16.0f, 16.0f);
+    m_d2d.BrushCard->SetOpacity(anim);
+    rt->FillRoundedRectangle(card, m_d2d.BrushCard);
+    m_d2d.BrushCard->SetOpacity(1.0f);
+    if (m_d2d.BrushBorderSubtle) {
+        rt->DrawRoundedRectangle(card, m_d2d.BrushBorderSubtle, 1.0f);
+    }
+
+    const UpdateInfo info = m_updater.GetUpdateInfo();
+    const UpdateState state = m_updater.GetState();
+
+    // Title + meta
+    std::wstring title = L"WinPreview " + info.remoteVersion;
+    rt->DrawText(title.c_str(), (UINT32)title.length(),
+                 m_d2d.FontTitle ? m_d2d.FontTitle : m_d2d.FontButton,
+                 D2D1::RectF(x + 24.0f, y + 20.0f, x + w - 56.0f, y + 48.0f), m_d2d.BrushText);
+
+    double mb = (double)info.installerSize / (1024.0 * 1024.0);
+    WCHAR meta[192];
+    swprintf_s(meta, L"%.1f MB  ·  %s  ·  %s channel",
+               mb,
+               info.releaseDate.empty() ? L"new release" : info.releaseDate.c_str(),
+               info.channel.c_str());
+    rt->DrawText(meta, (UINT32)wcslen(meta),
+                 m_d2d.FontCaption ? m_d2d.FontCaption : m_d2d.FontButton,
+                 D2D1::RectF(x + 24.0f, y + 48.0f, x + w - 24.0f, y + 68.0f),
+                 m_d2d.BrushTextMuted);
+
+    // Close
+    m_updateSheetClose = D2D1::RectF(x + w - 40.0f, y + 12.0f, x + w - 12.0f, y + 40.0f);
+    if (m_hoveredButtonId == BTN_UPDATE_CLOSE) {
+        D2D1_ROUNDED_RECT closeR = D2D1::RoundedRect(m_updateSheetClose, 6.0f, 6.0f);
+        rt->FillRoundedRectangle(closeR, m_d2d.BrushHover);
+    }
+    m_d2d.DrawIconClose(m_updateSheetClose.left + 14.0f, m_updateSheetClose.top + 14.0f, 12.0f,
+        (m_hoveredButtonId == BTN_UPDATE_CLOSE) ? (ID2D1Brush*)m_d2d.BrushText : (ID2D1Brush*)m_d2d.BrushTextMuted);
+
+    // Footer buttons (layout first so the notes know how much room they get).
+    const float btnH = 40.0f;
+    const float btnY = y + h - 32.0f - btnH / 2.0f;
+    struct Action { std::wstring label; D2D1_RECT_F rect; int id; bool primary; bool enabled; };
+    std::vector<Action> actions;
+    if (state == UpdateState::Downloading) {
+        actions.push_back({ L"Cancel", {}, BTN_UPDATE_SECONDARY, false, true });
+    } else if (state == UpdateState::Downloaded) {
+        actions.push_back({ L"Restart now", {}, BTN_UPDATE_PRIMARY, true, true });
+        actions.push_back({ L"Install when I close", {}, BTN_UPDATE_SECONDARY, false, true });
+        actions.push_back({ L"Later", {}, BTN_UPDATE_TERTIARY, false, true });
+    } else if (state == UpdateState::Failed) {
+        actions.push_back({ L"Try again", {}, BTN_UPDATE_PRIMARY, true, true });
+        actions.push_back({ L"Later", {}, BTN_UPDATE_SECONDARY, false, true });
+    } else {
+        actions.push_back({ L"Update now", {}, BTN_UPDATE_PRIMARY, true, true });
+        actions.push_back({ L"Later", {}, BTN_UPDATE_SECONDARY, false, true });
+        actions.push_back({ L"Skip this version", {}, BTN_UPDATE_TERTIARY, false, true });
+    }
+
+    float totalW = 0.0f;
+    for (size_t i = 0; i < actions.size(); ++i) {
+        totalW += (i > 0 ? 10.0f : 0.0f) + (actions[i].primary ? 150.0f : 140.0f);
+    }
+
+    // Narrow windows stack the actions instead of letting them overflow the card.
+    const bool stacked = (totalW > w - 32.0f);
+    float stackY = y + h - 24.0f - (float)actions.size() * btnH - (float)(actions.size() - 1) * 8.0f;
+
+    // Notes body: the release notes are plain text; the server sends Markdown
+    // and the first screenful is displayed with wrapping.
+    std::wstring notes = info.notes.empty() ? info.changelog : info.notes;
+    if (notes.empty()) notes = L"A new version of WinPreview is ready to install.";
+    float notesBottom = stacked ? (stackY - 16.0f) : (y + h - 92.0f);
+    D2D1_RECT_F notesRect = D2D1::RectF(x + 24.0f, y + 80.0f, x + w - 24.0f, notesBottom);
+    if (notesRect.bottom > notesRect.top + 24.0f) {
+        // DrawText lays out past the box when the notes are long, so clip to the
+        // body area instead of letting text run under the action buttons.
+        rt->PushAxisAlignedClip(notesRect, D2D1_ANTIALIAS_MODE_ALIASED);
+        rt->DrawText(notes.c_str(), (UINT32)notes.length(),
+                     m_d2d.FontBody ? m_d2d.FontBody : m_d2d.FontCaption,
+                     notesRect, m_d2d.BrushText);
+        rt->PopAxisAlignedClip();
+    }
+
+    float curX = stacked ? (x + 24.0f) : std::floor(x + (w - totalW) / 2.0f + 0.5f);
+    D2D1_RECT_F* slots[3] = { &m_updateSheetPrimary, &m_updateSheetSecondary, &m_updateSheetTertiary };
+    for (size_t i = 0; i < actions.size(); ++i) {
+        float bw = stacked ? (w - 48.0f) : (actions[i].primary ? 150.0f : 140.0f);
+        float ry = stacked ? (stackY + (float)i * (btnH + 8.0f)) : btnY;
+        D2D1_RECT_F r = D2D1::RectF(curX, ry, curX + bw, ry + btnH);
+        *slots[i] = r;
+        if (!stacked) curX += bw + 10.0f;
+
+        D2D1_ROUNDED_RECT rr = D2D1::RoundedRect(r, 20.0f, 20.0f);
+        const bool hovered = (m_hoveredButtonId == (i == 0 ? BTN_UPDATE_PRIMARY : (i == 1 ? BTN_UPDATE_SECONDARY : BTN_UPDATE_TERTIARY)));
+        if (actions[i].primary) {
+            rt->FillRoundedRectangle(rr, m_d2d.BrushAccent);
+            if (hovered) rt->DrawRoundedRectangle(rr, m_d2d.BrushText, 1.2f);
+        } else {
+            rt->FillRoundedRectangle(rr, m_d2d.BrushChipBg ? m_d2d.BrushChipBg : m_d2d.BrushCard);
+            if (m_d2d.BrushChipBorder) rt->DrawRoundedRectangle(rr, m_d2d.BrushChipBorder, 1.0f);
+            if (hovered) rt->DrawRoundedRectangle(rr, m_d2d.BrushTextMuted, 1.0f);
+        }
+        IDWriteTextFormat* btnFont = m_d2d.FontButton ? m_d2d.FontButton : m_d2d.FontCaption;
+        rt->DrawText(actions[i].label.c_str(), (UINT32)actions[i].label.length(), btnFont, r,
+                     m_d2d.BrushText);
+    }
+    if (actions.size() < 3) {
+        if (actions.size() < 1) m_updateSheetPrimary = {};
+        if (actions.size() < 2) m_updateSheetSecondary = {};
+        m_updateSheetTertiary = {};
+    }
+
+    // Download progress inside the sheet.
+    if (state == UpdateState::Downloading) {
+        float pct = (float)m_updater.GetDownloadProgress() / 100.0f;
+        float barY = stacked ? (stackY - 40.0f) : (y + h - 108.0f);
+        D2D1_RECT_F bar = D2D1::RectF(x + 24.0f, barY, x + w - 24.0f, barY + 8.0f);
+        D2D1_ROUNDED_RECT track = D2D1::RoundedRect(bar, 4.0f, 4.0f);
+        if (m_d2d.BrushBorderSubtle) rt->FillRoundedRectangle(track, m_d2d.BrushBorderSubtle);
+        if (pct > 0.0f) {
+            D2D1_RECT_F fill = D2D1::RectF(bar.left, bar.top, bar.left + (bar.right - bar.left) * pct, bar.bottom);
+            rt->FillRoundedRectangle(D2D1::RoundedRect(fill, 4.0f, 4.0f), m_d2d.BrushAccent);
+        }
+        WCHAR pctText[64];
+        swprintf_s(pctText, L"Downloading %d%%", m_updater.GetDownloadProgress());
+        rt->DrawText(pctText, (UINT32)wcslen(pctText),
+                     m_d2d.FontCaption ? m_d2d.FontCaption : m_d2d.FontButton,
+                     D2D1::RectF(x + 24.0f, barY + 8.0f, x + w - 24.0f, barY + 24.0f),
+                     m_d2d.BrushTextMuted);
+    }
+}
+
 void AppWindow::RenderInspector(const D2D1_RECT_F& canvasRect) {
     if (m_inspectorAnim <= 0.005f && !m_showInspector) {
         m_inspectorRect = {};
@@ -6489,6 +6711,34 @@ void AppWindow::ToggleInspector() {
         WakeAllUiAndCursor("ToggleInspector");
     }
     InvalidateRect(m_hwnd, NULL, FALSE);
+}
+
+void AppWindow::StartUpdateCheckForTesting() {
+    CheckForUpdates(false);
+}
+
+void AppWindow::DownloadUpdateForTesting() {
+    m_testAutoDownload = true;
+    if (m_updater.GetState() == UpdateState::UpdateAvailable) {
+        m_testAutoDownload = false;
+        m_updater.DownloadUpdateAsync(
+            [this](int) { EnsureAnimTimer(); },
+            [this](bool ok, const std::wstring&) {
+                if (!ok) ShowToast(L"Update download failed.");
+                EnsureAnimTimer();
+                InvalidateRect(m_hwnd, NULL, FALSE);
+            });
+    }
+}
+
+void AppWindow::NotifyUpdateApplied() {
+    ShowToast(L"Updated to v" WINPREVIEW_VERSION_WSTR ". Open Settings for what's new.");
+    EnsureAnimTimer();
+}
+
+void AppWindow::NotifyUpdateFailed(const std::wstring& code) {
+    ShowToast(L"The update couldn't be installed (code " + code + L"). Try again from Settings.");
+    EnsureAnimTimer();
 }
 
 void AppWindow::ToggleSettings() {
@@ -8118,6 +8368,7 @@ void AppWindow::UpdatePopupPosition() {
 }
 
 void AppWindow::ShowUpdatePopup() {
+    if (m_showUpdateSheet) return;
     if (!m_updateHwnd) {
         CreateUpdatePopupWindow();
     }
@@ -8404,19 +8655,13 @@ LRESULT CALLBACK AppWindow::UpdatePopupWndProc(HWND hwnd, UINT msg, WPARAM wPara
                 yDip >= self->m_updateBtnRect.top && yDip <= self->m_updateBtnRect.bottom) {
 
                 if (state == UpdateState::UpdateAvailable || state == UpdateState::Failed) {
-                    self->m_updater.DownloadUpdateAsync(
-                        [self](int pct) {
-                            // Worker thread: marshal repaints/toasts to the owning UI thread.
-                            if (self->m_updateHwnd) {
-                                PostMessageW(self->m_updateHwnd, WM_UPDATE_DL_PROGRESS, 0, (LPARAM)pct);
-                            }
-                        },
-                        [self](bool success, const std::wstring& path) {
-                            PostMessageW(self->m_updateHwnd ? self->m_updateHwnd : self->m_hwnd,
-                                         WM_UPDATE_DL_DONE, success ? 1 : 0, 0);
-                        }
-                    );
+                    self->SetShowUpdateSheet(true);
+                    if (!IsWindowVisible(self->m_hwnd)) {
+                        ShowWindow(self->m_hwnd, SW_SHOW);
+                        SetForegroundWindow(self->m_hwnd);
+                    }
                 } else if (state == UpdateState::Downloaded) {
+                    self->m_updater.SetRelaunchBackground(!IsWindowVisible(self->m_hwnd));
                     bool launched = self->m_updater.LaunchInstallerAndExit(self->m_hwnd);
                     if (!launched) {
                         self->ShowToast(L"Couldn't start the installer.");
@@ -8469,9 +8714,11 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                     if (alreadyDismissed) {
                         // “No update for me” — drop stale engine state silently.
                         m_updater.Dismiss();
-                    } else {
+                    } else if (!m_showUpdateSheet) {
                         ShowUpdatePopup();
                         ShowToast(L"Update v" + info.remoteVersion + L" is available in the update banner.");
+                    } else {
+                        ShowUpdatePopup();   // no-op while the sheet is open
                     }
                 } else if (!res->failed) {
                     // Server reports up to date: a previous dismissal is obsolete.
@@ -8483,6 +8730,10 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 }
                 if (res->userInitiated && !res->message.empty()) {
                     ShowToast(res->message);
+                }
+                if (m_testAutoDownload && m_updater.GetState() == UpdateState::UpdateAvailable) {
+                    m_testAutoDownload = false;
+                    DownloadUpdateForTesting();
                 }
                 delete res;
             }
@@ -8903,6 +9154,18 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         }
         case WM_APP + 237: /* Diagnostic: document type */ {
             return (LRESULT)(int)m_docType;
+        }
+        case WM_APP + 238: /* Diagnostic: update engine state */ {
+            return (LRESULT)(int)m_updater.GetState();
+        }
+        case WM_APP + 239: /* Diagnostic: update download progress */ {
+            return (LRESULT)m_updater.GetDownloadProgress();
+        }
+        case WM_APP + 241: /* Diagnostic: update sheet visible */ {
+            return (LRESULT)(m_showUpdateSheet ? 1 : 0);
+        }
+        case WM_APP + 242: /* Diagnostic: install-on-close pending */ {
+            return (LRESULT)(m_installOnClose ? 1 : 0);
         }
         case WM_APP + 236: /* Diagnostic: HUD layer visible */ {
             if (!m_hudHwnd || !IsWindowVisible(m_hudHwnd)) return 0;
@@ -9336,12 +9599,15 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             bool overflowTransitioning = updateSmoothAnim(m_overflowMenuAnim, m_showOverflowMenu);
             bool searchTransitioning = updateSmoothAnim(m_searchAnim, m_showSearch);
             bool settingsTransitioning = updateSmoothAnim(m_settingsAnim, m_showSettings);
+            bool updateSheetTransitioning = updateSmoothAnim(m_updateSheetAnim, m_showUpdateSheet);
 
-            if (inspectorTransitioning || overflowTransitioning || searchTransitioning || settingsTransitioning) {
+            if (inspectorTransitioning || overflowTransitioning || searchTransitioning ||
+                settingsTransitioning || updateSheetTransitioning) {
                 InvalidateRect(m_hwnd, NULL, FALSE);
             }
 
-            bool panelAnimationsActive = (m_inspectorAnim > 0.005f && m_inspectorAnim < 0.995f) ||
+            bool panelAnimationsActive = (m_updateSheetAnim > 0.005f && m_updateSheetAnim < 0.995f) ||
+                                         (m_inspectorAnim > 0.005f && m_inspectorAnim < 0.995f) ||
                                          (m_overflowMenuAnim > 0.005f && m_overflowMenuAnim < 0.995f) ||
                                          (m_searchAnim > 0.005f && m_searchAnim < 0.995f) ||
                                          (m_settingsAnim > 0.005f && m_settingsAnim < 0.995f);
@@ -9868,28 +10134,49 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 return pt.x >= r.left && pt.x <= r.right && pt.y >= r.top && pt.y <= r.bottom;
             };
 
+            // -0.2 Update sheet (what's new, consent, install-on-close)
+            if (m_showUpdateSheet) {
+                const UpdateState sheetState = m_updater.GetState();
+                if (hit(m_updateSheetClose) || !hit(m_updateSheetRect)) {
+                    SetShowUpdateSheet(false);
+                    return 0;
+                }
+                if (hit(m_updateSheetPrimary)) {
+                    if (sheetState == UpdateState::Downloaded) {
+                        m_updater.SetRelaunchBackground(!IsWindowVisible(m_hwnd));
+                        if (!m_updater.LaunchInstallerAndExit(m_hwnd)) {
+                            ShowToast(L"Couldn't start the installer.");
+                        }
+                    } else {
+                        StartUpdateDownload();
+                    }
+                    return 0;
+                }
+                if (hit(m_updateSheetSecondary)) {
+                    if (sheetState == UpdateState::Downloading) {
+                        m_updater.CancelDownload();
+                    } else if (sheetState == UpdateState::Downloaded) {
+                        SetInstallOnClose(true);
+                        SetShowUpdateSheet(false);
+                    } else {
+                        SetShowUpdateSheet(false);   // Later
+                    }
+                    return 0;
+                }
+                if (hit(m_updateSheetTertiary)) {
+                    DismissUpdateNag();              // Skip this version
+                    SetShowUpdateSheet(false);
+                    return 0;
+                }
+                return 0;
+            }
+
             // -0.5 In-App Update Banner clicks
             UpdateState updateState = m_updater.GetState();
             if (updateState == UpdateState::UpdateAvailable || updateState == UpdateState::Downloaded) {
                 if (hit(m_updateActionBtnRect)) {
-                    if (updateState == UpdateState::UpdateAvailable) {
-                        m_updater.DownloadUpdateAsync(
-                            [this](int pct) {
-                                // Worker thread: marshal the repaint to the UI thread.
-                                PostMessageW(m_hwnd, WM_UPDATE_DL_PROGRESS, 0, (LPARAM)pct);
-                            },
-                            [this](bool success, const std::wstring& path) {
-                                PostMessageW(m_hwnd, WM_UPDATE_DL_DONE, success ? 1 : 0, 0);
-                            }
-                        );
-                    } else if (updateState == UpdateState::Downloaded) {
-                        bool launched = m_updater.LaunchInstallerAndExit(m_hwnd);
-                        if (!launched) {
-                            ShowToast(L"Couldn't start the installer.");
-                            InvalidateRect(m_hwnd, NULL, FALSE);
-                        }
-                    }
-                    InvalidateRect(m_hwnd, NULL, FALSE);
+                    // Show what's new before anything is downloaded or installed.
+                    SetShowUpdateSheet(true);
                     return 0;
                 }
                 if (hit(m_updateDismissBtnRect)) {
@@ -10541,6 +10828,10 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 else if (hit(m_btnZoomFitRect)) m_hoveredButtonId = BTN_ZOOM_FIT;
                 else if (hit(m_btnRotateLeftRect)) m_hoveredButtonId = BTN_ROTATE_L;
                 else if (hit(m_btnRotateRightRect)) m_hoveredButtonId = BTN_ROTATE_R;
+                else if (m_showUpdateSheet && hit(m_updateSheetClose)) m_hoveredButtonId = BTN_UPDATE_CLOSE;
+                else if (m_showUpdateSheet && hit(m_updateSheetPrimary)) m_hoveredButtonId = BTN_UPDATE_PRIMARY;
+                else if (m_showUpdateSheet && hit(m_updateSheetSecondary)) m_hoveredButtonId = BTN_UPDATE_SECONDARY;
+                else if (m_showUpdateSheet && hit(m_updateSheetTertiary)) m_hoveredButtonId = BTN_UPDATE_TERTIARY;
                 else if (hit(m_btnToolbarFsRect)) m_hoveredButtonId = BTN_TOOLBAR_FS;
                 else if (hit(m_btnSettingsRect)) m_hoveredButtonId = BTN_SETTINGS;
                 else if (hit(m_btnSearchRect)) m_hoveredButtonId = BTN_SEARCH;
@@ -10905,6 +11196,12 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             if (m_showOverflowMenu && wParam == VK_ESCAPE) {
                 m_showOverflowMenu = false;
                 InvalidateRect(m_hwnd, NULL, FALSE);
+                return 0;
+            }
+
+            // 0. Update sheet Escape
+            if (m_showUpdateSheet && wParam == VK_ESCAPE) {
+                SetShowUpdateSheet(false);
                 return 0;
             }
 
@@ -11399,6 +11696,13 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         }
 
         case WM_CLOSE: {
+            if (m_installOnClose && m_updater.GetState() == UpdateState::Downloaded) {
+                m_installOnClose = false;
+                m_updater.SetRelaunchBackground(true);
+                if (m_updater.LaunchInstallerAndExit(m_hwnd)) {
+                    return 0;   // helper takes over from here
+                }
+            }
             if (!m_keepInMemory) {
                 // "Keep resident in background" is off: actually exit instead of
                 // silently ignoring the close request forever.

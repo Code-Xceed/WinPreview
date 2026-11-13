@@ -5,6 +5,21 @@ All notable changes to **WinPreview** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.3] - 2026-11-13
+
+### Update system v2
+- Updates are now one click: background download, signature verification, silent install and an automatic relaunch in the mode the app was running (window or background).
+- A dedicated update window shows the version, download size, channel and release notes, with **Update now**, **Later**, **Skip this version**, and **Install when I close** once the download is ready.
+- Update manifests are signed with ECDSA P-256 and verified against a pinned public key; downloads are restricted to GitHub hosts, and a manifest whose signature does not verify is rejected.
+- Download pipeline: three attempts with backoff, disk-space pre-check, progress that never moves backwards, staged path under `%LOCALAPPDATA%\WinPreview\Update`, and cleanup on failure.
+- The installer now upgrades silently (`/VERYSILENT /CLOSEAPPLICATIONS`), preserves the previous install location and tasks, and relaunches the app itself. A failure relaunches the old build with the exit code instead of leaving nothing running.
+- Channels (`stable`, `beta`), staged rollout percentages, `paused` kill switch and `min_supported` security floor are supported by the manifest and the engine.
+- Every update decision is written to `%LOCALAPPDATA%\WinPreview\logs\update.log`; the helper writes `update-result.json` with the installer exit code.
+
+### Fixes
+- Windows PowerShell no longer leaves a stray blank line in the generated installer script on every release (CI's generated-file check).
+- TypeScript `.ts`/`.mts` files open as code, real MPEG transport streams stay video, and `.m4b` audiobooks use the audio layout (from 1.3.2).
+
 ## [1.3.2] - 2026-11-11
 
 ### Design system & iconography
