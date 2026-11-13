@@ -143,6 +143,7 @@ public:
     D2D1_RECT_F m_updateSheetTertiary = {};
     D2D1_RECT_F m_updateSheetClose = {};
     bool m_installOnClose = false;
+    bool m_autoDownloadUpdates = true;   // Discord-style: fetch in the background, then ask to restart
     bool m_testAutoDownload = false;   // starts the download as soon as the check finds an update
     void RunMessageLoop();
 

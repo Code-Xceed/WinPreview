@@ -4725,6 +4725,9 @@ void AppWindow::LoadPersistedUiState() {
     if (RegReadU64(L"AutoCheckUpdates", v)) {
         m_autoCheckUpdates = (v != 0);
     }
+    if (RegReadU64(L"AutoDownloadUpdates", v)) {
+        m_autoDownloadUpdates = (v != 0);
+    }
     if (RegReadU64(L"ArrowKeyNav", v)) {
         m_arrowKeyNavEnabled = (v != 0);
     }
@@ -4752,6 +4755,7 @@ void AppWindow::SaveGeneralSettings() {
     RegWriteU64(L"CloseOnFocusLoss", m_closeOnFocusLoss ? 1 : 0);
     RegWriteU64(L"KeepInMemory", m_keepInMemory ? 1 : 0);
     RegWriteU64(L"AutoCheckUpdates", m_autoCheckUpdates ? 1 : 0);
+    RegWriteU64(L"AutoDownloadUpdates", m_autoDownloadUpdates ? 1 : 0);
     RegWriteU64(L"ArrowKeyNav", m_arrowKeyNavEnabled ? 1 : 0);
     RegWriteU64(L"LoopFolderNav", m_loopFolderNav ? 1 : 0);
     RegWriteU64(L"AutoPlayMedia", m_autoPlayMedia ? 1 : 0);
@@ -8688,7 +8692,7 @@ LRESULT CALLBACK AppWindow::UpdatePopupWndProc(HWND hwnd, UINT msg, WPARAM wPara
             if (!wParam) {
                 self->ShowToast(L"Download failed. Try again.");
             } else {
-                self->ShowToast(L"Update downloaded. Restart to install.");
+                self->ShowToast(L"Update ready. Restart when it suits you.");
             }
             InvalidateRect(hwnd, NULL, FALSE);
             return 0;
@@ -8719,6 +8723,12 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                         ShowToast(L"Update v" + info.remoteVersion + L" is available in the update banner.");
                     } else {
                         ShowUpdatePopup();   // no-op while the sheet is open
+                    }
+                    // Discord-style: pull the payload in the background so the user
+                    // only has to press "Restart to update" later.
+                    if (m_autoDownloadUpdates && !alreadyDismissed &&
+                        m_updater.GetState() == UpdateState::UpdateAvailable) {
+                        StartUpdateDownload();
                     }
                 } else if (!res->failed) {
                     // Server reports up to date: a previous dismissal is obsolete.
