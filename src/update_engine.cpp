@@ -1201,11 +1201,22 @@ bool UpdateEngine::LaunchInstallerAndExit(HWND parentHwnd) {
     const std::wstring resultPath = std::wstring(tempDir) + L"WinPreview-update-result.json";
     const std::wstring relaunch = m_relaunchBackground ? L"background" : L"visible";
 
-    // Hand off to the helper: it waits for this process to exit, runs the
-    // installer silently, records the result and relaunches the app.
-    std::wstring command = L"\"" + std::wstring(selfPath) + L"\" --apply-update \"" + installerPath +
+    // The helper must not run from the install directory: Inno's Restart Manager
+    // would see WinPreview.exe holding the very files it has to replace and abort
+    // the upgrade. Copy ourselves next to the installer in %TEMP% instead.
+    const std::wstring helperPath = std::wstring(tempDir) + L"WinPreview-update-helper-" +
+                                    std::to_wstring(GetTickCount64()) + L".exe";
+    if (CopyFileW(selfPath, helperPath.c_str(), FALSE)) {
+        // Copied: the installer can replace the real installation while this
+        // temporary helper waits.
+    } else {
+        return false;
+    }
+
+    std::wstring command = L"\"" + helperPath + L"\" --apply-update \"" + installerPath +
         L"\" --wait-pid " + std::to_wstring(GetCurrentProcessId()) +
         L" --relaunch " + relaunch +
+        L" --restart-exe \"" + std::wstring(selfPath) + L"\"" +
         L" --log \"" + logPath + L"\" --result \"" + resultPath + L"\"";
 
     STARTUPINFOW si{};
@@ -1265,7 +1276,7 @@ static void WriteUpdateResult(const std::wstring& path, const std::wstring& inst
 
 int RunUpdateHelper(const std::wstring& installerPath, unsigned long waitPid,
                     const std::wstring& relaunchMode, const std::wstring& logPath,
-                    const std::wstring& resultPath) {
+                    const std::wstring& resultPath, const std::wstring& restartExe) {
     if (installerPath.empty() || GetFileAttributesW(installerPath.c_str()) == INVALID_FILE_ATTRIBUTES) {
         return 2;
     }
@@ -1306,6 +1317,9 @@ int RunUpdateHelper(const std::wstring& installerPath, unsigned long waitPid,
     // on error so the user is never left with nothing running.
     WCHAR selfPath[MAX_PATH] = {};
     if (GetModuleFileNameW(NULL, selfPath, MAX_PATH)) {
+        // Prefer the installed executable the app told us about; this helper may
+        // be a temporary copy that should not be relaunched.
+        std::wstring target = restartExe.empty() ? std::wstring(selfPath) : restartExe;
         std::wstring args;
         if (exitCode == 0) {
             args = (relaunchMode == L"background") ? L"--restored --background" : L"--restored";
@@ -1313,7 +1327,7 @@ int RunUpdateHelper(const std::wstring& installerPath, unsigned long waitPid,
             args = L"--update-failed " + std::to_wstring(exitCode) +
                    ((relaunchMode == L"background") ? L" --background" : L"");
         }
-        ShellExecuteW(NULL, L"open", selfPath, args.c_str(), NULL,
+        ShellExecuteW(NULL, L"open", target.c_str(), args.c_str(), NULL,
                       (relaunchMode == L"background") ? SW_HIDE : SW_SHOWNORMAL);
     }
 

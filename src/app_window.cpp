@@ -8444,6 +8444,7 @@ void AppWindow::ShowUpdatePopup() {
     if (IsWindowVisible(m_hwnd) && !IsIconic(m_hwnd)) {
         UpdatePopupPosition();
         ShowWindow(m_updateHwnd, SW_SHOWNOACTIVATE);
+        SetWindowPos(m_updateHwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
         InvalidateRect(m_updateHwnd, NULL, FALSE);
     } else {
         // If main preview window is resident in background, notify user via system tray

@@ -5,6 +5,14 @@ All notable changes to **WinPreview** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.8] - 2026-11-14
+
+### Install handoff
+- The update helper now runs from a copy in `%TEMP%` instead of the install directory. Installer regression found on a real upgrade: Inno's Restart Manager saw `WinPreview.exe` holding the files it had to replace and aborted with "unable to automatically close all applications".
+- The helper and `--selftest-update` now run before the single-instance guard, so a still-running WinPreview can no longer swallow the helper invocation (it previously exited silently as a forwarded instance).
+- The helper relaunches the installed executable explicitly (`--restart-exe`) rather than its temporary copy.
+- The update notification window is topmost, so it is visible above the browser or any other foreground app.
+
 ## [1.3.7] - 2026-11-14
 
 ### Updates

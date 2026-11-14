@@ -134,7 +134,7 @@ private:
 // Returns 0 when the update was applied, non-zero otherwise.
 int RunUpdateHelper(const std::wstring& installerPath, unsigned long waitPid,
                     const std::wstring& relaunchMode, const std::wstring& logPath,
-                    const std::wstring& resultPath);
+                    const std::wstring& resultPath, const std::wstring& restartExe);
 
 // Offline verification of the signing key and manifest parser. Used by CI.
 // Returns 0 when every self-test passes.

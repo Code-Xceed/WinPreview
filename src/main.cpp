@@ -88,6 +88,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     std::wstring applyUpdateRelaunch = L"visible";
     std::wstring applyUpdateLog;
     std::wstring applyUpdateResult;
+    std::wstring applyUpdateRestartExe;
     unsigned long applyUpdateWaitPid = 0;
     bool runUpdateSelfTest = false;
     bool forceUpdateCheck = false;
@@ -111,6 +112,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
                 applyUpdateLog = argv[++i];
             } else if ((_wcsicmp(argv[i], L"--result") == 0) && i + 1 < argc) {
                 applyUpdateResult = argv[++i];
+            } else if ((_wcsicmp(argv[i], L"--restart-exe") == 0) && i + 1 < argc) {
+                applyUpdateRestartExe = argv[++i];
             } else if (_wcsicmp(argv[i], L"--selftest-update") == 0) {
                 runUpdateSelfTest = true;
             } else if (_wcsicmp(argv[i], L"--force-update-check") == 0) {
@@ -156,6 +159,18 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
         }
     }
 
+    // -----------------------------------------------------------------------
+    // Update helper / self-test run before any window, mutex or COM setup.
+    // -----------------------------------------------------------------------
+    if (!applyUpdateInstaller.empty()) {
+        return WinPreview::RunUpdateHelper(applyUpdateInstaller, applyUpdateWaitPid,
+                                           applyUpdateRelaunch, applyUpdateLog, applyUpdateResult,
+                                           applyUpdateRestartExe);
+    }
+    if (runUpdateSelfTest) {
+        return WinPreview::RunUpdateSelfTest();
+    }
+
     // Single-instance enforcement: Forward file to running instance if already active
     HANDLE hMutex = NULL;
     if (screenshotPath.empty()) {
@@ -185,17 +200,6 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
         }
     }
     if (argv) LocalFree(argv);
-
-    // -----------------------------------------------------------------------
-    // Update helper / self-test run before any window, mutex or COM setup.
-    // -----------------------------------------------------------------------
-    if (!applyUpdateInstaller.empty()) {
-        return WinPreview::RunUpdateHelper(applyUpdateInstaller, applyUpdateWaitPid,
-                                           applyUpdateRelaunch, applyUpdateLog, applyUpdateResult);
-    }
-    if (runUpdateSelfTest) {
-        return WinPreview::RunUpdateSelfTest();
-    }
 
     // High-DPI Awareness V2
     HMODULE hUser32 = GetModuleHandleW(L"user32.dll");
