@@ -99,6 +99,9 @@ static std::wstring NormalizeSha256(const std::wstring& value) {
 
 // Appends a line to %LOCALAPPDATA%\WinPreview\logs\update.log (best effort).
 static std::string WideToUtf8(const std::wstring& str);
+static bool CurlFetchToString(const std::wstring& url, std::string& body);
+static bool CurlDownloadToFile(const std::wstring& url, const std::wstring& outPath,
+                               const std::function<void(int)>& progress, long long expectedSize);
 static void LogUpdateEvent(const std::wstring& message) {
     WCHAR localAppData[MAX_PATH] = {};
     if (!GetEnvironmentVariableW(L"LOCALAPPDATA", localAppData, MAX_PATH)) return;
@@ -604,10 +607,15 @@ void UpdateEngine::FetchUpdateInfoSync(UpdateInfo& result) {
         DWORD flags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE;
         if (IsHttpsUrl(url)) flags |= INTERNET_FLAG_SECURE;
         HINTERNET hUrl = InternetOpenUrlW(hInternet, url.c_str(), NULL, 0, flags, 0);
-        if (!hUrl) return "";
+        if (!hUrl) {
+            DWORD err = GetLastError();
+            LogUpdateEvent(L"fetch open failed url=" + url + L" wininet=" + std::to_wstring(err));
+            return "";
+        }
         DWORD statusCode = 0, statusSize = sizeof(statusCode), index = 0;
         if (HttpQueryInfoW(hUrl, HTTP_QUERY_STATUS_CODE | HTTP_QUERY_FLAG_NUMBER, &statusCode, &statusSize, &index)) {
             if (statusCode < 200 || statusCode >= 300) {
+                LogUpdateEvent(L"fetch status " + std::to_wstring(statusCode) + L" for " + url);
                 InternetCloseHandle(hUrl);
                 return "";
             }
@@ -623,13 +631,21 @@ void UpdateEngine::FetchUpdateInfoSync(UpdateInfo& result) {
         return body;
     };
 
+    auto fetchWithFallback = [&](const std::wstring& url) -> std::string {
+        std::string body = fetchFromUrl(url);
+        if (!body.empty()) return body;
+        LogUpdateEvent(L"falling back to curl for " + url);
+        if (CurlFetchToString(url, body)) return body;
+        return "";
+    };
+
     // releases/latest is the only trust anchor: the manifest is published as a
     // release asset so it can never advertise a version whose installer does not
     // exist yet.
     const std::wstring manifestUrl = GetManifestUrl();
     const bool testOverride = !m_manifestUrlOverride.empty();
-    std::string responseBody = fetchFromUrl(manifestUrl);
-    std::wstring signatureText = TrimWide(Utf8ToWide(fetchFromUrl(BuildSignatureUrl(manifestUrl))));
+    std::string responseBody = fetchWithFallback(manifestUrl);
+    std::wstring signatureText = TrimWide(Utf8ToWide(fetchWithFallback(BuildSignatureUrl(manifestUrl))));
     InternetCloseHandle(hInternet);
 
     if (responseBody.empty()) {
@@ -736,6 +752,89 @@ void UpdateEngine::FetchUpdateInfoSync(UpdateInfo& result) {
 // Download
 // ---------------------------------------------------------------------------
 
+static std::wstring SystemCurlPath() {
+    WCHAR sysDir[MAX_PATH] = {};
+    if (!GetSystemDirectoryW(sysDir, MAX_PATH)) return L"";
+    std::wstring path = std::wstring(sysDir) + L"\\curl.exe";
+    return (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES) ? L"" : path;
+}
+
+// Runs curl.exe -L --fail and optionally reports progress from the growing file.
+static bool CurlDownloadToFile(const std::wstring& url, const std::wstring& outPath,
+                               const std::function<void(int)>& progress, long long expectedSize) {
+    std::wstring curl = SystemCurlPath();
+    if (curl.empty()) return false;
+
+    std::wstring command = L"\"" + curl + L"\" --location --fail --silent --show-error"
+                           L" --connect-timeout 8 --max-time 300"
+                           L" --output \"" + outPath + L"\" \"" + url + L"\"";
+    std::vector<wchar_t> mutableCommand(command.begin(), command.end());
+    mutableCommand.push_back(0);
+
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdOutput = NULL;
+    si.hStdError = NULL;
+    si.hStdInput = NULL;
+    PROCESS_INFORMATION pi{};
+    if (!CreateProcessW(NULL, mutableCommand.data(), NULL, NULL, FALSE,
+                        CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+        return false;
+    }
+    CloseHandle(pi.hThread);
+
+    bool finished = false;
+    ULONGLONG deadline = GetTickCount64() + 300000ULL;
+    while (!finished && GetTickCount64() < deadline) {
+        DWORD wait = WaitForSingleObject(pi.hProcess, 150);
+        finished = (wait == WAIT_OBJECT_0);
+        if (!finished && progress && expectedSize > 0) {
+            WIN32_FILE_ATTRIBUTE_DATA attrs{};
+            if (GetFileAttributesExW(outPath.c_str(), GetFileExInfoStandard, &attrs)) {
+                unsigned long long size = ((unsigned long long)attrs.nFileSizeHigh << 32) | attrs.nFileSizeLow;
+                int percent = (int)((size * 100ULL) / (unsigned long long)expectedSize);
+                if (percent > 99) percent = 99;
+                progress(percent);
+            }
+        }
+    }
+
+    DWORD exitCode = (DWORD)-1;
+    if (finished) {
+        GetExitCodeProcess(pi.hProcess, &exitCode);
+    } else {
+        TerminateProcess(pi.hProcess, (UINT)-1);
+    }
+    CloseHandle(pi.hProcess);
+
+    if (exitCode != 0) {
+        DeleteFileW(outPath.c_str());
+        LogUpdateEvent(L"curl fallback failed exit=" + std::to_wstring(exitCode) + L" url=" + url);
+        return false;
+    }
+    return true;
+}
+
+static bool CurlFetchToString(const std::wstring& url, std::string& body) {
+    WCHAR tempDir[MAX_PATH] = {};
+    GetTempPathW(MAX_PATH, tempDir);
+    std::wstring path = std::wstring(tempDir) + L"WinPreview-fetch-" + std::to_wstring(GetTickCount64()) + L".tmp";
+    if (!CurlDownloadToFile(url, path, nullptr, 0)) return false;
+
+    HANDLE h = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    if (h == INVALID_HANDLE_VALUE) return false;
+    char buffer[8192];
+    DWORD read = 0;
+    while (ReadFile(h, buffer, sizeof(buffer), &read, NULL) && read > 0) {
+        body.append(buffer, read);
+        if (body.size() > 256 * 1024) break;
+    }
+    CloseHandle(h);
+    DeleteFileW(path.c_str());
+    return !body.empty();
+}
+
 // One download attempt: WinINet streamed (with progress), then URLDownloadToFile
 // as a fallback. Returns true only when a plausible installer landed on disk.
 static bool TryDownloadInstaller(const std::wstring& url, const std::wstring& targetPath,
@@ -809,6 +908,22 @@ static bool TryDownloadInstaller(const std::wstring& url, const std::wstring& ta
         if (progress) progress(35);
         HRESULT hr = URLDownloadToFileW(NULL, url.c_str(), targetPath.c_str(), 0, NULL);
         if (SUCCEEDED(hr)) {
+            HANDLE hCheck = CreateFileW(targetPath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+            if (hCheck != INVALID_HANDLE_VALUE) {
+                LARGE_INTEGER sz{};
+                if (GetFileSizeEx(hCheck, &sz) && sz.QuadPart >= MIN_INSTALLER_BYTES) {
+                    downloadSuccess = true;
+                }
+                CloseHandle(hCheck);
+            }
+        }
+    }
+
+    if (!downloadSuccess) {
+        DeleteFileW(targetPath.c_str());
+        // Last resort: curl.exe (system32) handles IPv6-only black holes and
+        // proxy environments that WinINet stalls on.
+        if (CurlDownloadToFile(url, targetPath, progress, 0)) {
             HANDLE hCheck = CreateFileW(targetPath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
             if (hCheck != INVALID_HANDLE_VALUE) {
                 LARGE_INTEGER sz{};
