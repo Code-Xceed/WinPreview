@@ -73,11 +73,6 @@ jobs:
           if ($sig.Length -lt 80) { throw "Signature file looks truncated." }
           Write-Host "Signed manifest present ($($sig.Length) base64 chars)."
 
-      - name: Dock layout sweep (in-app geometry diagnostics)
-        shell: pwsh
-        run: |
-          python tests/dock_test.py
-
       - name: Runtime smoke test (update self-test + render)
         shell: pwsh
         run: |
@@ -106,6 +101,20 @@ jobs:
           if ($p.ExitCode -ne 0 -or -not (Test-Path $shot)) { throw "render smoke test produced no screenshot" }
           if ((Get-Item $shot).Length -lt 5000) { throw "render smoke screenshot looks empty" }
           Write-Host "render smoke: ok ($((Get-Item $shot).Length) bytes)"
+
+          # Dock geometry: the app reports any painted button past the pill.
+          # Fixtures come from the repo (plus the PNG rendered above).
+          $probe = Join-Path $env:RUNNER_TEMP "dock-probe"
+          New-Item -ItemType Directory -Force $probe | Out-Null
+          Copy-Item "src/app_window.cpp" (Join-Path $probe "sample.cpp") -Force
+          Copy-Item $png (Join-Path $probe "sample.png") -Force
+          $sevenZip = (Resolve-Path "dist/WinPreview/7z.exe").Path
+          Push-Location $probe
+          & $sevenZip a -tzip sample.zip sample.cpp | Out-Null
+          Pop-Location
+          python tools/ui_probe/dock_sweep.py --exe $exe (Join-Path $probe "sample.cpp") (Join-Path $probe "sample.png") (Join-Path $probe "sample.zip")
+          if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 3) { throw "dock sweep failed ($LASTEXITCODE)" }
+          if ($LASTEXITCODE -eq 3) { Write-Host "dock sweep skipped (no window in this session)" }
 
       - name: Verify generated files are committed
         shell: pwsh
