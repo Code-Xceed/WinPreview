@@ -1195,6 +1195,9 @@ bool UpdateEngine::LaunchInstallerAndExit(HWND parentHwnd) {
     WCHAR selfPath[MAX_PATH] = {};
     if (!GetModuleFileNameW(NULL, selfPath, MAX_PATH)) return false;
 
+    // Keep the version we are about to replace so a failed start can be undone.
+    CreateUpdateBackup(selfPath);
+
     WCHAR tempDir[MAX_PATH] = {};
     GetTempPathW(MAX_PATH, tempDir);
     const std::wstring logPath = std::wstring(tempDir) + L"WinPreview-update.log";
@@ -1337,6 +1340,254 @@ int RunUpdateHelper(const std::wstring& installerPath, unsigned long waitPid,
     }
 
     return (exitCode == 0) ? 0 : 1;
+}
+
+// ---------------------------------------------------------------------------
+// Rollback support: keep the previous installation so a bad release can be undone.
+// ---------------------------------------------------------------------------
+
+static bool CopyTree(const std::wstring& sourceDir, const std::wstring& targetDir) {
+    CreateDirectoryW(targetDir.c_str(), NULL);
+    std::wstring pattern = sourceDir + L"\\*";
+    WIN32_FIND_DATAW data{};
+    HANDLE hFind = FindFirstFileW(pattern.c_str(), &data);
+    if (hFind == INVALID_HANDLE_VALUE) return false;
+
+    bool ok = true;
+    do {
+        if (wcscmp(data.cFileName, L".") == 0 || wcscmp(data.cFileName, L"..") == 0) continue;
+        if (data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) continue;
+        std::wstring src = sourceDir + L"\\" + data.cFileName;
+        std::wstring dst = targetDir + L"\\" + data.cFileName;
+        if (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            if (!CopyTree(src, dst)) ok = false;
+        } else {
+            // CopyFile overwrites, which is what a rollback needs.
+            if (!CopyFileW(src.c_str(), dst.c_str(), FALSE)) ok = false;
+        }
+    } while (FindNextFileW(hFind, &data));
+    FindClose(hFind);
+    return ok;
+}
+
+static std::wstring RollbackRoot() {
+    WCHAR localAppData[MAX_PATH] = {};
+    if (!GetEnvironmentVariableW(L"LOCALAPPDATA", localAppData, MAX_PATH)) return L"";
+    return std::wstring(localAppData) + L"\\WinPreview\\Rollback";
+}
+
+bool CreateUpdateBackup(const std::wstring& exePath) {
+    if (exePath.empty()) return false;
+    size_t slash = exePath.find_last_of(L"\\/");
+    if (slash == std::wstring::npos) return false;
+    const std::wstring installDir = exePath.substr(0, slash);
+    const std::wstring root = RollbackRoot();
+    if (root.empty()) return false;
+
+    const std::wstring backupDir = root + L"\\previous";
+    // Replace any older backup so "previous" always means the version being replaced.
+    if (GetFileAttributesW(backupDir.c_str()) != INVALID_FILE_ATTRIBUTES) {
+        // Remove the tree by delegating to the shell (handles read-only flags).
+        std::wstring from = backupDir + L'\0';
+        std::wstring to = std::wstring(L"nul") + L'\0';
+        SHFILEOPSTRUCTW op{};
+        op.wFunc = FO_DELETE;
+        op.pFrom = from.c_str();
+        op.fFlags = FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI;
+        SHFileOperationW(&op);
+    }
+    CreateDirectoryW(root.c_str(), NULL);
+
+    if (!CopyTree(installDir, backupDir)) {
+        LogUpdateEvent(L"rollback backup failed for " + installDir);
+        return false;
+    }
+
+    // Record the version next to the files. Recovery then works even if the
+    // registry entry is lost (profile cleanup, a recreated key, a cleanup tool).
+    {
+        const std::string text = std::string(WINPREVIEW_VERSION_STR) + "\r\n";
+        HANDLE hFile = CreateFileW((backupDir + L"\\version.txt").c_str(), GENERIC_WRITE, 0, NULL,
+                                   CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (hFile != INVALID_HANDLE_VALUE) {
+            DWORD written = 0;
+            WriteFile(hFile, text.data(), (DWORD)text.size(), &written, NULL);
+            CloseHandle(hFile);
+        }
+    }
+
+    HKEY hKey = NULL;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\WinPreview\\Settings", 0, NULL, 0,
+                        KEY_WRITE, NULL, &hKey, NULL) == ERROR_SUCCESS) {
+        const std::wstring version = WINPREVIEW_VERSION_WSTR;
+        RegSetValueExW(hKey, L"BackupVersion", 0, REG_SZ, (const BYTE*)version.c_str(),
+                       (DWORD)((version.size() + 1) * sizeof(wchar_t)));
+        RegSetValueExW(hKey, L"BackupPath", 0, REG_SZ, (const BYTE*)backupDir.c_str(),
+                       (DWORD)((backupDir.size() + 1) * sizeof(wchar_t)));
+        RegCloseKey(hKey);
+    }
+    LogUpdateEvent(L"rollback backup created for " WINPREVIEW_VERSION_WSTR L" at " + backupDir);
+    return true;
+}
+
+static std::wstring TrimSpace(const std::wstring& value) {
+    size_t start = 0, end = value.size();
+    while (start < end && (value[start] == L' ' || value[start] == L'\r' || value[start] == L'\n' ||
+                           value[start] == L'\t' || value[start] == 0)) start++;
+    while (end > start && (value[end - 1] == L' ' || value[end - 1] == L'\r' || value[end - 1] == L'\n' ||
+                           value[end - 1] == L'\t' || value[end - 1] == 0)) end--;
+    return value.substr(start, end - start);
+}
+
+static bool ReadBackupVersionFile(const std::wstring& dir, std::wstring& version) {
+    version.clear();
+    HANDLE hFile = CreateFileW((dir + L"\\version.txt").c_str(), GENERIC_READ,
+                               FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
+                               FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile == INVALID_HANDLE_VALUE) return false;
+    char buffer[128] = {};
+    DWORD read = 0;
+    bool ok = ReadFile(hFile, buffer, (DWORD)sizeof(buffer) - 2, &read, NULL) != 0 && read > 0;
+    CloseHandle(hFile);
+    if (!ok) return false;
+
+    // Older builds wrote UTF-16LE; accept both so a backup stays readable.
+    bool utf16 = read >= 2 && (read % 2) == 0;
+    for (DWORD i = 1; utf16 && i < read; i += 2) {
+        if (buffer[i] != 0) utf16 = false;
+    }
+    if (utf16) {
+        version = TrimSpace(std::wstring((const wchar_t*)buffer, read / 2));
+    } else {
+        int needed = MultiByteToWideChar(CP_UTF8, 0, buffer, (int)read, NULL, 0);
+        if (needed > 0) {
+            std::wstring text((size_t)needed, L'\0');
+            MultiByteToWideChar(CP_UTF8, 0, buffer, (int)read, text.data(), needed);
+            version = TrimSpace(text);
+        }
+    }
+    return !version.empty();
+}
+
+bool GetUpdateBackup(std::wstring& backupDir, std::wstring& version) {
+    backupDir.clear();
+    version.clear();
+
+    std::wstring candidate;
+    std::wstring recorded;
+    HKEY hKey = NULL;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\WinPreview\\Settings", 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+        WCHAR path[MAX_PATH] = {};
+        WCHAR ver[64] = {};
+        DWORD size = sizeof(path);
+        DWORD type = 0;
+        if (RegQueryValueExW(hKey, L"BackupPath", NULL, &type, (LPBYTE)path, &size) == ERROR_SUCCESS && path[0]) {
+            candidate = TrimSpace(path);
+        }
+        size = sizeof(ver);
+        if (RegQueryValueExW(hKey, L"BackupVersion", NULL, &type, (LPBYTE)ver, &size) == ERROR_SUCCESS && ver[0]) {
+            recorded = TrimSpace(ver);
+        }
+        RegCloseKey(hKey);
+    }
+
+    // Fall back to the standard location when the registry copy is missing.
+    if (candidate.empty() || GetFileAttributesW(candidate.c_str()) == INVALID_FILE_ATTRIBUTES) {
+        const std::wstring root = RollbackRoot();
+        if (root.empty()) return false;
+        candidate = root + L"\\previous";
+        if (GetFileAttributesW(candidate.c_str()) == INVALID_FILE_ATTRIBUTES) return false;
+    }
+
+    // A usable backup always contains the previous executable.
+    if (GetFileAttributesW((candidate + L"\\WinPreview.exe").c_str()) == INVALID_FILE_ATTRIBUTES) {
+        return false;
+    }
+
+    backupDir = candidate;
+    if (!ReadBackupVersionFile(candidate, version)) version = recorded;
+    return true;
+}
+
+int RunRestoreHelper(const std::wstring& backupDir, const std::wstring& restartExe,
+                     unsigned long waitPid, const std::wstring& relaunchMode,
+                     const std::wstring& logPath) {
+    if (backupDir.empty() || GetFileAttributesW(backupDir.c_str()) == INVALID_FILE_ATTRIBUTES) {
+        return 2;
+    }
+    if (waitPid != 0) {
+        HANDLE hProcess = OpenProcess(SYNCHRONIZE, FALSE, waitPid);
+        if (hProcess) {
+            WaitForSingleObject(hProcess, 90000);
+            CloseHandle(hProcess);
+        }
+    }
+    Sleep(350);
+
+    std::wstring installDir = restartExe;
+    size_t slash = installDir.find_last_of(L"\\/");
+    if (slash != std::wstring::npos) installDir.resize(slash);
+    const bool restored = CopyTree(backupDir, installDir);
+
+    LogUpdateEvent(std::wstring(L"rollback restore ") + (restored ? L"succeeded" : L"failed") +
+                   L" from " + backupDir + L" to " + installDir);
+
+    if (logPath.size()) {
+        // Reuse the result/journal path for a human-readable note.
+        WriteUpdateResult(logPath, backupDir, restored ? 0 : 1, installDir, relaunchMode);
+    }
+
+    if (restored) {
+        // Clear the boot counter so the restored build does not hit recovery again.
+        HKEY hKey = NULL;
+        if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\WinPreview\\Settings", 0, KEY_WRITE, &hKey) == ERROR_SUCCESS) {
+            DWORD zero = 0;
+            RegSetValueExW(hKey, L"BootAttempts", 0, REG_DWORD, (const BYTE*)&zero, sizeof(zero));
+            RegCloseKey(hKey);
+        }
+    }
+
+    if (!restartExe.empty()) {
+        std::wstring args = (relaunchMode == L"background") ? L"--restored --rollback --background"
+                                                            : L"--restored --rollback";
+        ShellExecuteW(NULL, L"open", restartExe.c_str(), args.c_str(), NULL,
+                      (relaunchMode == L"background") ? SW_HIDE : SW_SHOWNORMAL);
+    }
+    return restored ? 0 : 1;
+}
+
+bool SpawnRestoreHelper(const std::wstring& exePath, const std::wstring& backupDir,
+                        unsigned long waitPid, const std::wstring& relaunchMode) {
+    WCHAR tempDir[MAX_PATH] = {};
+    GetTempPathW(MAX_PATH, tempDir);
+    const std::wstring helperPath = std::wstring(tempDir) + L"WinPreview-update-helper-" +
+                                    std::to_wstring(GetTickCount64()) + L".exe";
+    if (!CopyFileW(exePath.c_str(), helperPath.c_str(), FALSE)) return false;
+
+    WCHAR tempFile[MAX_PATH] = {};
+    GetTempPathW(MAX_PATH, tempFile);
+    const std::wstring journal = std::wstring(tempFile) + L"WinPreview-restore.json";
+
+    std::wstring command = L"\"" + helperPath + L"\" --restore-backup \"" + backupDir +
+        L"\" --restart-exe \"" + exePath + L"\" --wait-pid " + std::to_wstring(waitPid) +
+        L" --relaunch " + relaunchMode + L" --log \"" + journal + L"\"";
+    std::vector<wchar_t> mutableCommand(command.begin(), command.end());
+    mutableCommand.push_back(0);
+
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi{};
+    if (!CreateProcessW(NULL, mutableCommand.data(), NULL, NULL, FALSE,
+                        CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+        return false;
+    }
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return true;
+}
+
+void LogUpdateDiagnostic(const std::wstring& message) {
+    LogUpdateEvent(message);
 }
 
 void CleanupUpdateTempFiles() {

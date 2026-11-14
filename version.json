@@ -1,12 +1,12 @@
 {
-  "version": "1.3.9",
+  "version": "1.3.10",
   "release_date": "2026-11-14",
   "channel": "stable",
   "rollout": 100,
   "paused": false,
   "mandatory": false,
   "min_supported": "",
-  "notes": "What's new\n\n- Portable copies are detected: they offer the portable download instead of quietly installing a second copy.\n- Updates clean up after themselves — old helper copies and downloaded installers are removed from the temp folder.\n- The update window sizes its buttons to their labels, so longer actions are never clipped.",
-  "changelog": "WinPreview 1.3.9 - portable copy detection (portable download instead of installing a second copy), automatic cleanup of stale update helpers/installers in %TEMP%, and self-sizing action buttons in the update window.",
+  "notes": "What's new\n\n- If an update ever stops WinPreview from starting, the app notices after a few attempts and offers to bring back the previous version in one click.\n- The previous version is kept on your PC before every update, so restoring takes seconds and works without a connection.\n- A restore also stops that release from being offered again, so you are only asked when something newer is available.",
+  "changelog": "WinPreview 1.3.10 - automatic rollback. The build being replaced is backed up before every update, and a version that fails to start three times offers one-click restore of the previous one; the failed release is then hidden until a newer version ships.",
   "download_url": "https://github.com/Code-Xceed/WinPreview/releases/latest/download/WinPreview-Setup-x64.exe"
 }

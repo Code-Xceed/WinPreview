@@ -89,6 +89,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     std::wstring applyUpdateLog;
     std::wstring applyUpdateResult;
     std::wstring applyUpdateRestartExe;
+    std::wstring restoreBackupDir;
     unsigned long applyUpdateWaitPid = 0;
     bool runUpdateSelfTest = false;
     bool forceUpdateCheck = false;
@@ -115,6 +116,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
                 applyUpdateResult = argv[++i];
             } else if ((_wcsicmp(argv[i], L"--restart-exe") == 0) && i + 1 < argc) {
                 applyUpdateRestartExe = argv[++i];
+            } else if ((_wcsicmp(argv[i], L"--restore-backup") == 0) && i + 1 < argc) {
+                restoreBackupDir = argv[++i];
             } else if (_wcsicmp(argv[i], L"--selftest-update") == 0) {
                 runUpdateSelfTest = true;
             } else if (_wcsicmp(argv[i], L"--force-update-check") == 0) {
@@ -169,6 +172,10 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
         return WinPreview::RunUpdateHelper(applyUpdateInstaller, applyUpdateWaitPid,
                                            applyUpdateRelaunch, applyUpdateLog, applyUpdateResult,
                                            applyUpdateRestartExe);
+    }
+    if (!restoreBackupDir.empty()) {
+        return WinPreview::RunRestoreHelper(restoreBackupDir, applyUpdateRestartExe,
+                                            applyUpdateWaitPid, applyUpdateRelaunch, applyUpdateLog);
     }
     if (runUpdateSelfTest) {
         return WinPreview::RunUpdateSelfTest();
@@ -244,7 +251,11 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
             if (forceUpdateCheck) app.StartUpdateCheckForTesting();
             if (downloadUpdateTest) app.DownloadUpdateForTesting();
             if (openUpdateSheet) app.SetShowUpdateSheet(true);
-            if (std::wstring(pCmdLine).find(L"--restored") != std::wstring::npos) app.NotifyUpdateApplied();
+            if (std::wstring(pCmdLine).find(L"--rollback") != std::wstring::npos) {
+                app.NotifyRolledBack();
+            } else if (std::wstring(pCmdLine).find(L"--restored") != std::wstring::npos) {
+                app.NotifyUpdateApplied();
+            }
 
             // Open file argument if provided
             if (!fileToOpen.empty()) {

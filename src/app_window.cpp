@@ -278,6 +278,22 @@ bool AppWindow::Create(HINSTANCE hInstance, int nCmdShow, bool showTrayNotificat
     DWORD backdropType = 2; /* DWMSBT_MAINWINDOW (Mica) */
     DwmSetWindowAttribute(m_hwnd, 38 /* DWMWA_SYSTEMBACKDROP_TYPE */, &backdropType, sizeof(backdropType));
 
+    // Count this start. A build that never reaches a healthy state three times in
+    // a row is treated as a bad update and offered the previous version. Portable
+    // copies only read the counter (their recovery path is the portable download).
+    {
+        HKEY hBoot = NULL;
+        if (RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\WinPreview\\Settings", 0, NULL, 0,
+                            KEY_READ | KEY_WRITE, NULL, &hBoot, NULL) == ERROR_SUCCESS) {
+            DWORD attempts = 0, size = sizeof(attempts), type = 0;
+            RegQueryValueExW(hBoot, L"BootAttempts", NULL, &type, (LPBYTE)&attempts, &size);
+            m_bootAttempts = (int)attempts + (WinPreview::IsPortableInstall() ? 0 : 1);
+            DWORD value = (DWORD)m_bootAttempts;
+            RegSetValueExW(hBoot, L"BootAttempts", 0, REG_DWORD, (const BYTE*)&value, sizeof(value));
+            RegCloseKey(hBoot);
+        }
+    }
+
     // Detect system / monitor DPI scale
     typedef UINT (WINAPI *GetDpiForWindowFn)(HWND);
     HMODULE hUser32 = GetModuleHandleW(L"user32.dll");
@@ -348,6 +364,52 @@ bool AppWindow::Create(HINSTANCE hInstance, int nCmdShow, bool showTrayNotificat
     // this copy was installed or merely unpacked.
     WinPreview::CleanupUpdateTempFiles();
     m_isPortable = WinPreview::IsPortableInstall() && !m_forceInstalled;
+    m_createdTick = GetTickCount64();
+
+    WinPreview::LogUpdateDiagnostic(L"boot: attempts=" + std::to_wstring(m_bootAttempts) +
+                                    L" portable=" + (m_isPortable ? L"1" : L"0"));
+    if (!m_isPortable && m_bootAttempts > 2) {
+        std::wstring backupDir, backupVersion;
+        if (WinPreview::GetUpdateBackup(backupDir, backupVersion)) {
+            WinPreview::LogUpdateDiagnostic(L"boot: recovery prompt shown (backup " + backupVersion + L")");
+            std::wstring text = L"WinPreview didn't start correctly after the last update.";
+            text += backupVersion.empty()
+                ? L"\n\nRestore the previous build?"
+                : L"\n\nRestore version " + backupVersion + L" (the previous build)?";
+            int answer = MessageBoxW(NULL, text.c_str(), L"WinPreview",
+                                     MB_YESNO | MB_ICONWARNING | MB_SETFOREGROUND);
+            if (answer == IDYES) {
+                // Never offer the build that failed to start again; a newer
+                // release re-arms the update automatically.
+                {
+                    HKEY hSkip = NULL;
+                    if (RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\WinPreview\\Settings", 0, NULL, 0,
+                                        KEY_WRITE, NULL, &hSkip, NULL) == ERROR_SUCCESS) {
+                        const std::wstring skip = WINPREVIEW_VERSION_WSTR;
+                        RegSetValueExW(hSkip, REG_VAL_DISMISSED_UPDATE, 0, REG_SZ, (const BYTE*)skip.c_str(),
+                                       (DWORD)((skip.size() + 1) * sizeof(wchar_t)));
+                        RegCloseKey(hSkip);
+                    }
+                }
+                WinPreview::LogUpdateDiagnostic(L"boot: restoring previous build, skipping " WINPREVIEW_VERSION_WSTR);
+
+                WCHAR selfExe[MAX_PATH] = {};
+                GetModuleFileNameW(NULL, selfExe, MAX_PATH);
+                if (WinPreview::SpawnRestoreHelper(selfExe, backupDir, GetCurrentProcessId(), L"visible")) {
+                    ExitProcess(0);
+                }
+            }
+            // Declined, or the helper could not start: let this build run and
+            // clear the counter so the prompt does not repeat forever.
+            HKEY hReset = NULL;
+            if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\WinPreview\\Settings", 0, KEY_WRITE, &hReset) == ERROR_SUCCESS) {
+                DWORD zero = 0;
+                RegSetValueExW(hReset, L"BootAttempts", 0, REG_DWORD, (const BYTE*)&zero, sizeof(zero));
+                RegCloseKey(hReset);
+            }
+            m_bootAttempts = 0;
+        }
+    }
 
     if (ShouldAutoCheckForUpdates()) {
         // Synchronous throttle write inside CheckForUpdates prevents a second
@@ -6790,6 +6852,11 @@ void AppWindow::NotifyUpdateApplied() {
     EnsureAnimTimer();
 }
 
+void AppWindow::NotifyRolledBack() {
+    ShowToast(L"Restored the previous version. This update won't be offered again.");
+    EnsureAnimTimer();
+}
+
 void AppWindow::NotifyUpdateFailed(const std::wstring& code) {
     ShowToast(L"The update couldn't be installed (code " + code + L"). Try again from Settings.");
     EnsureAnimTimer();
@@ -9428,6 +9495,17 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                     InvalidateRect(m_hwnd, NULL, FALSE);
                 }
                 m_hoverTimeMs = 0;
+            }
+
+            // Five healthy seconds are enough to consider this start successful.
+            if (!m_healthyMarked && m_createdTick != 0 && GetTickCount64() - m_createdTick > 5000) {
+                m_healthyMarked = true;
+                HKEY hHealthy = NULL;
+                if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\WinPreview\\Settings", 0, KEY_WRITE, &hHealthy) == ERROR_SUCCESS) {
+                    DWORD zero = 0;
+                    RegSetValueExW(hHealthy, L"BootAttempts", 0, REG_DWORD, (const BYTE*)&zero, sizeof(zero));
+                    RegCloseKey(hHealthy);
+                }
             }
 
             // High-precision elapsed time calculation for accurate 3-second timer

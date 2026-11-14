@@ -148,4 +148,26 @@ void CleanupUpdateTempFiles();
 // installed. Portable copies get the portable download instead of an installer.
 bool IsPortableInstall();
 
+// Appends a line to update.log (recovery/boot diagnostics).
+void LogUpdateDiagnostic(const std::wstring& message);
+
+// Copies the current installation aside before an update is applied, recording
+// the version in the registry. Returns false (and changes nothing) on failure.
+bool CreateUpdateBackup(const std::wstring& exePath);
+
+// Reads the backup recorded by CreateUpdateBackup. Returns false when there is
+// no usable backup.
+bool GetUpdateBackup(std::wstring& backupDir, std::wstring& version);
+
+// Graceful recovery: restores the recorded backup over the install directory
+// after the app exits, then relaunches. Runs from a temporary copy of the exe.
+int RunRestoreHelper(const std::wstring& backupDir, const std::wstring& restartExe,
+                     unsigned long waitPid, const std::wstring& relaunchMode,
+                     const std::wstring& logPath);
+
+// Spawns the restore helper from %TEMP% and returns immediately. The caller is
+// expected to exit so the files can be replaced.
+bool SpawnRestoreHelper(const std::wstring& exePath, const std::wstring& backupDir,
+                        unsigned long waitPid, const std::wstring& relaunchMode);
+
 } // namespace WinPreview
