@@ -115,8 +115,20 @@ static void LogUpdateEvent(const std::wstring& message) {
     swprintf_s(stamp, L"%04d-%02d-%02d %02d:%02d:%02d ", st.wYear, st.wMonth, st.wDay,
                st.wHour, st.wMinute, st.wSecond);
     std::string utf8 = WideToUtf8(std::wstring(stamp) + message + L"\r\n");
-    HANDLE h = CreateFileW(path.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                           NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+
+    // Keep the file bounded: a fresh log once it passes 256 KB.
+    DWORD disposition = OPEN_ALWAYS;
+    WIN32_FILE_ATTRIBUTE_DATA attrs{};
+    if (GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &attrs)) {
+        unsigned long long size = ((unsigned long long)attrs.nFileSizeHigh << 32) | attrs.nFileSizeLow;
+        if (size > 256ULL * 1024ULL) disposition = CREATE_ALWAYS;
+    }
+
+    HANDLE h = (disposition == CREATE_ALWAYS)
+        ? CreateFileW(path.c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                      NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)
+        : CreateFileW(path.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                      NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (h != INVALID_HANDLE_VALUE) {
         DWORD written = 0;
         WriteFile(h, utf8.data(), (DWORD)utf8.size(), &written, NULL);

@@ -70,6 +70,8 @@ enum ButtonId {
     BTN_INSPECTOR_COPY = 55,
     BTN_LOG_LUT = 56,
     BTN_HUD_MORE = 57,
+    BTN_SETTINGS_TOGGLE_AUTO_DOWNLOAD = 87,
+    BTN_SETTINGS_TOGGLE_INSTALL_ON_CLOSE = 88,
     BTN_UPDATE_PRIMARY = 90,
     BTN_UPDATE_SECONDARY = 91,
     BTN_UPDATE_TERTIARY = 92,
@@ -4728,6 +4730,15 @@ void AppWindow::LoadPersistedUiState() {
     if (RegReadU64(L"AutoDownloadUpdates", v)) {
         m_autoDownloadUpdates = (v != 0);
     }
+    if (RegReadU64(L"InstallOnClose", v)) {
+        m_installOnClose = (v != 0);
+    }
+    {
+        WCHAR channel[32] = {};
+        if (RegReadString(L"UpdateChannel", channel, 32) && channel[0]) {
+            m_updater.SetChannel(channel);
+        }
+    }
     if (RegReadU64(L"ArrowKeyNav", v)) {
         m_arrowKeyNavEnabled = (v != 0);
     }
@@ -4756,6 +4767,7 @@ void AppWindow::SaveGeneralSettings() {
     RegWriteU64(L"KeepInMemory", m_keepInMemory ? 1 : 0);
     RegWriteU64(L"AutoCheckUpdates", m_autoCheckUpdates ? 1 : 0);
     RegWriteU64(L"AutoDownloadUpdates", m_autoDownloadUpdates ? 1 : 0);
+    RegWriteU64(L"InstallOnClose", m_installOnClose ? 1 : 0);
     RegWriteU64(L"ArrowKeyNav", m_arrowKeyNavEnabled ? 1 : 0);
     RegWriteU64(L"LoopFolderNav", m_loopFolderNav ? 1 : 0);
     RegWriteU64(L"AutoPlayMedia", m_autoPlayMedia ? 1 : 0);
@@ -5998,6 +6010,7 @@ void AppWindow::RenderCropOverlay(const D2D1_RECT_F& canvasRect) {
 
 void AppWindow::SetShowUpdateSheet(bool show) {
     m_showUpdateSheet = show;
+    m_updateNotesScroll = 0.0f;
     if (show) {
         EnsureAnimTimer();
         m_showSettings = false;          // never stack modals
@@ -6021,14 +6034,9 @@ void AppWindow::StartUpdateDownload() {
 
 void AppWindow::SetInstallOnClose(bool enable) {
     m_installOnClose = enable;
+    SaveGeneralSettings();
     if (enable) {
-        HKEY hKey = NULL;
-        if (RegOpenKeyExW(HKEY_CURRENT_USER, REG_KEY_SETTINGS_APP, 0, KEY_WRITE | KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
-            DWORD one = 1;
-            RegSetValueExW(hKey, L"InstallOnClose", 0, REG_DWORD, (const BYTE*)&one, sizeof(one));
-            RegCloseKey(hKey);
-        }
-        ShowToast(L"WinPreview will install the update when you close it.");
+        ShowToast(L"WinPreview will install the update when you exit.");
     }
     InvalidateRect(m_hwnd, NULL, FALSE);
 }
@@ -6112,7 +6120,7 @@ void AppWindow::RenderUpdateSheet(const D2D1_RECT_F& canvasRect) {
         actions.push_back({ L"Cancel", {}, BTN_UPDATE_SECONDARY, false, true });
     } else if (state == UpdateState::Downloaded) {
         actions.push_back({ L"Restart now", {}, BTN_UPDATE_PRIMARY, true, true });
-        actions.push_back({ L"Install when I close", {}, BTN_UPDATE_SECONDARY, false, true });
+        actions.push_back({ L"Install when I exit", {}, BTN_UPDATE_SECONDARY, false, true });
         actions.push_back({ L"Later", {}, BTN_UPDATE_TERTIARY, false, true });
     } else if (state == UpdateState::Failed) {
         actions.push_back({ L"Try again", {}, BTN_UPDATE_PRIMARY, true, true });
@@ -6138,14 +6146,42 @@ void AppWindow::RenderUpdateSheet(const D2D1_RECT_F& canvasRect) {
     if (notes.empty()) notes = L"A new version of WinPreview is ready to install.";
     float notesBottom = stacked ? (stackY - 16.0f) : (y + h - 92.0f);
     D2D1_RECT_F notesRect = D2D1::RectF(x + 24.0f, y + 80.0f, x + w - 24.0f, notesBottom);
+    m_updateSheetNotes = notesRect;
     if (notesRect.bottom > notesRect.top + 24.0f) {
-        // DrawText lays out past the box when the notes are long, so clip to the
-        // body area instead of letting text run under the action buttons.
+        // Rough line estimate is enough to bound the wheel; DrawText handles the
+        // real wrapping. The text is drawn into an upward-shifted rect and clipped
+        // to the viewport so long notes scroll instead of hiding.
+        const float viewH = notesRect.bottom - notesRect.top;
+        const float approxLineH = 22.0f;
+        const float charsPerLine = std::max(16.0f, (notesRect.right - notesRect.left) / 7.2f);
+        const float approxLines = std::ceil((float)notes.size() / charsPerLine);
+        m_updateNotesMaxScroll = std::max(0.0f, approxLines * approxLineH - viewH);
+        m_updateNotesScroll = (std::clamp)(m_updateNotesScroll, 0.0f, m_updateNotesMaxScroll);
+
         rt->PushAxisAlignedClip(notesRect, D2D1_ANTIALIAS_MODE_ALIASED);
+        D2D1_RECT_F drawRect = D2D1::RectF(notesRect.left, notesRect.top - m_updateNotesScroll,
+                                           notesRect.right, notesRect.top - m_updateNotesScroll + approxLines * approxLineH + 40.0f);
         rt->DrawText(notes.c_str(), (UINT32)notes.length(),
                      m_d2d.FontBody ? m_d2d.FontBody : m_d2d.FontCaption,
-                     notesRect, m_d2d.BrushText);
+                     drawRect, m_d2d.BrushText);
         rt->PopAxisAlignedClip();
+
+        if (m_updateNotesMaxScroll > 1.0f) {
+            // Hairline track + thumb on the right edge of the viewport.
+            const float trackW = 3.0f;
+            const float trackX = notesRect.right + 6.0f;
+            D2D1_RECT_F track = D2D1::RectF(trackX, notesRect.top, trackX + trackW, notesRect.bottom);
+            if (m_d2d.BrushBorderSubtle) {
+                rt->FillRoundedRectangle(D2D1::RoundedRect(track, 1.5f, 1.5f), m_d2d.BrushBorderSubtle);
+            }
+            float frac = viewH / (viewH + m_updateNotesMaxScroll);
+            float thumbH = std::max(24.0f, viewH * frac);
+            float thumbY = notesRect.top + (viewH - thumbH) * (m_updateNotesScroll / m_updateNotesMaxScroll);
+            D2D1_RECT_F thumb = D2D1::RectF(trackX, thumbY, trackX + trackW, thumbY + thumbH);
+            if (m_d2d.BrushTextMuted) {
+                rt->FillRoundedRectangle(D2D1::RoundedRect(thumb, 1.5f, 1.5f), m_d2d.BrushTextMuted);
+            }
+        }
     }
 
     float curX = stacked ? (x + 24.0f) : std::floor(x + (w - totalW) / 2.0f + 0.5f);
@@ -6827,6 +6863,8 @@ void AppWindow::RenderSettingsModal(const D2D1_RECT_F& canvasRect) {
         m_settingsToggleFocusLossRect = {};
         m_settingsToggleKeepMemoryRect = {};
         m_settingsToggleUpdateCheckRect = {};
+        m_settingsToggleAutoDownloadRect = {};
+        m_settingsToggleInstallOnCloseRect = {};
         m_settingsToggleArrowNavRect = {};
         m_settingsToggleLoopFolderRect = {};
         m_settingsToggleAutoplayRect = {};
@@ -6997,12 +7035,13 @@ void AppWindow::RenderSettingsModal(const D2D1_RECT_F& canvasRect) {
     if (m_settingsActiveTab == 0) {
         // Four rows at the fixed pitch can graze the Done footer on short
         // windows; compress the pitch until the card clears the footer line.
+        const int kGeneralRows = 6;
         float contentLimitGen = m_settingsModalRect.bottom - 56.0f;
-        float rH = 62.0f;
-        float cardH = 4 * rH;
+        float rH = 58.0f;
+        float cardH = kGeneralRows * rH;
         if (curY + cardH > contentLimitGen && contentLimitGen - curY > 160.0f) {
-            rH = (contentLimitGen - curY) / 4.0f;
-            cardH = 4 * rH;
+            rH = (contentLimitGen - curY) / (float)kGeneralRows;
+            cardH = kGeneralRows * rH;
         }
         drawSettingRow(contentX, curY + 0 * rH, contentW, rH,
                        L"Start with Windows", L"Launch minimized at sign-in so previews are ready.",
@@ -7018,7 +7057,15 @@ void AppWindow::RenderSettingsModal(const D2D1_RECT_F& canvasRect) {
 
         drawSettingRow(contentX, curY + 3 * rH, contentW, rH,
                        L"Check for updates automatically", L"Look for a new version in the background every two hours.",
-                       m_autoCheckUpdates, BTN_SETTINGS_TOGGLE_UPDATE_CHECK, m_settingsToggleUpdateCheckRect, true);
+                       m_autoCheckUpdates, BTN_SETTINGS_TOGGLE_UPDATE_CHECK, m_settingsToggleUpdateCheckRect, false);
+
+        drawSettingRow(contentX, curY + 4 * rH, contentW, rH,
+                       L"Download updates in the background", L"Fetch the installer quietly so only Restart is left.",
+                       m_autoDownloadUpdates, BTN_SETTINGS_TOGGLE_AUTO_DOWNLOAD, m_settingsToggleAutoDownloadRect, false);
+
+        drawSettingRow(contentX, curY + 5 * rH, contentW, rH,
+                       L"Install updates when I exit", L"Apply a downloaded update the next time WinPreview closes.",
+                       m_installOnClose, BTN_SETTINGS_TOGGLE_INSTALL_ON_CLOSE, m_settingsToggleInstallOnCloseRect, true);
     }
     // TAB 1: HOTKEYS & NAV
     else if (m_settingsActiveTab == 1) {
@@ -8213,6 +8260,19 @@ LRESULT AppWindow::HandleHudMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
 
         case WM_MOUSEWHEEL: {
             WakeAllUiAndCursor();
+            if (m_showUpdateSheet && m_updateNotesMaxScroll > 1.0f) {
+                POINT wheelPt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+                ScreenToClient(m_hwnd, &wheelPt);
+                D2D1_POINT_2F wheelDip = ClientToDip(wheelPt);
+                if (wheelDip.x >= m_updateSheetNotes.left && wheelDip.x <= m_updateSheetNotes.right &&
+                    wheelDip.y >= m_updateSheetNotes.top && wheelDip.y <= m_updateSheetNotes.bottom) {
+                    short delta = GET_WHEEL_DELTA_WPARAM(wParam);
+                    m_updateNotesScroll = (std::clamp)(m_updateNotesScroll - (delta > 0 ? 60.0f : -60.0f),
+                                                       0.0f, m_updateNotesMaxScroll);
+                    InvalidateRect(m_hwnd, NULL, FALSE);
+                    return 0;
+                }
+            }
             short delta = GET_WHEEL_DELTA_WPARAM(wParam);
             m_media.SetVolume(m_media.GetVolume() + (delta > 0 ? 5 : -5));
             InvalidateRect(m_hudHwnd, NULL, FALSE);
@@ -8725,7 +8785,7 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                     }
                     // Discord-style: pull the payload in the background so the user
                     // only has to press "Restart to update" later.
-                    if (m_autoDownloadUpdates && !alreadyDismissed &&
+                    if ((m_autoDownloadUpdates || m_installOnClose) && !alreadyDismissed &&
                         m_updater.GetState() == UpdateState::UpdateAvailable) {
                         StartUpdateDownload();
                     }
@@ -9978,6 +10038,14 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             } else if (cmdId == IDM_TRAY_AUTOSTART) {
                 SetAutoStartEnabled(!IsAutoStartEnabled());
             } else if (cmdId == IDM_TRAY_EXIT) {
+                if (m_installOnClose && m_updater.GetState() == UpdateState::Downloaded) {
+                    m_installOnClose = false;
+                    SaveGeneralSettings();
+                    m_updater.SetRelaunchBackground(true);
+                    if (m_updater.LaunchInstallerAndExit(m_hwnd)) {
+                        return 0;   // helper installs and relaunches
+                    }
+                }
                 RemoveTrayIcon();
                 ExplorerHook::UninstallHook();
                 DestroyWindow(m_hwnd);
@@ -10256,6 +10324,20 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                         m_autoCheckUpdates = !m_autoCheckUpdates;
                         SaveGeneralSettings();
                         ShowToast(m_autoCheckUpdates ? L"Checks for updates automatically" : L"Update checks are off");
+                        InvalidateRect(m_hwnd, NULL, FALSE);
+                        return 0;
+                    }
+                    if (hit(m_settingsToggleAutoDownloadRect)) {
+                        m_autoDownloadUpdates = !m_autoDownloadUpdates;
+                        SaveGeneralSettings();
+                        ShowToast(m_autoDownloadUpdates ? L"Downloads updates in the background" : L"Updates wait for you to start them");
+                        InvalidateRect(m_hwnd, NULL, FALSE);
+                        return 0;
+                    }
+                    if (hit(m_settingsToggleInstallOnCloseRect)) {
+                        m_installOnClose = !m_installOnClose;
+                        SaveGeneralSettings();
+                        ShowToast(m_installOnClose ? L"Installs the update when you exit" : L"Updates install when you choose");
                         InvalidateRect(m_hwnd, NULL, FALSE);
                         return 0;
                     }
@@ -10915,6 +10997,8 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                     else if (hit(m_settingsToggleFocusLossRect)) m_hoveredButtonId = BTN_SETTINGS_TOGGLE_FOCUS_LOSS;
                     else if (hit(m_settingsToggleKeepMemoryRect)) m_hoveredButtonId = BTN_SETTINGS_TOGGLE_KEEP_MEMORY;
                     else if (hit(m_settingsToggleUpdateCheckRect)) m_hoveredButtonId = BTN_SETTINGS_TOGGLE_UPDATE_CHECK;
+                else if (hit(m_settingsToggleAutoDownloadRect)) m_hoveredButtonId = BTN_SETTINGS_TOGGLE_AUTO_DOWNLOAD;
+                else if (hit(m_settingsToggleInstallOnCloseRect)) m_hoveredButtonId = BTN_SETTINGS_TOGGLE_INSTALL_ON_CLOSE;
                     else if (hit(m_settingsToggleArrowNavRect)) m_hoveredButtonId = BTN_SETTINGS_TOGGLE_ARROW_NAV;
                     else if (hit(m_settingsToggleLoopFolderRect)) m_hoveredButtonId = BTN_SETTINGS_TOGGLE_LOOP_FOLDER;
                     else if (hit(m_settingsToggleAutoplayRect)) m_hoveredButtonId = BTN_SETTINGS_TOGGLE_AUTOPLAY;
@@ -11712,14 +11796,15 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         }
 
         case WM_CLOSE: {
-            if (m_installOnClose && m_updater.GetState() == UpdateState::Downloaded) {
-                m_installOnClose = false;
-                m_updater.SetRelaunchBackground(true);
-                if (m_updater.LaunchInstallerAndExit(m_hwnd)) {
-                    return 0;   // helper takes over from here
-                }
-            }
             if (!m_keepInMemory) {
+                if (m_installOnClose && m_updater.GetState() == UpdateState::Downloaded) {
+                    m_installOnClose = false;
+                    SaveGeneralSettings();
+                    m_updater.SetRelaunchBackground(true);
+                    if (m_updater.LaunchInstallerAndExit(m_hwnd)) {
+                        return 0;   // helper takes over from here
+                    }
+                }
                 // "Keep resident in background" is off: actually exit instead of
                 // silently ignoring the close request forever.
                 if ((m_docType == DocumentType::Text || m_docType == DocumentType::Spreadsheet) &&

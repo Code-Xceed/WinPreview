@@ -73,6 +73,32 @@ jobs:
           if ($sig.Length -lt 80) { throw "Signature file looks truncated." }
           Write-Host "Signed manifest present ($($sig.Length) base64 chars)."
 
+      - name: Runtime smoke test (update self-test + render)
+        shell: pwsh
+        run: |
+          $exe = "dist/WinPreview/WinPreview.exe"
+          if (-not (Test-Path $exe)) { throw "staged exe missing" }
+
+          # Signing key + manifest parser, offline.
+          $selftest = Start-Process -FilePath $exe -ArgumentList "--selftest-update" -Wait -PassThru
+          if ($selftest.ExitCode -ne 0) { throw "update self-test failed ($($selftest.ExitCode))" }
+          Write-Host "update self-test: ok"
+
+          # Real Direct2D render of a generated sample (no dev fixtures needed).
+          Add-Type -AssemblyName System.Drawing
+          $png = Join-Path $env:RUNNER_TEMP "smoke.png"
+          $bmp = New-Object System.Drawing.Bitmap 320, 200
+          $g = [System.Drawing.Graphics]::FromImage($bmp)
+          $g.Clear([System.Drawing.Color]::FromArgb(20, 24, 32))
+          $g.DrawString("smoke", (New-Object System.Drawing.Font("Segoe UI", 24)), [System.Drawing.Brushes]::White, 12, 12)
+          $g.Dispose(); $bmp.Save($png, [System.Drawing.Imaging.ImageFormat]::Png); $bmp.Dispose()
+
+          $shot = Join-Path $env:RUNNER_TEMP "render.png"
+          $p = Start-Process -FilePath $exe -ArgumentList @("`"$png`"", "--screenshot", "`"$shot`"", "--width", "900", "--height", "600") -Wait -PassThru
+          if ($p.ExitCode -ne 0 -or -not (Test-Path $shot)) { throw "render smoke test produced no screenshot" }
+          if ((Get-Item $shot).Length -lt 5000) { throw "render smoke screenshot looks empty" }
+          Write-Host "render smoke: ok ($((Get-Item $shot).Length) bytes)"
+
       - name: Verify generated files are committed
         shell: pwsh
         run: |

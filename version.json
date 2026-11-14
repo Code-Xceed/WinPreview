@@ -1,12 +1,12 @@
 {
-  "version": "1.3.6",
-  "release_date": "2026-11-13",
+  "version": "1.3.7",
+  "release_date": "2026-11-14",
   "channel": "stable",
   "rollout": 100,
   "paused": false,
   "mandatory": false,
   "min_supported": "",
-  "notes": "What's new\n\n- The update check now works on networks where the Windows internet stack stalls on IPv6 and never reaches GitHub. It falls back to the curl client built into Windows.\n- Failed checks write the exact network error to the update log so problems are diagnosable.\n- Everything else is unchanged: background download, Restart to install, silent relaunch.",
-  "changelog": "WinPreview 1.3.6 - update connectivity fix: when WinINet times out (for example on networks advertising an unreachable IPv6 route) the updater falls back to the built-in Windows curl client for the manifest, signature and installer, and logs WinINet error codes.",
+  "notes": "What's new\n\n- Update settings are now visible: check automatically, download in the background, and install when I exit.\n- Install when I exit survives a restart and runs on a real exit, including from the tray.\n- Long release notes scroll in the update window instead of being cut off.\n- The update log is capped and the release check works even on networks where Windows networking stalls.\n- CI now verifies the update engine and a real render on every push.",
+  "changelog": "WinPreview 1.3.7 - update settings and polish: General settings expose auto-check, background download and install-on-exit; install-on-exit persists and applies on real exit; scrollable release notes; capped update log; CI runs an offline update self-test and a render smoke test.",
   "download_url": "https://github.com/Code-Xceed/WinPreview/releases/latest/download/WinPreview-Setup-x64.exe"
 }

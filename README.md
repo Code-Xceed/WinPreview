@@ -30,7 +30,7 @@
 - **Hardware-Accelerated Media & Images**: Instant WIC image decoding (PNG, JPG, WEBP, GIF, HEIC, RAW) and LibVLC media streaming with floating acrylic playback HUD.
 - **DirectWrite Code & Text Studio**: Syntax-tinted preview and in-place editing for 50+ languages (fast keyword / string / comment coloring, not a full parser) with line numbers, find bar (`Ctrl+F`), and save (`Ctrl+S`).
 - **Tabular Data Grid**: Auto-aligned column grids for CSV, TSV, TAB, and PSV pipe-delimited data.
-- **In-App Auto-Updater**: Built-in native Windows background update checking and one-click in-app downloader & installer (`Ctrl+U`).
+- **In-App Auto-Updater**: Signed manifests, background download, silent install and an automatic relaunch. You only press **Restart** (or let it install when you exit). Check manually with `Ctrl+U`.
 - **Deep Windows 11 Polish**: Per-Monitor V2 DPI awareness, Windows 11 dark mode, rounded acrylic aesthetics, and Emil Kowalski `:active` tactile micro-interactions.
 
 ---
@@ -159,6 +159,10 @@ The compiled binaries will be placed in `dist\WinPreview\` and the self-containe
 CI (`.github/workflows/ci-cd.yml`) builds the installer with LLVM-MinGW and Inno Setup, verifies that the generated version files are committed, validates the artifacts and uploads them. Tagging `v*` publishes them as a GitHub Release with the installer, portable ZIP and updater manifest.
 
 ### Update Integrity
+
+Checks run at launch (at most once every two hours) and on demand via `Ctrl+U`. The release manifest (`version.json`) is signed with **ECDSA P-256** and verified against a public key compiled into the app; a manifest whose signature does not verify is rejected. Downloads are restricted to GitHub hosts, and the installer must match the manifest's SHA-256 and byte size (re-checked immediately before execution), with Authenticode validated when a signature is present. A downloaded update installs silently through a helper process that waits for the app to exit, records the installer exit code and relaunches WinPreview in the mode it was running. `Install when I exit` applies it on the next real exit instead. Every decision is written to `%LOCALAPPDATA%\WinPreview\logs\update.log`.
+
+If WinINet stalls on a network (for example a broken IPv6 route), the updater falls back to the `curl.exe` shipped with Windows for the manifest, signature and installer.
 
 Automatic checks run at most once every two hours (manual checks via `F5` / `Ctrl+U`). The updater downloads the installer over HTTPS and verifies it against the SHA-256 and byte size published in the release manifest before executing it, rejects non-HTTPS download URLs, and validates the PE headers and Authenticode status as a second layer. A dismissed release is remembered so it cannot nag again, while a newer release re-arms normally.
 

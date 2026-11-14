@@ -142,6 +142,9 @@ public:
     D2D1_RECT_F m_updateSheetSecondary = {};
     D2D1_RECT_F m_updateSheetTertiary = {};
     D2D1_RECT_F m_updateSheetClose = {};
+    D2D1_RECT_F m_updateSheetNotes = {};
+    float m_updateNotesScroll = 0.0f;
+    float m_updateNotesMaxScroll = 0.0f;
     bool m_installOnClose = false;
     bool m_autoDownloadUpdates = true;   // Discord-style: fetch in the background, then ask to restart
     bool m_testAutoDownload = false;   // starts the download as soon as the check finds an update
@@ -408,6 +411,8 @@ private:
     D2D1_RECT_F m_settingsToggleFocusLossRect = {};
     D2D1_RECT_F m_settingsToggleKeepMemoryRect = {};
     D2D1_RECT_F m_settingsToggleUpdateCheckRect = {};
+    D2D1_RECT_F m_settingsToggleAutoDownloadRect = {};
+    D2D1_RECT_F m_settingsToggleInstallOnCloseRect = {};
     D2D1_RECT_F m_settingsToggleArrowNavRect = {};
     D2D1_RECT_F m_settingsToggleLoopFolderRect = {};
     D2D1_RECT_F m_settingsToggleAutoplayRect = {};

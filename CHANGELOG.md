@@ -5,7 +5,30 @@ All notable changes to **WinPreview** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.7] - 2026-11-14
+
+### Updates
+- Settings → General now exposes the update behaviour: check automatically, download in the background, and install when I exit, alongside the existing startup/focus/background rows.
+- "Install when I exit" is remembered across restarts and now applies on a real exit (window close with no tray, or tray → Exit), not when the window merely hides.
+- Release notes in the update window scroll with the wheel and show a scrollbar for long notes.
+- `update.log` is capped at 256 KB and starts fresh instead of growing forever.
+- CI now runs an offline update self-test and a real Direct2D render smoke test on every push, so a release cannot ship with a broken engine or renderer.
+
+## [1.3.6] - 2026-11-13
+
+- Update checks fall back to the `curl.exe` built into Windows when WinINet times out (for example on networks that advertise an unreachable IPv6 route). The manifest, signature and installer all use the fallback.
+- Fetch failures log the WinINet error code and HTTP status to `update.log`.
+
+## [1.3.5] - 2026-11-13
+
+- A finished background download now notifies from the tray when the window is hidden, and with a toast when it is visible.
+
+## [1.3.4] - 2026-11-13
+
+- Updates download automatically in the background once a check finds a release, leaving only Restart to install. The preference is `AutoDownloadUpdates` (default on).
+
 ## [1.3.3] - 2026-11-13
+
 
 ### Update system v2
 - Updates are now one click: background download, signature verification, silent install and an automatic relaunch in the mode the app was running (window or background).
