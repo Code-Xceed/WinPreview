@@ -73,6 +73,11 @@ jobs:
           if ($sig.Length -lt 80) { throw "Signature file looks truncated." }
           Write-Host "Signed manifest present ($($sig.Length) base64 chars)."
 
+      - name: Dock layout sweep (in-app geometry diagnostics)
+        shell: pwsh
+        run: |
+          python tests/dock_test.py
+
       - name: Runtime smoke test (update self-test + render)
         shell: pwsh
         run: |

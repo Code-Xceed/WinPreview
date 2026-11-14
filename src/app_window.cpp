@@ -2381,82 +2381,82 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
     float btnH = 30.0f;
     float btnY = dockY + (dockH - btnH) / 2.0f;
 
-    // Content-derived dynamic width calculation with symmetric inner padding
-    const float kDockPaddingX = 8.0f;
     float contentW = 0.0f;
     bool showPdfNav = (m_docType == DocumentType::Pdf && m_totalPages > 1);
 
+    // The pill width and the painted button set must agree on one tier, or the
+    // buttons spill outside the pill (narrow image windows used to do exactly
+    // that: the width chose "standard" at 460px while the paint chose "full"
+    // from 420px).
+    // One tier decides both the pill width and the painted button set. Each
+    // viewer has three widths that match exactly what its three paint paths
+    // draw, so a narrow window can never paint icons outside the pill.
+    int dockTier = 1;  // 0 compact, 1 standard (overflow menu), 2 full
+    float widthFull = 0.0f, widthStandard = 0.0f, widthCompact = 0.0f;
+    float thresholdFull = 460.0f, thresholdCompact = 250.0f;
+
     if (m_docType == DocumentType::Image) {
-        bool isFull = (availW >= 460.0f);
-        bool isCompact = (availW < 250.0f);
-        if (!isCompact) {
-            contentW = isFull ? 415.0f : 200.0f;
-        } else {
-            contentW = 126.0f;
-        }
+        widthFull = 415.0f; widthStandard = 200.0f; widthCompact = 126.0f;
+        thresholdFull = 460.0f; thresholdCompact = 250.0f;
     } else if (m_docType == DocumentType::Pdf) {
         if (showPdfNav) {
-            bool isFull = (availW >= 650.0f);
-            bool isCompact = (availW < 420.0f);
-            if (!isCompact) {
-                contentW = isFull ? 587.0f : 372.0f;
-            } else {
-                contentW = 234.0f;
-            }
+            widthFull = 587.0f; widthStandard = 372.0f; widthCompact = 234.0f;
+            thresholdFull = 650.0f; thresholdCompact = 420.0f;
         } else {
-            bool isFull = (availW >= 420.0f);
-            bool isCompact = (availW < 250.0f);
-            if (!isCompact) {
-                contentW = isFull ? 375.0f : 200.0f;
-            } else {
-                contentW = 126.0f;
-            }
+            widthFull = 375.0f; widthStandard = 200.0f; widthCompact = 126.0f;
+            thresholdFull = 420.0f; thresholdCompact = 250.0f;
         }
     } else if (m_docType == DocumentType::Text) {
-        bool isFull = (availW >= 540.0f);
-        bool isCompact = (availW < 390.0f);
-        if (!isCompact) {
-            contentW = isFull ? 503.0f : 354.0f;
-        } else {
-            contentW = 222.0f;
-        }
+        widthFull = 503.0f; widthStandard = 354.0f; widthCompact = 222.0f;
+        thresholdFull = 540.0f; thresholdCompact = 390.0f;
     } else if (m_docType == DocumentType::Spreadsheet) {
-        bool isFull = (availW >= 520.0f);
-        bool isCompact = (availW < 390.0f);
-        if (!isCompact) {
-            contentW = isFull ? 473.0f : 354.0f;
-        } else {
-            contentW = 222.0f;
-        }
+        widthFull = 473.0f; widthStandard = 354.0f; widthCompact = 222.0f;
+        thresholdFull = 520.0f; thresholdCompact = 390.0f;
     } else if (m_docType == DocumentType::Office || m_docType == DocumentType::Svg) {
-        bool isFull = (availW >= 430.0f);
-        bool isCompact = (availW < 240.0f);
-        if (!isCompact) {
-            contentW = isFull ? 381.0f : 200.0f;
-        } else {
-            contentW = 126.0f;
-        }
+        widthFull = 381.0f; widthStandard = 200.0f; widthCompact = 126.0f;
+        thresholdFull = 430.0f; thresholdCompact = 240.0f;
     } else if (m_docType == DocumentType::Markdown || m_docType == DocumentType::Notebook) {
-        bool isFull = (availW >= 230.0f);
-        contentW = isFull ? 179.0f : 77.0f;
+        widthFull = 179.0f; widthStandard = 77.0f; widthCompact = 77.0f;
+        thresholdFull = 230.0f; thresholdCompact = 0.0f;
     } else if (m_docType == DocumentType::Font) {
-        bool isFull = (availW >= 190.0f);
-        contentW = isFull ? 132.0f : 70.0f;
+        widthFull = 132.0f; widthStandard = 70.0f; widthCompact = 70.0f;
+        thresholdFull = 190.0f; thresholdCompact = 0.0f;
     } else if (m_docType == DocumentType::Folder || m_docType == DocumentType::Binary ||
                m_docType == DocumentType::Shortcut || m_docType == DocumentType::Certificate) {
         // Utility viewers (folder, archive, binary, shortcut, certificate) get the same
         // File info / Open with / Settings / Fullscreen set as every other format.
-        bool isFull = (availW >= 200.0f);
-        contentW = isFull ? 149.0f : 79.0f;
+        widthFull = 149.0f; widthStandard = 79.0f; widthCompact = 79.0f;
+        thresholdFull = 200.0f; thresholdCompact = 0.0f;
     }
 
+    if (availW >= thresholdFull) {
+        dockTier = 2;
+    } else if (availW < thresholdCompact) {
+        dockTier = 0;
+    } else {
+        dockTier = 1;
+    }
+
+    const float kDockPaddingX = 8.0f;
+    const float kDockMinSpace = 16.0f;
+    const float widths[3] = { widthCompact, widthStandard, widthFull };
+
+    // If the window is narrower than the tier budgets, step down instead of
+    // painting outside the pill (this is the guard that made the image dock
+    // spill its crop/info buttons on a 430px window).
+    while (dockTier > 0 && widths[dockTier] + kDockPaddingX * 2.0f > availW - kDockMinSpace) {
+        --dockTier;
+    }
+    contentW = widths[dockTier];
+
+    m_dockTier = dockTier;
     float dockW = contentW + kDockPaddingX * 2.0f;
 
     // Hard overflow guard: no matter how the tiers chose, the pill can never be wider
     // than the space right of the PDF sidebar minus a small margin on each side.
-    const float kDockMinSpace = 16.0f;
     if (availW - kDockMinSpace <= kDockMinSpace) {
         m_topDockRect = {};
+        m_dockTier = 0;
         return; // Too narrow to host any dock; ShowToast/empty states cover this case.
     }
     if (dockW > availW - kDockMinSpace) dockW = availW - kDockMinSpace;
@@ -2503,8 +2503,8 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
     // DOCK RENDERING: IMAGE MODE
     // =========================================================================
     if (m_docType == DocumentType::Image) {
-        bool isFull = (availW >= 420.0f);
-        bool isCompact = (availW < 250.0f);
+        bool isFull = (dockTier == 2);
+        bool isCompact = (dockTier == 0);
 
         if (!isCompact) {
             // Segment 1: Inset Zoom Capsule [ - | 100% | + ]
@@ -2653,8 +2653,8 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
     // DOCK RENDERING: PDF MODE
     // =========================================================================
     else if (m_docType == DocumentType::Pdf) {
-        bool isFull = showPdfNav ? (availW >= 600.0f) : (availW >= 420.0f);
-        bool isCompact = showPdfNav ? (availW < 420.0f) : (availW < 250.0f);
+        bool isFull = (dockTier == 2);
+        bool isCompact = (dockTier == 0);
 
         if (showPdfNav) {
             if (!isCompact) {
@@ -3045,8 +3045,8 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
     // DOCK RENDERING: TEXT & CODE MODE
     // =========================================================================
     else if (m_docType == DocumentType::Text) {
-        bool isFull = (availW >= 510.0f);
-        bool isCompact = (availW < 390.0f);
+        bool isFull = (dockTier == 2);
+        bool isCompact = (dockTier == 0);
 
         if (!isCompact) {
             // Save, Undo, Redo
@@ -3230,8 +3230,8 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
     // DOCK RENDERING: SPREADSHEET MODE
     // =========================================================================
     else if (m_docType == DocumentType::Spreadsheet) {
-        bool isFull = (availW >= 480.0f);
-        bool isCompact = (availW < 390.0f);
+        bool isFull = (dockTier == 2);
+        bool isCompact = (dockTier == 0);
 
         if (!isCompact) {
             // Save, Undo, Redo
@@ -3407,8 +3407,8 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
     // DOCK RENDERING: OFFICE / PRESENTATION SLIDE MODE
     // =========================================================================
     else if (m_docType == DocumentType::Office || m_docType == DocumentType::Svg) {
-        bool isFull = (availW >= 390.0f);
-        bool isCompact = (availW < 240.0f);
+        bool isFull = (dockTier == 2);
+        bool isCompact = (dockTier == 0);
 
         if (!isCompact) {
             float capH = 28.0f;
@@ -3543,7 +3543,7 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
     // DOCK RENDERING: MARKDOWN & NOTEBOOK MODE
     // =========================================================================
     else if (m_docType == DocumentType::Markdown || m_docType == DocumentType::Notebook) {
-        bool isFull = (availW >= 200.0f);
+        bool isFull = (dockTier == 2);
 
         m_btnCopyTextRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
         DrawIconButton(m_btnCopyTextRect, ICON_COPY, BTN_COPY_TEXT, true);
@@ -3579,7 +3579,7 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
     // DOCK RENDERING: FONT MODE
     // =========================================================================
     else if (m_docType == DocumentType::Font) {
-        bool isFull = (availW >= 160.0f);
+        bool isFull = (dockTier == 2);
 
         if (isFull) {
             m_btnInfoRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
@@ -3613,7 +3613,7 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
     // =========================================================================
     else if (m_docType == DocumentType::Folder || m_docType == DocumentType::Binary ||
              m_docType == DocumentType::Shortcut || m_docType == DocumentType::Certificate) {
-        bool isFull = (availW >= 200.0f);
+        bool isFull = (dockTier == 2);
 
         if (isFull) {
             m_btnInfoRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
@@ -3645,6 +3645,22 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
             DrawIconButton(m_btnOverflowRect, ICON_MORE, BTN_OVERFLOW_MENU, true);
         }
     }
+
+    // Self-check: no painted button may extend past the pill. Reported through
+    // WM_APP + 255 so tests assert the real geometry instead of reading pixels.
+    float contentRight = 0.0f;
+    const D2D1_RECT_F* dockRects[] = {
+        &m_btnSidebarRect, &m_btnPrevPageRect, &m_btnNextPageRect, &m_btnZoomOutRect,
+        &m_btnZoomResetRect, &m_btnZoomInRect, &m_btnZoomFitRect, &m_btnRotateLeftRect,
+        &m_btnRotateRightRect, &m_btnToolbarPlayPauseRect, &m_btnLoopRect, &m_btnToolbarMuteRect,
+        &m_btnToolbarFsRect, &m_btnSearchRect, &m_btnCropRect, &m_btnInfoRect, &m_btnSaveTextRect,
+        &m_btnUndoRect, &m_btnRedoRect, &m_btnCutTextRect, &m_btnCopyTextRect, &m_btnPasteTextRect,
+        &m_btnWrapTextRect, &m_btnTableViewRect, &m_btnSettingsRect, &m_btnOpenWithRect,
+        &m_btnOverflowRect
+    };
+    for (const auto* rect : dockRects) contentRight = (std::max)(contentRight, rect->right);
+    const float pillRight = m_topDockRect.right - kDockPaddingX;
+    m_dockOverflowPx = (std::max)(0.0f, contentRight - pillRight);
 }
 
 std::vector<AppWindow::OverflowMenuItem> AppWindow::GetCurrentOverflowItems() const {
@@ -9354,6 +9370,14 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         }
         case WM_APP + 253: /* Diagnostic: selected archive row (-1 = none) */ {
             return (LRESULT)m_folder.GetSelection();
+        }
+        case WM_APP + 254: /* Diagnostic: dock tier (low byte) + pill width (high) */ {
+            int width = (int)(m_topDockRect.right - m_topDockRect.left);
+            if (width < 0) width = 0;
+            return (LRESULT)((m_dockTier & 0xFF) | (width << 8));
+        }
+        case WM_APP + 255: /* Diagnostic: painted dock pixels past the pill */ {
+            return (LRESULT)(int)(m_dockOverflowPx + 0.5f);
         }
         case WM_APP + 236: /* Diagnostic: HUD layer visible */ {
             if (!m_hudHwnd || !IsWindowVisible(m_hudHwnd)) return 0;

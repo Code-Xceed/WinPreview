@@ -153,6 +153,8 @@ public:
     bool m_forceInstalled = false;       // tests drive the installed update path from a staged build
     int m_bootAttempts = 0;              // consecutive starts without reaching a healthy state
     bool m_healthyMarked = false;
+    int m_dockTier = 1;                   // 0 compact, 1 standard, 2 full
+    float m_dockOverflowPx = 0.0f;         // painted dock content past the pill
 
     bool m_testAutoDownload = false;   // starts the download as soon as the check finds an update
     void RunMessageLoop();

@@ -1,12 +1,12 @@
 {
-  "version": "1.3.12",
-  "release_date": "2026-11-15",
+  "version": "1.3.13",
+  "release_date": "2026-11-16",
   "channel": "stable",
   "rollout": 100,
   "paused": false,
   "mandatory": false,
   "min_supported": "",
-  "notes": "What's new\n\n- Archives open for real: 7z, rar, zip, tar, gz, bz2, xz, iso, cab, lzh, cbr and their friends now list what's inside.\n- Folders inside an archive open with a double-click or Enter; the breadcrumb and Backspace take you back up.\n- .tar.gz and friends show the files inside the tarball, not just the tarball.\n- Password-protected archives say so instead of showing an empty list.",
-  "changelog": "WinPreview 1.3.12 - archive browser rebuilt on a bundled 7-Zip backend: 7z, rar, tar, gz, bz2, xz, z, lzma, zst, iso, cab, lzh and cbr list their contents with nested folder navigation, breadcrumbs, keyboard selection, archive and compressed totals, tar-stream unwrapping, and a password-protected state.",
+  "notes": "What's new\n\n- The floating toolbar no longer pushes its buttons outside the pill when the window is narrow: it folds the extra actions into the overflow menu instead.\n- Same fix for every viewer - images, text and code, spreadsheets, documents, fonts and archives.",
+  "changelog": "WinPreview 1.3.13 - responsive dock fix. The pill width and the painted button set now come from one tier table, so narrow windows fold actions into the overflow menu instead of drawing icons past the pill (image windows around 430px used to spill crop/info outside the dock).",
   "download_url": "https://github.com/Code-Xceed/WinPreview/releases/latest/download/WinPreview-Setup-x64.exe"
 }
