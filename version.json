@@ -1,12 +1,12 @@
 {
-  "version": "1.3.11",
-  "release_date": "2026-11-14",
+  "version": "1.3.12",
+  "release_date": "2026-11-15",
   "channel": "stable",
   "rollout": 100,
   "paused": false,
   "mandatory": false,
   "min_supported": "",
-  "notes": "What's new\n\n- Fixed the start-up check added in the previous release: it could be skipped while WinPreview sat idle, which could make the app offer to restore an older version it did not need.\n- Rollback backups now also record their version in the backup folder, so recovery works even if the registry entry is missing.",
-  "changelog": "WinPreview 1.3.11 - start-up health check now runs on its own timer instead of the idle animation pump, so a good launch is always recorded, and rollback backups carry a version marker file.",
+  "notes": "What's new\n\n- Archives open for real: 7z, rar, zip, tar, gz, bz2, xz, iso, cab, lzh, cbr and their friends now list what's inside.\n- Folders inside an archive open with a double-click or Enter; the breadcrumb and Backspace take you back up.\n- .tar.gz and friends show the files inside the tarball, not just the tarball.\n- Password-protected archives say so instead of showing an empty list.",
+  "changelog": "WinPreview 1.3.12 - archive browser rebuilt on a bundled 7-Zip backend: 7z, rar, tar, gz, bz2, xz, z, lzma, zst, iso, cab, lzh and cbr list their contents with nested folder navigation, breadcrumbs, keyboard selection, archive and compressed totals, tar-stream unwrapping, and a password-protected state.",
   "download_url": "https://github.com/Code-Xceed/WinPreview/releases/latest/download/WinPreview-Setup-x64.exe"
 }

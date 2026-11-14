@@ -81,6 +81,9 @@ jobs:
 
           # Signing key + manifest parser, offline.
           $selftest = Start-Process -FilePath $exe -ArgumentList "--selftest-update" -Wait -PassThru
+          $archiveSelfTest = Start-Process -FilePath $exe -ArgumentList "--selftest-archive" -Wait -PassThru
+          if ($archiveSelfTest.ExitCode -ne 0) { throw "archive self-test failed ($($archiveSelfTest.ExitCode))" }
+          Write-Host "archive self-test: ok"
           if ($selftest.ExitCode -ne 0) { throw "update self-test failed ($($selftest.ExitCode))" }
           Write-Host "update self-test: ok"
 

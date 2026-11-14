@@ -66,7 +66,8 @@ Tested on Windows 11 Pro 64-bit (Intel Core i7 / 16GB RAM / NVMe SSD):
 | **Spreadsheets & Tables**| `.csv`, `.tsv`, `.tab`, `.psv` | Automatic column alignment, alternating row zebra striping |
 | **Documentation** | `.md`, `.markdown`, `.diff`, `.patch`, `.txt`, `.log`, `.ipynb` | Markdown structure parser, unified diff highlighting, Jupyter JSON parsing |
 | **Vector & Fonts** | `.svg`, `.ttf`, `.otf`, `.woff`, `.woff2` | Direct2D SVG vector geometry rasterizer, typography previewer with font metrics |
-| **System & Archives** | `.zip` (and zip-based `.jar`, `.apk`, `.nupkg`, `.vsix`, `.cbz`, `.epub` as listings), `.exe`, `.dll`, `.lnk`, `.url`, `.reg`, `.cer`, `.crt`, `.der`, `.pem`, `[Binary / Unknown]` | ZIP archive explorer, PE version/architecture cards, shortcut and certificate viewers, fallback Direct2D hex inspector |
+| **Archives** | `.zip`, `.7z`, `.rar`, `.tar`, `.gz`, `.tgz`, `.bz2`, `.tbz2`, `.xz`, `.txz`, `.z`, `.lzma`, `.zst`, `.iso`, `.img`, `.cab`, `.lzh`, `.lha`, `.cbr`, and zip-based packages (`.jar`, `.apk`, `.nupkg`, `.vsix`, `.cbz`, `.epub`, `.xpi`, `.crx`, `.whl`, `.msix`, `.appx`) | Entry listing with nested folder navigation, breadcrumbs, keyboard selection, archive/compressed totals; `.tar.gz`-style streams are unwrapped so the files inside the tar can be browsed; header-encrypted archives show a password state instead of an empty list |
+| **System & Binaries** | `.exe`, `.dll`, `.lnk`, `.url`, `.reg`, `.cer`, `.crt`, `.der`, `.pem`, `[Binary / Unknown]` | PE version/architecture cards, shortcut and certificate viewers, fallback Direct2D hex inspector |
 
 ---
 
@@ -172,3 +173,15 @@ Automatic checks run at most once every two hours (manual checks via `F5` / `Ctr
 
 WinPreview is open-source software licensed under the **[MIT License](LICENSE)**.
 Copyright &copy; 2026 Code-Xceed.
+
+### Bundled components
+
+| Component | Purpose | License |
+|---|---|---|
+| [PDFium](https://pdfium.googlesource.com/pdfium/) | PDF rendering (`pdfium.dll`) | BSD-3-Clause |
+| [libheif](https://github.com/strukturag/libheif) / libde265 / x265 | HEIC and AVIF decoding | LGPL-3.0 |
+| [7-Zip](https://www.7-zip.org/) | Archive listing for `7z`, `rar`, `tar`, `gz`, `bz2`, `xz`, `iso`, `cab`, `lzh`, `cbr` and friends (`7z.exe`, `7z.dll`) | LGPL-2.1+ with the unRAR restriction, see [LICENSES/7-Zip-LGPL.txt](LICENSES/7-Zip-LGPL.txt) |
+
+The archive engine only lists entries; it never extracts an archive while
+previewing (a `.tar.gz` stream is expanded to a temporary tar so its contents can
+be browsed, and that temporary file is deleted when the view closes).

@@ -6,6 +6,8 @@ obj/
 *.exe
 *.dll
 !src/pdfium.dll
+!src/7z.exe
+!src/7z.dll
 !src/libheif-*.dll
 !src/libde265-*.dll
 !src/libx265-*.dll

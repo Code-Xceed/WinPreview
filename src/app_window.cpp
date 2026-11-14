@@ -620,7 +620,11 @@ bool AppWindow::OpenFile(const std::wstring& filePath) {
     auto isArchiveExt = [](const std::wstring& e) {
         return (e == L".zip" || e == L".jar" || e == L".apk" || e == L".nupkg" ||
                 e == L".war" || e == L".aar" || e == L".whl" || e == L".msix" || e == L".appx" ||
-                e == L".vsix" || e == L".cbz" || e == L".epub" || e == L".xpi" || e == L".crx" || e == L".egg");
+                e == L".vsix" || e == L".cbz" || e == L".epub" || e == L".xpi" || e == L".crx" || e == L".egg" ||
+                e == L".7z" || e == L".rar" || e == L".tar" || e == L".gz" || e == L".tgz" ||
+                e == L".bz2" || e == L".tbz2" || e == L".xz" || e == L".txz" || e == L".z" ||
+                e == L".lzma" || e == L".zst" || e == L".iso" || e == L".img" || e == L".cab" ||
+                e == L".lzh" || e == L".lha" || e == L".cbr");
     };
 
     auto isBinaryExt = [](const std::wstring& e) {
@@ -982,12 +986,13 @@ bool AppWindow::OpenFile(const std::wstring& filePath) {
     }
     // 10. Compressed Archives & Packages (.zip, .jar, .apk, .nupkg, .war, .aar, .whl, .msix, .appx, .vsix, .cbz, .epub, .xpi, .crx, .egg)
     else if (isArchiveExt(ext)) {
-        if (m_folder.LoadFromZipArchive(filePath)) {
+        if (m_folder.LoadFromArchive(filePath)) {
             m_docType = DocumentType::Folder;
             m_showSidebar = false;
             if (m_hudHwnd) ShowWindow(m_hudHwnd, SW_HIDE);
             m_formatBadgeText = m_folder.GetFormatBadge();
             AdaptWindowToMedia(960, 700);
+            UpdateWindow(m_hwnd);
             success = true;
         }
     }
@@ -9336,6 +9341,20 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         case WM_APP + 243: /* Diagnostic: portable copy */ {
             return (LRESULT)(m_isPortable ? 1 : 0);
         }
+        case WM_APP + 250: /* Diagnostic: archive state (0 none, 1 listing, 2 password, 3 unreadable) */ {
+            if (!m_folder.IsArchive()) return 0;
+            if (!m_folder.HasError()) return 1;
+            return m_folder.IsPasswordProtected() ? 2 : 3;
+        }
+        case WM_APP + 251: /* Diagnostic: archive depth (breadcrumb levels past the root) */ {
+            return (LRESULT)(m_folder.BreadcrumbCount() > 0 ? (int)m_folder.BreadcrumbCount() - 1 : 0);
+        }
+        case WM_APP + 252: /* Diagnostic: rows in the current archive folder */ {
+            return (LRESULT)(int)m_folder.GetItems().size();
+        }
+        case WM_APP + 253: /* Diagnostic: selected archive row (-1 = none) */ {
+            return (LRESULT)m_folder.GetSelection();
+        }
         case WM_APP + 236: /* Diagnostic: HUD layer visible */ {
             if (!m_hudHwnd || !IsWindowVisible(m_hudHwnd)) return 0;
             BYTE alpha = 0;
@@ -10370,6 +10389,23 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 return 0;
             }
 
+            // Archive view: breadcrumb first (it sits above the rows), then rows.
+            if (m_docType == DocumentType::Folder && m_folder.IsArchive()) {
+                int crumb = m_folder.HitTestBreadcrumb(pt.x, pt.y);
+                if (crumb >= 0 && (size_t)crumb < m_folder.BreadcrumbCount()) {
+                    m_folder.NavigateTo(m_folder.BreadcrumbDirectory((size_t)crumb));
+                    m_formatBadgeText = m_folder.GetFormatBadge();
+                    InvalidateRect(m_hwnd, NULL, FALSE);
+                    return 0;
+                }
+                int row = m_folder.HitTestRow(pt.x, pt.y, GetCanvasRectDip());
+                if (row >= 0) {
+                    m_folder.SetSelection(row);
+                    InvalidateRect(m_hwnd, NULL, FALSE);
+                    return 0;
+                }
+            }
+
             // -0.5 In-App Update Banner clicks
             UpdateState updateState = m_updater.GetState();
             if (updateState == UpdateState::UpdateAvailable || updateState == UpdateState::Downloaded) {
@@ -10918,6 +10954,14 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             POINT physPt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
             D2D1_POINT_2F pt = ClientToDip(physPt);
 
+            if (m_docType == DocumentType::Folder && m_folder.IsArchive()) {
+                int row = m_folder.HitTestRow(pt.x, pt.y, GetCanvasRectDip());
+                if (row != m_folder.GetHover()) {
+                    m_folder.SetHover(row);
+                    InvalidateRect(m_hwnd, NULL, FALSE);
+                }
+            }
+
             if (!m_isMouseTracking) {
                 TRACKMOUSEEVENT tme = { sizeof(TRACKMOUSEEVENT), TME_LEAVE, m_hwnd, 0 };
                 if (TrackMouseEvent(&tme)) {
@@ -11243,6 +11287,19 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 SendMessage(m_hwnd, WM_LBUTTONDOWN, wParam, lParam);
                 return 0;
             }
+            if (m_docType == DocumentType::Folder && m_folder.IsArchive()) {
+                int row = m_folder.HitTestRow(pt.x, pt.y, GetCanvasRectDip());
+                if (row >= 0) {
+                    m_folder.SetSelection(row);
+                    if (m_folder.EnterFolder((size_t)row)) {
+                        m_formatBadgeText = m_folder.GetFormatBadge();
+                    }
+                    InvalidateRect(m_hwnd, NULL, FALSE);
+                    UpdateWindow(m_hwnd);
+                }
+                return 0;
+            }
+
             if (m_docType == DocumentType::Text || (m_docType == DocumentType::Spreadsheet && !m_text.IsTableView())) {
                 D2D1_RECT_F canvasRect = GetCanvasRectDip();
                 m_text.HandleDoubleClick(pt.x, pt.y, canvasRect, m_dpiScale);
@@ -11349,6 +11406,42 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 }
                 if (wParam == VK_BACK) return 0; // WM_CHAR performs the deletion
                 return 0; // swallow every other shortcut while typing
+            }
+
+            // Archive list: arrows move the selection, Enter opens, Backspace goes up.
+            if (m_docType == DocumentType::Folder && m_folder.IsArchive() && !m_folder.HasError()) {
+                const int count = (int)m_folder.GetItems().size();
+                if (wParam == VK_DOWN || wParam == VK_UP) {
+                    int next = m_folder.GetSelection();
+                    next += (wParam == VK_DOWN) ? 1 : -1;
+                    if (next < 0) next = 0;
+                    if (next >= count) next = count - 1;
+                    if (count > 0) {
+                        m_folder.SetSelection(next);
+                        InvalidateRect(m_hwnd, NULL, FALSE);
+                    }
+                    return 0;
+                }
+                if (wParam == VK_RETURN) {
+                    int sel = m_folder.GetSelection();
+                    if (sel >= 0 && m_folder.EnterFolder((size_t)sel)) {
+                        m_formatBadgeText = m_folder.GetFormatBadge();
+                        InvalidateRect(m_hwnd, NULL, FALSE);
+                    }
+                    return 0;
+                }
+                if (wParam == VK_BACK) {
+                    if (m_folder.GoUp()) {
+                        m_formatBadgeText = m_folder.GetFormatBadge();
+                        InvalidateRect(m_hwnd, NULL, FALSE);
+                    }
+                    return 0;
+                }
+                if (wParam == VK_ESCAPE && !m_folder.GetSearchQuery().empty()) {
+                    m_folder.SetSearch(L"");
+                    InvalidateRect(m_hwnd, NULL, FALSE);
+                    return 0;
+                }
             }
 
             bool isCtrl = ((GetKeyState(VK_CONTROL) & 0x8000) != 0) || ((GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0);

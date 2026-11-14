@@ -16,6 +16,8 @@ cd /d "%~dp0"
 if not exist "dist\WinPreview" mkdir "dist\WinPreview"
 copy /y "src\WinPreview.exe" "dist\WinPreview\WinPreview.exe" >nul
 copy /y "src\pdfium.dll" "dist\WinPreview\pdfium.dll" >nul
+copy /y "src\7z.exe" "dist\WinPreview\7z.exe" >nul
+copy /y "src\7z.dll" "dist\WinPreview\7z.dll" >nul
 copy /y "src\*heif*.dll" "dist\WinPreview\" >nul 2>&1
 copy /y "src\*de265*.dll" "dist\WinPreview\" >nul 2>&1
 copy /y "src\*x265*.dll" "dist\WinPreview\" >nul 2>&1

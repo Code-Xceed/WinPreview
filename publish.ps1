@@ -127,6 +127,8 @@ Copy-Item -LiteralPath $builtExe -Destination (Join-Path $targetPublishDir "WinP
 
 $requiredDlls = @(
     "pdfium.dll",
+    "7z.exe",
+    "7z.dll",
     "libheif-*.dll",
     "libde265-*.dll",
     "libx265-*.dll",

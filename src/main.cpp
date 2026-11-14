@@ -8,6 +8,7 @@
 #include <fstream>
 #include <chrono>
 #include "app_window.h"
+#include "archive_engine.h"
 #include "explorer_hook.h"
 
 // Force integrated GPU to eliminate NVIDIA PCIe bus spin-up latency (~800ms)
@@ -92,6 +93,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     std::wstring restoreBackupDir;
     unsigned long applyUpdateWaitPid = 0;
     bool runUpdateSelfTest = false;
+    bool runArchiveSelfTest = false;
     bool forceUpdateCheck = false;
     bool downloadUpdateTest = false;
     bool openUpdateSheet = false;
@@ -120,6 +122,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
                 restoreBackupDir = argv[++i];
             } else if (_wcsicmp(argv[i], L"--selftest-update") == 0) {
                 runUpdateSelfTest = true;
+            } else if (_wcsicmp(argv[i], L"--selftest-archive") == 0) {
+                runArchiveSelfTest = true;
             } else if (_wcsicmp(argv[i], L"--force-update-check") == 0) {
                 forceUpdateCheck = true;
             } else if (_wcsicmp(argv[i], L"--download-update-test") == 0) {
@@ -179,6 +183,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     }
     if (runUpdateSelfTest) {
         return WinPreview::RunUpdateSelfTest();
+    }
+    if (runArchiveSelfTest) {
+        return WinPreview::RunArchiveSelfTest();
     }
 
     // Single-instance enforcement: Forward file to running instance if already active
