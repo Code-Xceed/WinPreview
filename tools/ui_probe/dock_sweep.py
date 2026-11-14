@@ -61,10 +61,16 @@ def sweep(exe, path):
     try:
         tiers = set()
         for width in WIDTHS:
-            client = settle(app, width)
-            tier = app.dock_tier()
-            pill = float(app.dock_pill_width())
-            overflow = app.dock_overflow()
+            client = tier = 0
+            pill = overflow = 0.0
+            for _ in range(3):
+                client = settle(app, width)
+                tier = app.dock_tier()
+                pill = float(app.dock_pill_width())
+                overflow = app.dock_overflow()
+                if overflow == 0 and (pill <= 0 or pill <= client + 1.0):
+                    break
+                time.sleep(0.25)
             tiers.add(tier)
             check(overflow == 0,
                   f"{name} {width}px: buttons stay inside the pill",

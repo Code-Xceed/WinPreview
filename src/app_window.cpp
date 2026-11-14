@@ -659,7 +659,7 @@ bool AppWindow::OpenFile(const std::wstring& filePath) {
         return (e == L".mp4" || e == L".mkv" || e == L".avi" || e == L".mov" ||
                 e == L".webm" || e == L".flv" || e == L".wmv" || e == L".m4v" || e == L".ts" ||
                 e == L".3gp" || e == L".ogv" || e == L".vob" || e == L".m2ts" || e == L".mts" || e == L".f4v" ||
-                e == L".mxf" || e == L".prores" || e == L".braw" || e == L".r3d" || e == L".crm" || e == L".cine" ||
+                e == L".mxf" || e == L".braw" || e == L".r3d" || e == L".crm" || e == L".cine" ||
                 e == L".qt" || e == L".m2v" || e == L".mpg" || e == L".mpeg" ||
                 e == L".mp3" || e == L".wav" || e == L".flac" || e == L".aac" || e == L".m4a" ||
                 e == L".ogg" || e == L".wma" || e == L".opus" || e == L".weba" || e == L".aiff" ||
@@ -696,6 +696,32 @@ bool AppWindow::OpenFile(const std::wstring& filePath) {
     const bool ambiguousMediaText = (ext == L".ts" || ext == L".mts");
     const bool forceTextForAmbiguous = ambiguousMediaText && looksLikeTextFile(filePath);
 
+    // Formats the app lists as recognised but cannot decode today. Saying which
+    // kind of gap it is beats a blank canvas (or a VLC window with a black frame).
+    auto DeclaredUnsupportedKind = [](const std::wstring& e, std::wstring& detail) -> UnsupportedKind {
+        if (e == L".dds") {
+            detail = L"DirectDraw Surface holds GPU texture data, which WinPreview doesn't decode yet.";
+            return UnsupportedKind::NotSupportedYet;
+        }
+        if (e == L".icns") {
+            detail = L"macOS icon containers aren't decoded yet; export a PNG to preview the artwork.";
+            return UnsupportedKind::NotSupportedYet;
+        }
+        if (e == L".braw" || e == L".r3d" || e == L".crm" || e == L".cine") {
+            detail = L"Camera RAW video needs the manufacturer's codec pack (Blackmagic, RED, Canon or ARRI).";
+            return UnsupportedKind::NeedsCodec;
+        }
+        if (e == L".cr3" || e == L".raf" || e == L".srw") {
+            detail = L"Camera RAW needs the Microsoft RAW Image Extension (or the maker's own codec) to decode.";
+            return UnsupportedKind::NeedsCodec;
+        }
+        if (e == L".mid" || e == L".midi") {
+            detail = L"MIDI stores notes, not audio. Playing it needs a MIDI synthesizer, which Windows no longer ships.";
+            return UnsupportedKind::NeedsCodec;
+        }
+        return UnsupportedKind::None;
+    };
+
     auto isMarkdownExt = [](const std::wstring& e) {
         return (e == L".md" || e == L".markdown" || e == L".mb" || e == L".mdown" || e == L".mkd" || e == L".mdx");
     };
@@ -712,6 +738,18 @@ bool AppWindow::OpenFile(const std::wstring& filePath) {
             AdaptWindowToMedia(920, 680);
             success = true;
         }
+    }
+    // 0.5 Recognised formats with no decoder: explain the gap precisely.
+    else if (UnsupportedKind unsupportedKind = DeclaredUnsupportedKind(ext, m_unsupportedDetail);
+             unsupportedKind != UnsupportedKind::None) {
+        m_unsupportedKind = unsupportedKind;
+        m_docType = DocumentType::Unsupported;
+        LoadUnsupportedFileInfo(filePath);
+        m_showSidebar = false;
+        if (m_hudHwnd) ShowWindow(m_hudHwnd, SW_HIDE);
+        m_formatBadgeText = m_unsupportedTypeName;
+        AdaptWindowToMedia(940, 640);
+        success = true;
     }
     // 1. PDF
     else if (ext == L".pdf") {
@@ -1099,6 +1137,8 @@ bool AppWindow::OpenFile(const std::wstring& filePath) {
 
     // 16. Fallback for non-supported binary formats (.bin, .dat, .iso, etc.)
     if (!success && fileAttrs != INVALID_FILE_ATTRIBUTES && !(fileAttrs & FILE_ATTRIBUTE_DIRECTORY)) {
+        m_unsupportedKind = UnsupportedKind::None;
+        m_unsupportedDetail.clear();
         m_docType = DocumentType::Unsupported;
         LoadUnsupportedFileInfo(filePath);
         m_showSidebar = false;
@@ -4455,9 +4495,12 @@ void AppWindow::LoadUnsupportedFileInfo(const std::wstring& filePath) {
         m_unsupportedDateStr = std::wstring(szDate) + L", " + szTime;
     }
 
-    // 3. Magic Bytes / Hex Inspector (reads first 32 bytes to provide developer insight)
-    HANDLE hFile = CreateFileW(filePath.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                               NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    // 3. Magic Bytes / Hex Inspector (reads first 32 bytes to provide developer insight).
+    //    Only for genuinely unknown files: a recognised format gets its reason line.
+    HANDLE hFile = (m_unsupportedKind == UnsupportedKind::None)
+                       ? CreateFileW(filePath.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                     NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL)
+                       : INVALID_HANDLE_VALUE;
     if (hFile != INVALID_HANDLE_VALUE) {
         BYTE buffer[32] = {0};
         DWORD bytesRead = 0;
@@ -4503,7 +4546,7 @@ void AppWindow::RenderUnsupportedState(const D2D1_RECT_F& rect) {
 
     // Total vertical stack:
     // 64 (icon squircle) + 16 (gap) + 26 (name) + 6 (gap) + 18 (meta) + 14 (gap) + 46 (hex/badge) + 18 (gap) + 34 (buttons) = 236px
-    float totalStackH = 236.0f;
+    float totalStackH = 236.0f + (m_unsupportedDetail.empty() ? 0.0f : 24.0f);
     float startY = rect.top + (height - totalStackH) / 2.0f - 14.0f;
     if (startY < rect.top + 24.0f) startY = rect.top + 24.0f;
 
@@ -4560,15 +4603,47 @@ void AppWindow::RenderUnsupportedState(const D2D1_RECT_F& rect) {
                      m_d2d.FontMono ? m_d2d.FontMono : m_d2d.FontCaption, textR, m_d2d.BrushTextMuted);
         middleY += hexH;
     } else {
-        const WCHAR* noticeText = L"No preview available for this format";
-        float noticeW = 240.0f;
+        // Two honest variants: "not supported yet" vs "needs an additional codec",
+        // each with one line of detail. A generic "no preview" hid the difference.
+        std::wstring noticeText = L"No preview available for this format";
+        ID2D1SolidColorBrush* pillBrush = m_d2d.BrushBorderSubtle;
+        ID2D1SolidColorBrush* pillText = m_d2d.BrushTextMuted;
+        if (m_unsupportedKind == UnsupportedKind::NotSupportedYet) {
+            noticeText = L"Not supported yet";
+        } else if (m_unsupportedKind == UnsupportedKind::NeedsCodec) {
+            noticeText = L"Needs an additional codec";
+            pillBrush = m_d2d.BrushAmber ? m_d2d.BrushAmber : m_d2d.BrushBorderSubtle;
+            pillText = m_d2d.BrushText;
+        }
+
         float noticeH = 24.0f;
-        D2D1_RECT_F noticeRect = D2D1::RectF(cx - noticeW / 2.0f, middleY, cx + noticeW / 2.0f, middleY + noticeH);
+        float pillW = 40.0f + (float)noticeText.length() * 7.4f;
+        D2D1_RECT_F noticeRect = D2D1::RectF(cx - pillW / 2.0f, middleY, cx + pillW / 2.0f, middleY + noticeH);
         D2D1_ROUNDED_RECT rNotice = D2D1::RoundedRect(noticeRect, 12.0f, 12.0f);
-        rt->FillRoundedRectangle(rNotice, m_d2d.BrushBorderSubtle);
+        rt->FillRoundedRectangle(rNotice, pillBrush);
         D2D1_RECT_F noticeTextR = D2D1::RectF(noticeRect.left, middleY + 3.0f, noticeRect.right, middleY + noticeH);
-        rt->DrawText(noticeText, (UINT32)wcslen(noticeText), m_d2d.FontBadge ? m_d2d.FontBadge : m_d2d.FontCaptionCenter, noticeTextR, m_d2d.BrushTextMuted);
+        rt->DrawText(noticeText.c_str(), (UINT32)noticeText.length(),
+                     m_d2d.FontBadge ? m_d2d.FontBadge : m_d2d.FontCaptionCenter, noticeTextR, pillText);
         middleY += noticeH;
+
+        if (!m_unsupportedDetail.empty()) {
+            D2D1_RECT_F detailRect = D2D1::RectF(rect.left + 32.0f, middleY + 6.0f,
+                                                 rect.right - 32.0f, middleY + 24.0f);
+            IDWriteTextLayout* detailLayout = nullptr;
+            m_d2d.GetDWriteFactory()->CreateTextLayout(m_unsupportedDetail.c_str(),
+                (UINT32)m_unsupportedDetail.length(),
+                m_d2d.FontCaptionCenter ? m_d2d.FontCaptionCenter : m_d2d.FontBodyCenter,
+                detailRect.right - detailRect.left, 18.0f, &detailLayout);
+            if (detailLayout) {
+                detailLayout->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+                detailLayout->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+                DWRITE_TRIMMING trimming = { DWRITE_TRIMMING_GRANULARITY_CHARACTER, 0, 0 };
+                detailLayout->SetTrimming(&trimming, nullptr);
+                rt->DrawTextLayout(D2D1::Point2F(detailRect.left, detailRect.top), detailLayout, m_d2d.BrushTextMuted);
+                detailLayout->Release();
+            }
+            middleY += 24.0f;
+        }
     }
 
     // 5. Action Buttons: "Open File (Enter)", "Show in Folder", "Copy Path (Ctrl+C)"
@@ -9378,6 +9453,10 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         }
         case WM_APP + 255: /* Diagnostic: painted dock pixels past the pill */ {
             return (LRESULT)(int)(m_dockOverflowPx + 0.5f);
+        }
+        case WM_APP + 256: /* Diagnostic: unsupported reason (0 none, 1 not yet, 2 codec) */ {
+            if (m_docType != DocumentType::Unsupported) return 0;
+            return (LRESULT)(int)m_unsupportedKind;
         }
         case WM_APP + 236: /* Diagnostic: HUD layer visible */ {
             if (!m_hudHwnd || !IsWindowVisible(m_hudHwnd)) return 0;

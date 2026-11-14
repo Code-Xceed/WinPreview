@@ -19,6 +19,14 @@
 
 namespace WinPreview {
 
+// Why a recognised file has no preview. Two honest variants instead of one
+// generic "unsupported" screen.
+enum class UnsupportedKind {
+    None = 0,
+    NotSupportedYet = 1,   // WinPreview has no decoder for the container
+    NeedsCodec = 2         // a system / vendor codec is required
+};
+
 enum class DocumentType {
     None,
     Image,
@@ -444,6 +452,8 @@ private:
 
     // Unsupported File Inspector state
     std::wstring m_unsupportedTypeName;
+    UnsupportedKind m_unsupportedKind = UnsupportedKind::None;
+    std::wstring m_unsupportedDetail;
     std::wstring m_unsupportedSizeStr;
     std::wstring m_unsupportedDateStr;
     std::wstring m_unsupportedHexDump;
