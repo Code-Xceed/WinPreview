@@ -344,6 +344,11 @@ bool AppWindow::Create(HINSTANCE hInstance, int nCmdShow, bool showTrayNotificat
     // gated by the same persisted 2h throttle as every later check.
     SetTimer(m_hwnd, TIMER_PERIODIC_UPDATE, UPDATE_CHECK_INTERVAL_MS, NULL);
 
+    // Housekeeping: remove stale helper copies / installers, and learn whether
+    // this copy was installed or merely unpacked.
+    WinPreview::CleanupUpdateTempFiles();
+    m_isPortable = WinPreview::IsPortableInstall() && !m_forceInstalled;
+
     if (ShouldAutoCheckForUpdates()) {
         // Synchronous throttle write inside CheckForUpdates prevents a second
         // request from WM_SHOWWINDOW; the network work is queued on the updater's
@@ -6093,10 +6098,11 @@ void AppWindow::RenderUpdateSheet(const D2D1_RECT_F& canvasRect) {
 
     double mb = (double)info.installerSize / (1024.0 * 1024.0);
     WCHAR meta[192];
-    swprintf_s(meta, L"%.1f MB  ·  %s  ·  %s channel",
+    swprintf_s(meta, L"%.1f MB  ·  %s  ·  %s channel%s",
                mb,
                info.releaseDate.empty() ? L"new release" : info.releaseDate.c_str(),
-               info.channel.c_str());
+               info.channel.c_str(),
+               m_isPortable ? L"  ·  portable copy" : L"");
     rt->DrawText(meta, (UINT32)wcslen(meta),
                  m_d2d.FontCaption ? m_d2d.FontCaption : m_d2d.FontButton,
                  D2D1::RectF(x + 24.0f, y + 48.0f, x + w - 24.0f, y + 68.0f),
@@ -6125,15 +6131,26 @@ void AppWindow::RenderUpdateSheet(const D2D1_RECT_F& canvasRect) {
     } else if (state == UpdateState::Failed) {
         actions.push_back({ L"Try again", {}, BTN_UPDATE_PRIMARY, true, true });
         actions.push_back({ L"Later", {}, BTN_UPDATE_SECONDARY, false, true });
+    } else if (m_isPortable) {
+        actions.push_back({ L"Download portable build", {}, BTN_UPDATE_PRIMARY, true, true });
+        actions.push_back({ L"Later", {}, BTN_UPDATE_SECONDARY, false, true });
+        actions.push_back({ L"Skip this version", {}, BTN_UPDATE_TERTIARY, false, true });
     } else {
         actions.push_back({ L"Update now", {}, BTN_UPDATE_PRIMARY, true, true });
         actions.push_back({ L"Later", {}, BTN_UPDATE_SECONDARY, false, true });
         actions.push_back({ L"Skip this version", {}, BTN_UPDATE_TERTIARY, false, true });
     }
 
+    // Buttons grow with their label so longer actions ("Download portable build")
+    // are never clipped inside the pill.
+    auto actionWidth = [](const Action& a) {
+        float base = a.primary ? 150.0f : 140.0f;
+        float needed = 28.0f + (float)a.label.length() * 8.0f;
+        return (std::max)(base, needed);
+    };
     float totalW = 0.0f;
     for (size_t i = 0; i < actions.size(); ++i) {
-        totalW += (i > 0 ? 10.0f : 0.0f) + (actions[i].primary ? 150.0f : 140.0f);
+        totalW += (i > 0 ? 10.0f : 0.0f) + actionWidth(actions[i]);
     }
 
     // Narrow windows stack the actions instead of letting them overflow the card.
@@ -6187,7 +6204,7 @@ void AppWindow::RenderUpdateSheet(const D2D1_RECT_F& canvasRect) {
     float curX = stacked ? (x + 24.0f) : std::floor(x + (w - totalW) / 2.0f + 0.5f);
     D2D1_RECT_F* slots[3] = { &m_updateSheetPrimary, &m_updateSheetSecondary, &m_updateSheetTertiary };
     for (size_t i = 0; i < actions.size(); ++i) {
-        float bw = stacked ? (w - 48.0f) : (actions[i].primary ? 150.0f : 140.0f);
+        float bw = stacked ? (w - 48.0f) : actionWidth(actions[i]);
         float ry = stacked ? (stackY + (float)i * (btnH + 8.0f)) : btnY;
         D2D1_RECT_F r = D2D1::RectF(curX, ry, curX + bw, ry + btnH);
         *slots[i] = r;
@@ -8786,8 +8803,8 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                     }
                     // Discord-style: pull the payload in the background so the user
                     // only has to press "Restart to update" later.
-                    if ((m_autoDownloadUpdates || m_installOnClose) && !alreadyDismissed &&
-                        m_updater.GetState() == UpdateState::UpdateAvailable) {
+                    if ((m_autoDownloadUpdates || m_installOnClose) && !m_isPortable &&
+                        !alreadyDismissed && m_updater.GetState() == UpdateState::UpdateAvailable) {
                         StartUpdateDownload();
                     }
                 } else if (!res->failed) {
@@ -9243,6 +9260,9 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         }
         case WM_APP + 242: /* Diagnostic: install-on-close pending */ {
             return (LRESULT)(m_installOnClose ? 1 : 0);
+        }
+        case WM_APP + 243: /* Diagnostic: portable copy */ {
+            return (LRESULT)(m_isPortable ? 1 : 0);
         }
         case WM_APP + 236: /* Diagnostic: HUD layer visible */ {
             if (!m_hudHwnd || !IsWindowVisible(m_hudHwnd)) return 0;
@@ -10227,6 +10247,12 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                     return 0;
                 }
                 if (hit(m_updateSheetPrimary)) {
+                    if (m_isPortable) {
+                        ShellExecuteW(NULL, L"open", L"https://github.com/Code-Xceed/WinPreview/releases/latest",
+                                      NULL, NULL, SW_SHOWNORMAL);
+                        SetShowUpdateSheet(false);
+                        return 0;
+                    }
                     if (sheetState == UpdateState::Downloaded) {
                         m_updater.SetRelaunchBackground(!IsWindowVisible(m_hwnd));
                         if (!m_updater.LaunchInstallerAndExit(m_hwnd)) {

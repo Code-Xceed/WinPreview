@@ -1313,6 +1313,11 @@ int RunUpdateHelper(const std::wstring& installerPath, unsigned long waitPid,
 
     WriteUpdateResult(resultPath, installerPath, exitCode, logPath, relaunchMode);
 
+    if (exitCode == 0) {
+        // Applied and verified: the payload is no longer needed.
+        DeleteFileW(installerPath.c_str());
+    }
+
     // Relaunch: the new build on success, the old build (with the failure code)
     // on error so the user is never left with nothing running.
     WCHAR selfPath[MAX_PATH] = {};
@@ -1332,6 +1337,85 @@ int RunUpdateHelper(const std::wstring& installerPath, unsigned long waitPid,
     }
 
     return (exitCode == 0) ? 0 : 1;
+}
+
+void CleanupUpdateTempFiles() {
+    WCHAR tempDir[MAX_PATH] = {};
+    if (!GetTempPathW(MAX_PATH, tempDir)) return;
+
+    WIN32_FIND_DATAW findData{};
+    const std::wstring patterns[] = {
+        std::wstring(tempDir) + L"WinPreview-update-helper-*.exe",
+        std::wstring(tempDir) + L"WinPreview-Setup-v*.exe",
+        std::wstring(tempDir) + L"WinPreview-fetch-*.tmp",
+    };
+    FILETIME nowFt{};
+    GetSystemTimeAsFileTime(&nowFt);
+    ULARGE_INTEGER now{};
+    now.LowPart = nowFt.dwLowDateTime;
+    now.HighPart = nowFt.dwHighDateTime;
+
+    for (const auto& pattern : patterns) {
+        HANDLE hFind = FindFirstFileW(pattern.c_str(), &findData);
+        if (hFind == INVALID_HANDLE_VALUE) continue;
+        do {
+            if (findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+            ULARGE_INTEGER written{};
+            written.LowPart = findData.ftLastWriteTime.dwLowDateTime;
+            written.HighPart = findData.ftLastWriteTime.dwHighDateTime;
+            // 6 hours in 100ns units.
+            if (now.QuadPart > written.QuadPart &&
+                (now.QuadPart - written.QuadPart) > 6ULL * 3600ULL * 10000000ULL) {
+                std::wstring full = std::wstring(tempDir) + findData.cFileName;
+                DeleteFileW(full.c_str());
+            }
+        } while (FindNextFileW(hFind, &findData));
+        FindClose(hFind);
+    }
+}
+
+bool IsPortableInstall() {
+    static const wchar_t* kUninstallKey =
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{C8E19B4B-9140-4D56-8A69-02A44B27CE91}_is1";
+
+    WCHAR selfPath[MAX_PATH] = {};
+    if (!GetModuleFileNameW(NULL, selfPath, MAX_PATH)) return false;
+    std::wstring dir(selfPath);
+    size_t slash = dir.find_last_of(L"\\/");
+    if (slash != std::wstring::npos) dir.resize(slash);
+
+    auto normalize = [](std::wstring value) {
+        while (!value.empty() && (value.back() == L'\\' || value.back() == L'/')) value.pop_back();
+        return value;
+    };
+    const std::wstring selfDir = normalize(dir);
+
+    auto matchesInstall = [&](HKEY root, REGSAM extraFlags) -> bool {
+        HKEY hKey = NULL;
+        if (RegOpenKeyExW(root, kUninstallKey, 0, KEY_READ | extraFlags, &hKey) != ERROR_SUCCESS) {
+            return false;
+        }
+        bool same = false;
+        const wchar_t* valueNames[] = { L"InstallLocation", L"Inno Setup: App Path" };
+        for (const wchar_t* name : valueNames) {
+            WCHAR buffer[MAX_PATH] = {};
+            DWORD size = sizeof(buffer);
+            DWORD type = 0;
+            if (RegQueryValueExW(hKey, name, NULL, &type, (LPBYTE)buffer, &size) == ERROR_SUCCESS &&
+                (type == REG_SZ || type == REG_EXPAND_SZ)) {
+                if (_wcsicmp(normalize(buffer).c_str(), selfDir.c_str()) == 0) {
+                    same = true;
+                    break;
+                }
+            }
+        }
+        RegCloseKey(hKey);
+        return same;
+    };
+
+    // An installed copy has an uninstall entry whose path is this very folder.
+    // Any other folder is a portable/unpacked copy, even if another install exists.
+    return !(matchesInstall(HKEY_CURRENT_USER, 0) || matchesInstall(HKEY_LOCAL_MACHINE, KEY_WOW64_64KEY));
 }
 
 int RunUpdateSelfTest() {

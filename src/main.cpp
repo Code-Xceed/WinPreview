@@ -94,6 +94,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     bool forceUpdateCheck = false;
     bool downloadUpdateTest = false;
     bool openUpdateSheet = false;
+    bool forceInstalled = false;
     std::wstring updateManifestOverride;
     std::wstring updateChannel;
     std::wstring failedUpdateCode;
@@ -122,6 +123,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
                 downloadUpdateTest = true;
             } else if (_wcsicmp(argv[i], L"--open-update-sheet") == 0) {
                 openUpdateSheet = true;
+            } else if (_wcsicmp(argv[i], L"--force-installed") == 0) {
+                forceInstalled = true;
             } else if ((_wcsicmp(argv[i], L"--update-url") == 0) && i + 1 < argc) {
                 updateManifestOverride = argv[++i];
             } else if ((_wcsicmp(argv[i], L"--update-channel") == 0) && i + 1 < argc) {
@@ -231,6 +234,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
         if (!updateManifestOverride.empty()) app.GetUpdater().SetManifestUrlOverride(updateManifestOverride);
         if (!updateChannel.empty()) app.GetUpdater().SetChannel(updateChannel);
         app.GetUpdater().SetRelaunchBackground(isBackground);
+        app.SetForceInstalled(forceInstalled);
         if (!app.Create(hInstance, initialShow, showTrayBalloon)) {
             LogTime("app.Create FAILED!");
             exitCode = 1;

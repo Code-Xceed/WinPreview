@@ -4,7 +4,7 @@
 ; =====================================================================
 
 #define MyAppName "WinPreview"
-#define MyAppVersion "1.3.8"
+#define MyAppVersion "1.3.9"
 #define MyAppPublisher "Code-Xceed"
 #define MyAppURL "https://github.com/Code-Xceed/WinPreview"
 #define MyAppExeName "WinPreview.exe"
@@ -43,7 +43,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 CloseApplications=yes
 RestartApplications=no
 DisableProgramGroupPage=yes
-VersionInfoVersion=1.3.8.0
+VersionInfoVersion=1.3.9.0
 VersionInfoCompany={#MyAppPublisher}
 VersionInfoDescription=WinPreview - Apple Preview for Windows
 VersionInfoCopyright=Copyright (C) 2026 Code-Xceed

@@ -140,4 +140,12 @@ int RunUpdateHelper(const std::wstring& installerPath, unsigned long waitPid,
 // Returns 0 when every self-test passes.
 int RunUpdateSelfTest();
 
+// Removes stale helper copies and downloaded installers from %TEMP% (older than
+// six hours) so updates do not leave tens of megabytes behind.
+void CleanupUpdateTempFiles();
+
+// True when this copy has no uninstall entry, i.e. it was unpacked rather than
+// installed. Portable copies get the portable download instead of an installer.
+bool IsPortableInstall();
+
 } // namespace WinPreview

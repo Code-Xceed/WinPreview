@@ -124,6 +124,7 @@ public:
     void SetShowSettings(bool show) { m_showSettings = show; m_settingsAnim = show ? 1.0f : 0.0f; }
     void SetSettingsActiveTab(int tab) { m_settingsActiveTab = tab; }
     UpdateEngine& GetUpdater() { return m_updater; }
+    void SetForceInstalled(bool force) { m_forceInstalled = force; }
     // Update helper relaunch hooks.
     void NotifyUpdateApplied();
     void NotifyUpdateFailed(const std::wstring& code);
@@ -147,6 +148,9 @@ public:
     float m_updateNotesMaxScroll = 0.0f;
     bool m_installOnClose = false;
     bool m_autoDownloadUpdates = true;   // Discord-style: fetch in the background, then ask to restart
+    bool m_isPortable = false;           // unpacked copy: offer the portable build, never run an installer
+    bool m_forceInstalled = false;       // tests drive the installed update path from a staged build
+
     bool m_testAutoDownload = false;   // starts the download as soon as the check finds an update
     void RunMessageLoop();
 

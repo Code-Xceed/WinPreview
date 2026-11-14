@@ -5,6 +5,13 @@ All notable changes to **WinPreview** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.9] - 2026-11-14
+
+### Updates
+- Portable copies are recognised by comparing the running executable's folder with the uninstall entry. They now get a **Download portable build** action (opens the release page) instead of installing a second copy, and never auto-download the installer.
+- Stale `WinPreview-update-helper-*.exe` copies, downloaded `WinPreview-Setup-v*.exe` payloads and leftover manifest temp files are removed from `%TEMP%` at startup once they are six hours old; a successfully applied installer is deleted by the helper immediately.
+- Update-window buttons size to their label, so "Download portable build" is never clipped.
+
 ## [1.3.8] - 2026-11-14
 
 ### Install handoff
