@@ -153,7 +153,6 @@ public:
     bool m_forceInstalled = false;       // tests drive the installed update path from a staged build
     int m_bootAttempts = 0;              // consecutive starts without reaching a healthy state
     bool m_healthyMarked = false;
-    ULONGLONG m_createdTick = 0;
 
     bool m_testAutoDownload = false;   // starts the download as soon as the check finds an update
     void RunMessageLoop();
@@ -279,6 +278,7 @@ private:
     // flips and zoom re-rasterization never block input.
     static const UINT TIMER_PDF_RASTER    = 7003;
     static const UINT TIMER_SEARCH_DEBOUNCE = 7004;
+    static const UINT TIMER_BOOT_HEALTHY   = 7005;
     static const UINT WM_PDF_RASTER_DONE  = WM_USER + 559;
     struct PdfRasterPayload {
         unsigned int gen = 0;

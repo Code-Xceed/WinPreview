@@ -364,10 +364,15 @@ bool AppWindow::Create(HINSTANCE hInstance, int nCmdShow, bool showTrayNotificat
     // this copy was installed or merely unpacked.
     WinPreview::CleanupUpdateTempFiles();
     m_isPortable = WinPreview::IsPortableInstall() && !m_forceInstalled;
-    m_createdTick = GetTickCount64();
 
     WinPreview::LogUpdateDiagnostic(L"boot: attempts=" + std::to_wstring(m_bootAttempts) +
                                     L" portable=" + (m_isPortable ? L"1" : L"0"));
+    if (!m_isPortable && m_bootAttempts > 0) {
+        // One-shot: five seconds of a running window that still responds is
+        // "healthy". A dedicated timer keeps this independent of the parked
+        // animation pump, which can idle for minutes on a static document.
+        SetTimer(m_hwnd, TIMER_BOOT_HEALTHY, 5000, NULL);
+    }
     if (!m_isPortable && m_bootAttempts > 2) {
         std::wstring backupDir, backupVersion;
         if (WinPreview::GetUpdateBackup(backupDir, backupVersion)) {
@@ -9429,6 +9434,22 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         }
 
         case WM_TIMER: {
+            if (wParam == TIMER_BOOT_HEALTHY) {
+                KillTimer(m_hwnd, TIMER_BOOT_HEALTHY);
+                if (!m_healthyMarked) {
+                    m_healthyMarked = true;
+                    HKEY hHealthy = NULL;
+                    if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\WinPreview\\Settings", 0,
+                                      KEY_WRITE, &hHealthy) == ERROR_SUCCESS) {
+                        DWORD zero = 0;
+                        RegSetValueExW(hHealthy, L"BootAttempts", 0, REG_DWORD,
+                                       (const BYTE*)&zero, sizeof(zero));
+                        RegCloseKey(hHealthy);
+                    }
+                }
+                return 0;
+            }
+
             if (wParam == TIMER_PERIODIC_UPDATE) {
                 if (ShouldAutoCheckForUpdates()) {
                     CheckForUpdates(false);
@@ -9495,17 +9516,6 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                     InvalidateRect(m_hwnd, NULL, FALSE);
                 }
                 m_hoverTimeMs = 0;
-            }
-
-            // Five healthy seconds are enough to consider this start successful.
-            if (!m_healthyMarked && m_createdTick != 0 && GetTickCount64() - m_createdTick > 5000) {
-                m_healthyMarked = true;
-                HKEY hHealthy = NULL;
-                if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\WinPreview\\Settings", 0, KEY_WRITE, &hHealthy) == ERROR_SUCCESS) {
-                    DWORD zero = 0;
-                    RegSetValueExW(hHealthy, L"BootAttempts", 0, REG_DWORD, (const BYTE*)&zero, sizeof(zero));
-                    RegCloseKey(hHealthy);
-                }
             }
 
             // High-precision elapsed time calculation for accurate 3-second timer
