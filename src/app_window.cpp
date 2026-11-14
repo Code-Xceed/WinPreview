@@ -6011,14 +6011,11 @@ void AppWindow::SetShowUpdateSheet(bool show) {
 void AppWindow::StartUpdateDownload() {
     if (m_updater.GetState() != UpdateState::UpdateAvailable) return;
     m_updater.DownloadUpdateAsync(
-        [this](int) {
-            EnsureAnimTimer();
-            InvalidateRect(m_hwnd, NULL, FALSE);
+        [this](int pct) {
+            PostMessageW(m_hwnd, WM_UPDATE_DL_PROGRESS, 0, (LPARAM)pct);
         },
         [this](bool ok, const std::wstring&) {
-            if (!ok) ShowToast(L"The download failed. Check your connection and try again.");
-            EnsureAnimTimer();
-            InvalidateRect(m_hwnd, NULL, FALSE);
+            PostMessageW(m_hwnd, WM_UPDATE_DL_DONE, ok ? 1 : 0, 0);
         });
 }
 
@@ -8690,7 +8687,9 @@ LRESULT CALLBACK AppWindow::UpdatePopupWndProc(HWND hwnd, UINT msg, WPARAM wPara
 
         case WM_UPDATE_DL_DONE:
             if (!wParam) {
-                self->ShowToast(L"Download failed. Try again.");
+                self->ShowToast(L"The download failed. Check your connection and try again.");
+            } else if (!IsWindowVisible(self->m_hwnd)) {
+                self->ShowTrayNotification(L"Update ready", L"Restart WinPreview to finish updating.");
             } else {
                 self->ShowToast(L"Update ready. Restart when it suits you.");
             }
@@ -8788,8 +8787,15 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
 
         case WM_UPDATE_DL_DONE: {
             if (!wParam) {
-                ShowToast(L"Download failed.");
+                ShowToast(L"The download failed. Check your connection and try again.");
+            } else if (!IsWindowVisible(m_hwnd)) {
+                // Discord-style: the app can be sitting in the tray when the
+                // background download finishes.
+                ShowTrayNotification(L"Update ready", L"Restart WinPreview to finish updating.");
+            } else {
+                ShowToast(L"Update ready. Restart when it suits you.");
             }
+            EnsureAnimTimer();
             InvalidateRect(m_hwnd, NULL, FALSE);
             return 0;
         }

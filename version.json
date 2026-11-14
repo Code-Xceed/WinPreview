@@ -1,12 +1,12 @@
 {
-  "version": "1.3.4",
+  "version": "1.3.5",
   "release_date": "2026-11-13",
   "channel": "stable",
   "rollout": 100,
   "paused": false,
   "mandatory": false,
   "min_supported": "",
-  "notes": "What's new\n\n- Updates now download quietly in the background as soon as one is available, so the only thing left to do is press Restart.\n- Restart installs the new version silently and reopens WinPreview where you left it.\n- The update window still shows what changed, and Install when I close lets you finish work first.\n- Failed downloads retry automatically and a failed install reopens the previous version with the error code.",
-  "changelog": "WinPreview 1.3.4 - background update downloads: the payload is fetched automatically after the update check, leaving only a Restart action. Silent install, relaunch, signed manifests and install-on-close carry over from 1.3.3.",
+  "notes": "What's new\n\n- Background downloads now tell you when they are ready, including a tray notification while WinPreview is minimised.\n- Restart installs the new version silently and reopens the app where you were.\n- Install when I close is still there if you would rather finish your work first.",
+  "changelog": "WinPreview 1.3.5 - update readiness notification: the tray announces a finished background download when the window is hidden; restart installs silently and relaunches.",
   "download_url": "https://github.com/Code-Xceed/WinPreview/releases/latest/download/WinPreview-Setup-x64.exe"
 }
