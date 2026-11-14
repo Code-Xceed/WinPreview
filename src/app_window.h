@@ -127,6 +127,7 @@ public:
     void SetForceInstalled(bool force) { m_forceInstalled = force; }
     // Update helper relaunch hooks.
     void NotifyUpdateApplied();
+    void NotifyRolledBack();
     void NotifyUpdateFailed(const std::wstring& code);
     // Deterministic update-flow hooks used by tests/update_flow_test.ps1.
     void StartUpdateCheckForTesting();
@@ -150,6 +151,9 @@ public:
     bool m_autoDownloadUpdates = true;   // Discord-style: fetch in the background, then ask to restart
     bool m_isPortable = false;           // unpacked copy: offer the portable build, never run an installer
     bool m_forceInstalled = false;       // tests drive the installed update path from a staged build
+    int m_bootAttempts = 0;              // consecutive starts without reaching a healthy state
+    bool m_healthyMarked = false;
+    ULONGLONG m_createdTick = 0;
 
     bool m_testAutoDownload = false;   // starts the download as soon as the check finds an update
     void RunMessageLoop();
