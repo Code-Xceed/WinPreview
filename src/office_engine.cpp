@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cwchar>
 #include <functional>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -357,6 +358,12 @@ void OfficeEngine::Close() {
     m_title.clear();
     m_errorText.clear();
     m_blocks.clear();
+    m_sheets.clear();
+    m_activeSheet = 0;
+    m_sheetTabRects.clear();
+    m_scrollX = 0.0f;
+    m_targetScrollX = 0.0f;
+    m_sheetContentWidth = 0.0f;
     m_paragraphCount = 0;
     m_tableCount = 0;
     m_headingCount = 0;
@@ -423,6 +430,18 @@ bool OfficeEngine::LoadDocument(const std::wstring& filePath) {
             m_errorText = error.empty() ? L"This document could not be read." : error;
             return false;
         }
+    } else if (ext == L".xlsx") {
+        m_format = OfficeFormat::Xlsx;
+        m_kind = OfficeKind::Sheet;
+        if (!LoadXlsx(filePath)) return false;
+        FinishDocument();
+        return true;
+    } else if (ext == L".ods") {
+        m_format = OfficeFormat::Ods;
+        m_kind = OfficeKind::Sheet;
+        if (!LoadOds(filePath)) return false;
+        FinishDocument();
+        return true;
     } else if (ext == L".doc" || ext == L".xls" || ext == L".ppt") {
         m_kind = OfficeKind::Legacy;
         m_errorText = L"Legacy binary Office files have no text preview yet.";
@@ -590,7 +609,7 @@ bool OfficeEngine::LoadDocument(const std::wstring& filePath) {
         }
     }
 
-    if (m_blocks.empty()) {
+    if (m_kind == OfficeKind::Word && m_blocks.empty()) {
         m_errorText = L"This document has no readable text.";
         return false;
     }
@@ -617,6 +636,17 @@ bool OfficeEngine::UpdateAnimation(float dt) {
 
 std::wstring OfficeEngine::GetPlainText() const {
     std::wstring out;
+    if (m_kind == OfficeKind::Sheet) {
+        if (m_activeSheet < 0 || m_activeSheet >= (int)m_sheets.size()) return out;
+        for (const auto& row : m_sheets[(size_t)m_activeSheet].rows) {
+            for (size_t c = 0; c < row.size(); ++c) {
+                if (c) out.push_back(L'\t');
+                out += row[c].text;
+            }
+            out.push_back(L'\n');
+        }
+        return out;
+    }
     for (const auto& block : m_blocks) {
         if (block.type == OfficeBlockType::Table) {
             for (const auto& row : block.rows) {
@@ -652,6 +682,16 @@ std::wstring OfficeEngine::GetFormatBadge() const {
     }
 
     WCHAR buffer[192];
+    if (m_kind == OfficeKind::Sheet) {
+        size_t rows = 0, columns = 0;
+        if (m_activeSheet >= 0 && m_activeSheet < (int)m_sheets.size()) {
+            rows = m_sheets[(size_t)m_activeSheet].rows.size();
+            columns = m_sheets[(size_t)m_activeSheet].columns;
+        }
+        swprintf_s(buffer, L"%s • %u ROWS × %u COLUMNS • %d SHEETS",
+                   name, (unsigned)rows, (unsigned)columns, (int)m_sheets.size());
+        return buffer;
+    }
     swprintf_s(buffer, L"%s • %u PARAGRAPHS • %u HEADINGS • %u TABLES",
                name, m_paragraphCount, m_headingCount, m_tableCount);
     return buffer;
@@ -720,7 +760,7 @@ void OfficeEngine::Render(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D1_RECT
     float marginX = (std::max)(40.0f, (clientW - 780.0f) / 2.0f);
     float contentW = clientW - marginX * 2.0f;
 
-    float curY = targetRect.top + 32.0f + m_scrollY;
+    float curY = targetRect.top + 32.0f + (m_kind == OfficeKind::Sheet ? 0.0f : m_scrollY);
 
     // Header: icon + title + file path, then a chip row.
     {
@@ -783,13 +823,28 @@ void OfficeEngine::Render(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D1_RECT
         bx += drawPill(formatName, bx, d2d.BrushAccent, true);
 
         WCHAR stats[96];
-        swprintf_s(stats, L"%u PARAGRAPHS • %u TABLES", m_paragraphCount, m_tableCount);
-        bx += drawPill(stats, bx, d2d.BrushText, false);
+        if (m_kind == OfficeKind::Sheet) {
+            size_t rows = 0, columns = 0;
+            if (m_activeSheet >= 0 && m_activeSheet < (int)m_sheets.size()) {
+                rows = m_sheets[(size_t)m_activeSheet].rows.size();
+                columns = m_sheets[(size_t)m_activeSheet].columns;
+            }
+            swprintf_s(stats, L"%u ROWS × %u COLUMNS", (unsigned)rows, (unsigned)columns);
+            bx += drawPill(stats, bx, d2d.BrushText, false);
+            if (m_sheets.size() > 1) {
+                WCHAR sheetPill[48];
+                swprintf_s(sheetPill, L"%d SHEETS", (int)m_sheets.size());
+                drawPill(sheetPill, bx, d2d.BrushGreen, false);
+            }
+        } else {
+            swprintf_s(stats, L"%u PARAGRAPHS • %u TABLES", m_paragraphCount, m_tableCount);
+            bx += drawPill(stats, bx, d2d.BrushText, false);
 
-        if (m_headingCount > 0) {
-            WCHAR headings[64];
-            swprintf_s(headings, L"%u HEADINGS", m_headingCount);
-            drawPill(headings, bx, d2d.BrushGreen, false);
+            if (m_headingCount > 0) {
+                WCHAR headings[64];
+                swprintf_s(headings, L"%u HEADINGS", m_headingCount);
+                drawPill(headings, bx, d2d.BrushGreen, false);
+            }
         }
 
         curY += 40.0f;
@@ -798,6 +853,16 @@ void OfficeEngine::Render(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D1_RECT
         curY += 18.0f;
     }
 
+    if (m_kind == OfficeKind::Sheet) {
+        RenderSheet(rt, d2d, targetRect, marginX, contentW, curY);
+        return;
+    }
+
+    RenderWord(rt, d2d, targetRect, marginX, contentW, curY);
+}
+
+void OfficeEngine::RenderWord(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D1_RECT_F& targetRect,
+                              float marginX, float contentW, float curY) {
     // Body blocks.
     const float rowPad = 8.0f;
     for (auto& block : m_blocks) {
@@ -928,6 +993,602 @@ void OfficeEngine::Render(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D1_RECT
     m_contentHeight = curY - (targetRect.top + 32.0f + m_scrollY);
 }
 
+
+// ---------------------------------------------------------------------------
+// Spreadsheets
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// "AB" -> 27 (0-based column index).
+int ColumnIndexFromRef(const std::wstring& ref) {
+    int value = 0;
+    for (wchar_t ch : ref) {
+        if (ch >= L'A' && ch <= L'Z') value = value * 26 + (ch - L'A' + 1);
+        else if (ch >= L'a' && ch <= L'z') value = value * 26 + (ch - L'a' + 1);
+        else break;
+    }
+    return (std::max)(0, value - 1);
+}
+
+std::wstring ColumnRefFromIndex(int index) {
+    std::wstring out;
+    int value = index + 1;
+    while (value > 0) {
+        int rem = (value - 1) % 26;
+        out.insert(out.begin(), (wchar_t)(L'A' + rem));
+        value = (value - 1) / 26;
+    }
+    return out;
+}
+
+std::wstring TrimNumber(const std::wstring& raw) {
+    std::wstring text = raw;
+    size_t dot = text.find(L'.');
+    if (dot != std::wstring::npos) {
+        while (!text.empty() && text.back() == L'0') text.pop_back();
+        if (!text.empty() && text.back() == L'.') text.pop_back();
+    }
+    return text;
+}
+
+// Excel serial date -> "YYYY-MM-DD" (and " HH:MM" when there is a time part).
+std::wstring ExcelSerialToDate(double serial) {
+    if (serial <= 0.0 || serial > 2958465.0) return L"";
+    int days = (int)floor(serial);
+    double fraction = serial - days;
+
+    SYSTEMTIME base = {};
+    base.wYear = 1899;
+    base.wMonth = 12;
+    base.wDay = 30;
+    FILETIME baseFt = {};
+    if (!SystemTimeToFileTime(&base, &baseFt)) return L"";
+    ULARGE_INTEGER value;
+    value.LowPart = baseFt.dwLowDateTime;
+    value.HighPart = baseFt.dwHighDateTime;
+    value.QuadPart += (ULONGLONG)days * 86400ULL * 10000000ULL;
+
+    FILETIME ft;
+    ft.dwLowDateTime = value.LowPart;
+    ft.dwHighDateTime = value.HighPart;
+    SYSTEMTIME st = {};
+    if (!FileTimeToSystemTime(&ft, &st)) return L"";
+
+    WCHAR buffer[64];
+    int minutes = (int)(fraction * 24.0 * 60.0 + 0.5);
+    if (minutes > 0) {
+        swprintf_s(buffer, L"%04d-%02d-%02d %02d:%02d", st.wYear, st.wMonth, st.wDay,
+                   minutes / 60, minutes % 60);
+    } else {
+        swprintf_s(buffer, L"%04d-%02d-%02d", st.wYear, st.wMonth, st.wDay);
+    }
+    return buffer;
+}
+
+bool LooksLikeDateCode(const std::wstring& code) {
+    if (code.empty()) return false;
+    std::wstring lower = code;
+    std::transform(lower.begin(), lower.end(), lower.begin(), ::towlower);
+    bool hasDate = lower.find(L'y') != std::wstring::npos || lower.find(L'd') != std::wstring::npos;
+    return hasDate;
+}
+
+} // namespace
+
+bool OfficeEngine::LoadXlsx(const std::wstring& filePath) {
+    ArchiveEngine archive;
+    std::string xml;
+    std::wstring error;
+
+    // Shared strings (optional).
+    std::vector<std::wstring> sharedStrings;
+    if (archive.ReadEntry(filePath, L"xl/sharedStrings.xml", 32u * 1024 * 1024, xml, error)) {
+        XmlNode root;
+        if (ParseXml(xml, root, 300000, 60)) {
+            const XmlNode* sst = FindChild(&root, L"sst");
+            if (sst) {
+                for (const auto& item : sst->children) {
+                    if (item->name != L"si") continue;
+                    sharedStrings.push_back(CollapseWhitespace(TextContent(item.get())));
+                }
+            }
+        }
+    }
+
+    // Cell style -> numFmtId -> date formatting.
+    std::vector<bool> dateStyles;
+    {
+        std::string stylesXml;
+        if (archive.ReadEntry(filePath, L"xl/styles.xml", 8u * 1024 * 1024, stylesXml, error)) {
+            XmlNode styles;
+            if (ParseXml(stylesXml, styles, 60000, 40)) {
+                std::map<int, std::wstring> customFormats;
+                const XmlNode* styleSheet = FindChild(&styles, L"styleSheet");
+                const XmlNode* numFmts = styleSheet ? FindChild(styleSheet, L"numFmts") : nullptr;
+                if (numFmts) {
+                    for (const auto& fmt : numFmts->children) {
+                        if (fmt->name != L"numFmt") continue;
+                        const std::wstring* id = fmt->Attr(L"numFmtId");
+                        const std::wstring* code = fmt->Attr(L"formatCode");
+                        if (id && code) customFormats[_wtoi(id->c_str())] = *code;
+                    }
+                }
+                const XmlNode* cellXfs = styleSheet ? FindChild(styleSheet, L"cellXfs") : nullptr;
+                if (cellXfs) {
+                    for (const auto& xf : cellXfs->children) {
+                        if (xf->name != L"xf") continue;
+                        int id = 0;
+                        if (const std::wstring* value = xf->Attr(L"numFmtId")) id = _wtoi(value->c_str());
+                        bool isDate = (id >= 14 && id <= 22) || (id >= 45 && id <= 47);
+                        auto custom = customFormats.find(id);
+                        if (!isDate && custom != customFormats.end()) isDate = LooksLikeDateCode(custom->second);
+                        dateStyles.push_back(isDate);
+                    }
+                }
+            }
+        }
+    }
+
+    // Workbook sheet list + relationships.
+    if (!archive.ReadEntry(filePath, L"xl/workbook.xml", 8u * 1024 * 1024, xml, error)) {
+        m_errorText = error.empty() ? L"This workbook has no sheet list." : error;
+        return false;
+    }
+    XmlNode workbook;
+    if (!ParseXml(xml, workbook, 100000, 60)) {
+        m_errorText = L"This workbook's XML could not be parsed.";
+        return false;
+    }
+
+    std::vector<std::pair<std::wstring, std::wstring>> sheetRefs;  // name, rId
+    const XmlNode* sheetsNode = FindDescendant(&workbook, L"sheets", 6);
+    if (sheetsNode) {
+        for (const auto& sheet : sheetsNode->children) {
+            if (sheet->name != L"sheet") continue;
+            std::wstring name = L"Sheet";
+            if (const std::wstring* value = sheet->Attr(L"name")) name = *value;
+            std::wstring rid;
+            if (const std::wstring* value = sheet->Attr(L"r:id")) rid = *value;
+            if (rid.empty()) {
+                if (const std::wstring* value = sheet->Attr(L"id")) rid = *value;
+            }
+            sheetRefs.emplace_back(name, rid);
+        }
+    }
+    if (sheetRefs.empty()) {
+        m_errorText = L"This workbook has no sheets.";
+        return false;
+    }
+
+    std::map<std::wstring, std::wstring> relTargets;
+    {
+        std::string relsXml;
+        bool relsRead = archive.ReadEntry(filePath, L"xl/_rels/workbook.xml.rels", 4u * 1024 * 1024, relsXml, error);
+        if (relsRead) {
+            XmlNode rels;
+            if (ParseXml(relsXml, rels, 20000, 30)) {
+                const XmlNode* relationships = FindChild(&rels, L"Relationships");
+                if (relationships) {
+                    for (const auto& rel : relationships->children) {
+                        if (rel->name != L"Relationship") continue;
+                        const std::wstring* id = rel->Attr(L"Id");
+                        const std::wstring* target = rel->Attr(L"Target");
+                        if (id && target) relTargets[*id] = *target;
+                    }
+                }
+            }
+        }
+    }
+
+    const size_t kMaxSheets = 40;
+    const size_t kMaxRows = 500;
+    const size_t kMaxColumns = 64;
+
+    for (const auto& ref : sheetRefs) {
+        if (m_sheets.size() >= kMaxSheets) break;
+        std::wstring target;
+        auto it = relTargets.find(ref.second);
+        if (it != relTargets.end()) target = it->second;
+        if (target.empty()) continue;
+
+        std::wstring entry = target;
+        if (entry.rfind(L"/", 0) == 0) entry = entry.substr(1);
+        if (entry.rfind(L"xl/", 0) != 0) entry = L"xl/" + entry;
+
+        std::string sheetXml;
+        if (!archive.ReadEntry(filePath, entry, 64u * 1024 * 1024, sheetXml, error)) {
+            continue;
+        }
+
+        XmlNode sheetRoot;
+        if (!ParseXml(sheetXml, sheetRoot, 400000, 80)) {
+            continue;
+        }
+
+        OfficeSheet sheet;
+        sheet.name = ref.first;
+
+        const XmlNode* sheetData = FindDescendant(&sheetRoot, L"sheetData", 8);
+        if (!sheetData) {
+            m_sheets.push_back(std::move(sheet));
+            continue;
+        }
+
+        for (const auto& rowNode : sheetData->children) {
+            if (rowNode->name != L"row") continue;
+            if (sheet.rows.size() >= kMaxRows) break;
+
+            int rowNumber = (int)sheet.rows.size();
+            if (const std::wstring* value = rowNode->Attr(L"r")) rowNumber = (std::max)(0, _wtoi(value->c_str()) - 1);
+            while ((int)sheet.rows.size() < rowNumber && sheet.rows.size() < kMaxRows) {
+                sheet.rows.emplace_back();
+            }
+
+            std::vector<OfficeCell> cells;
+            int nextColumn = 0;
+            for (const auto& cellNode : rowNode->children) {
+                if (cellNode->name != L"c") continue;
+                int column = nextColumn;
+                if (const std::wstring* refAttr = cellNode->Attr(L"r")) column = ColumnIndexFromRef(*refAttr);
+                if (column >= (int)kMaxColumns) break;
+                nextColumn = column + 1;
+                while ((int)cells.size() < column) cells.emplace_back();
+
+                std::wstring type;
+                if (const std::wstring* t = cellNode->Attr(L"t")) type = *t;
+
+                std::wstring raw;
+                if (const XmlNode* v = FindChild(cellNode.get(), L"v")) raw = TextContent(v);
+                else if (const XmlNode* is = FindChild(cellNode.get(), L"is")) raw = TextContent(is);
+
+                OfficeCell cell;
+                if (type == L"s") {
+                    int index = _wtoi(raw.c_str());
+                    if (index >= 0 && index < (int)sharedStrings.size()) cell.text = sharedStrings[index];
+                } else if (type == L"b") {
+                    cell.text = (raw == L"1") ? L"TRUE" : L"FALSE";
+                } else if (type == L"str" || type == L"inlineStr" || type == L"e") {
+                    cell.text = CollapseWhitespace(raw);
+                } else if (!raw.empty()) {
+                    double value = _wtof(raw.c_str());
+                    int styleIndex = -1;
+                    if (const std::wstring* sAttr = cellNode->Attr(L"s")) styleIndex = _wtoi(sAttr->c_str());
+                    bool isDate = styleIndex >= 0 && styleIndex < (int)dateStyles.size() && dateStyles[styleIndex];
+                    if (isDate) {
+                        cell.text = ExcelSerialToDate(value);
+                    } else {
+                        cell.text = TrimNumber(raw);
+                    }
+                    cell.numeric = !isDate;
+                }
+                cells.push_back(std::move(cell));
+            }
+
+            sheet.columns = (std::max)(sheet.columns, cells.size());
+            sheet.rows.push_back(std::move(cells));
+        }
+
+        // Trim trailing empty rows/columns so the grid is as small as possible.
+        while (!sheet.rows.empty()) {
+            bool empty = true;
+            for (const auto& cell : sheet.rows.back()) {
+                if (!cell.text.empty()) { empty = false; break; }
+            }
+            if (!empty) break;
+            sheet.rows.pop_back();
+        }
+        for (auto& row : sheet.rows) {
+            while (!row.empty() && row.back().text.empty()) row.pop_back();
+        }
+        sheet.columns = 0;
+        for (const auto& row : sheet.rows) sheet.columns = (std::max)(sheet.columns, row.size());
+
+        m_sheets.push_back(std::move(sheet));
+    }
+
+    if (m_sheets.empty()) {
+        m_errorText = L"No sheets in this workbook could be read.";
+        return false;
+    }
+    return true;
+}
+
+bool OfficeEngine::LoadOds(const std::wstring& filePath) {
+    ArchiveEngine archive;
+    std::string xml;
+    std::wstring error;
+    if (!archive.ReadEntry(filePath, L"content.xml", 64u * 1024 * 1024, xml, error)) {
+        m_errorText = error.empty() ? L"This spreadsheet could not be read." : error;
+        return false;
+    }
+
+    XmlNode root;
+    if (!ParseXml(xml, root, 400000, 120)) {
+        m_errorText = L"This spreadsheet's XML could not be parsed.";
+        return false;
+    }
+
+    const XmlNode* doc = FindChild(&root, L"office:document-content");
+    const XmlNode* body = doc ? FindChild(doc, L"office:body") : nullptr;
+    const XmlNode* spreadsheet = body ? FindChild(body, L"office:spreadsheet") : nullptr;
+    if (!spreadsheet) {
+        m_errorText = L"This spreadsheet has no sheets.";
+        return false;
+    }
+
+    const size_t kMaxSheets = 40;
+    const size_t kMaxRows = 500;
+    const size_t kMaxColumns = 64;
+
+    for (const auto& tableNode : spreadsheet->children) {
+        if (tableNode->name != L"table:table") continue;
+        if (m_sheets.size() >= kMaxSheets) break;
+
+        OfficeSheet sheet;
+        if (const std::wstring* name = tableNode->Attr(L"table:name")) sheet.name = *name;
+        if (sheet.name.empty()) sheet.name = L"Sheet" + std::to_wstring(m_sheets.size() + 1);
+
+        for (const auto& rowNode : tableNode->children) {
+            if (rowNode->name != L"table:table-row") continue;
+            if (sheet.rows.size() >= kMaxRows) break;
+
+            int repeatRows = 1;
+            if (const std::wstring* repeat = rowNode->Attr(L"table:number-rows-repeated")) {
+                repeatRows = (std::max)(1, (std::min)(16, _wtoi(repeat->c_str())));
+            }
+
+            std::vector<OfficeCell> cells;
+            for (const auto& cellNode : rowNode->children) {
+                if (cellNode->name != L"table:table-cell" && cellNode->name != L"table:covered-table-cell") continue;
+
+                int repeatCols = 1;
+                if (const std::wstring* repeat = cellNode->Attr(L"table:number-columns-repeated")) {
+                    repeatCols = (std::max)(1, (std::min)(32, _wtoi(repeat->c_str())));
+                }
+
+                std::wstring type;
+                if (const std::wstring* value = cellNode->Attr(L"office:value-type")) type = *value;
+
+                OfficeCell cell;
+                if (type == L"date") {
+                    if (const std::wstring* value = cellNode->Attr(L"office:date-value")) {
+                        cell.text = *value;
+                        if (cell.text.size() > 10) cell.text.resize(10);
+                    }
+                } else if (type == L"float" || type == L"percentage" || type == L"currency") {
+                    if (const std::wstring* value = cellNode->Attr(L"office:value")) {
+                        cell.text = TrimNumber(*value);
+                        cell.numeric = true;
+                    }
+                } else if (type == L"boolean") {
+                    if (const std::wstring* value = cellNode->Attr(L"office:boolean-value")) {
+                        cell.text = (*value == L"true") ? L"TRUE" : L"FALSE";
+                    }
+                } else if (type == L"time") {
+                    if (const std::wstring* value = cellNode->Attr(L"office:time-value")) cell.text = *value;
+                }
+                if (cell.text.empty()) {
+                    cell.text = CollapseWhitespace(TextContent(cellNode.get()));
+                }
+
+                for (int i = 0; i < repeatCols && cells.size() < kMaxColumns; ++i) {
+                    cells.push_back(cell);
+                }
+            }
+
+            while (!cells.empty() && cells.back().text.empty()) cells.pop_back();
+            for (int i = 0; i < repeatRows && sheet.rows.size() < kMaxRows; ++i) {
+                sheet.rows.push_back(cells);
+            }
+        }
+
+        while (!sheet.rows.empty()) {
+            bool empty = true;
+            for (const auto& cell : sheet.rows.back()) {
+                if (!cell.text.empty()) { empty = false; break; }
+            }
+            if (!empty) break;
+            sheet.rows.pop_back();
+        }
+        for (auto& row : sheet.rows) {
+            while (!row.empty() && row.back().text.empty()) row.pop_back();
+        }
+        sheet.columns = 0;
+        for (const auto& row : sheet.rows) sheet.columns = (std::max)(sheet.columns, row.size());
+
+        m_sheets.push_back(std::move(sheet));
+    }
+
+    if (m_sheets.empty()) {
+        m_errorText = L"No sheets in this spreadsheet could be read.";
+        return false;
+    }
+    return true;
+}
+
+void OfficeEngine::SetActiveSheet(int index) {
+    if (index < 0 || index >= (int)m_sheets.size()) return;
+    m_activeSheet = index;
+    m_scrollX = 0.0f;
+    m_targetScrollX = 0.0f;
+    m_scrollY = 0.0f;
+    m_targetScrollY = 0.0f;
+}
+
+std::wstring OfficeEngine::SheetName(int index) const {
+    if (index < 0 || index >= (int)m_sheets.size()) return L"";
+    return m_sheets[(size_t)index].name;
+}
+
+bool OfficeEngine::GetSheetTabRect(int index, D2D1_RECT_F& out) const {
+    for (const auto& entry : m_sheetTabRects) {
+        if (entry.second == index) {
+            out = entry.first;
+            return true;
+        }
+    }
+    return false;
+}
+
+int OfficeEngine::HitTestSheetTab(float x, float y) const {
+    for (const auto& entry : m_sheetTabRects) {
+        if (x >= entry.first.left && x <= entry.first.right &&
+            y >= entry.first.top && y <= entry.first.bottom) {
+            return entry.second;
+        }
+    }
+    return -1;
+}
+
+void OfficeEngine::ScrollHorizontal(float dx) {
+    float maxScroll = (std::max)(0.0f, m_sheetContentWidth - 600.0f);
+    m_scrollX += dx;
+    if (m_scrollX > 0.0f) m_scrollX = 0.0f;
+    if (m_scrollX < -maxScroll) m_scrollX = -maxScroll;
+    m_targetScrollX = m_scrollX;
+}
+
+void OfficeEngine::RenderSheet(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D1_RECT_F& rect,
+                                float marginX, float contentW, float curY) {
+    (void)rect;
+    if (m_sheets.empty()) return;
+    if (m_activeSheet < 0 || m_activeSheet >= (int)m_sheets.size()) m_activeSheet = 0;
+
+    m_sheetTabRects.clear();
+
+    // Sheet tabs.
+    {
+        float tabX = marginX;
+        float tabY = curY;
+        for (int i = 0; i < (int)m_sheets.size(); ++i) {
+            const std::wstring& name = m_sheets[(size_t)i].name;
+            std::wstring label = name;
+            if (label.size() > 22) label = label.substr(0, 20) + L"…";
+            float tabW = 26.0f + (float)label.length() * 7.2f;
+            if (tabX + tabW > marginX + contentW - 8.0f) break;
+
+            bool active = (i == m_activeSheet);
+            D2D1_ROUNDED_RECT tab = D2D1::RoundedRect(
+                D2D1::RectF(tabX, tabY, tabX + tabW, tabY + 28.0f), 6.0f, 6.0f);
+            rt->FillRoundedRectangle(tab, active ? d2d.BrushCard : (d2d.BrushChipBg ? d2d.BrushChipBg : d2d.BrushCard));
+            rt->DrawRoundedRectangle(tab, active ? (ID2D1Brush*)d2d.BrushAccent : (ID2D1Brush*)d2d.BrushBorder, 1.0f);
+
+            IDWriteTextLayout* layout = nullptr;
+            d2d.GetDWriteFactory()->CreateTextLayout(label.c_str(), (UINT32)label.length(),
+                m_formatBody ? m_formatBody : d2d.FontBody, tabW - 16.0f, 28.0f, &layout);
+            if (layout) {
+                layout->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+                layout->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+                rt->DrawTextLayout(D2D1::Point2F(tabX + 8.0f, tabY), layout,
+                                   active ? d2d.BrushText : d2d.BrushTextMuted);
+                layout->Release();
+            }
+            m_sheetTabRects.emplace_back(
+                D2D1::RectF(tabX, tabY, tabX + tabW, tabY + 28.0f), i);
+            tabX += tabW + 8.0f;
+        }
+        curY += 44.0f;
+    }
+
+    const OfficeSheet& sheet = m_sheets[(size_t)m_activeSheet];
+    if (sheet.rows.empty()) {
+        rt->DrawText(L"This sheet is empty.", 20, d2d.FontBody,
+                     D2D1::RectF(marginX, curY + 20.0f, marginX + contentW, curY + 60.0f), d2d.BrushTextMuted);
+        m_contentHeight = 200.0f;
+        return;
+    }
+
+    const float gutterW = 52.0f;
+    const float rowH = 24.0f;
+    const float colW = 118.0f;
+
+    size_t columns = (std::max)(sheet.columns, (size_t)1);
+    m_sheetContentWidth = gutterW + (float)columns * colW;
+
+    float gridTop = curY + 8.0f;
+    float gridBottom = rect.bottom - 12.0f;
+    if (gridBottom <= gridTop + rowH) gridBottom = gridTop + rowH;
+
+    rt->PushAxisAlignedClip(D2D1::RectF(marginX, gridTop, marginX + contentW, gridBottom),
+                            D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+
+    float originX = marginX + m_scrollX;
+    float originY = gridTop + m_scrollY;
+
+    // Column header band (letters).
+    for (size_t c = 0; c < columns; ++c) {
+        float x = originX + gutterW + (float)c * colW;
+        if (x + colW < marginX || x > marginX + contentW) continue;
+        D2D1_RECT_F head = D2D1::RectF(x, originY, x + colW, originY + rowH);
+        rt->FillRectangle(head, d2d.BrushCard);
+        std::wstring letter = ColumnRefFromIndex((int)c);
+        IDWriteTextLayout* layout = nullptr;
+        d2d.GetDWriteFactory()->CreateTextLayout(letter.c_str(), (UINT32)letter.length(),
+            d2d.FontBadge ? d2d.FontBadge : d2d.FontCaption, colW - 12.0f, rowH, &layout);
+        if (layout) {
+            layout->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+            layout->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+            rt->DrawTextLayout(D2D1::Point2F(x, originY), layout, d2d.BrushTextMuted);
+            layout->Release();
+        }
+    }
+
+    // Cells.
+    IDWriteTextFormat* cellFont = m_formatBody ? m_formatBody : d2d.FontBody;
+    for (size_t r = 0; r < sheet.rows.size(); ++r) {
+        float y = originY + rowH + (float)r * rowH;
+        if (y > gridBottom) break;
+
+        // Row number gutter.
+        D2D1_RECT_F gutter = D2D1::RectF(originX, y, originX + gutterW, y + rowH);
+        rt->FillRectangle(gutter, d2d.BrushCard);
+        WCHAR number[16];
+        swprintf_s(number, L"%u", (unsigned)(r + 1));
+        IDWriteTextLayout* numLayout = nullptr;
+        d2d.GetDWriteFactory()->CreateTextLayout(number, (UINT32)wcslen(number),
+            d2d.FontBadge ? d2d.FontBadge : d2d.FontCaption, gutterW - 10.0f, rowH, &numLayout);
+        if (numLayout) {
+            numLayout->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
+            numLayout->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+            rt->DrawTextLayout(D2D1::Point2F(originX, y), numLayout, d2d.BrushTextMuted);
+            numLayout->Release();
+        }
+
+        const auto& row = sheet.rows[r];
+        for (size_t c = 0; c < row.size(); ++c) {
+            const OfficeCell& cell = row[c];
+            if (cell.text.empty()) continue;
+            float x = originX + gutterW + (float)c * colW;
+            if (x + colW < marginX || x > marginX + contentW) continue;
+
+            if (c % 2 == 1) {
+                rt->FillRectangle(D2D1::RectF(x, y, x + colW, y + rowH), d2d.BrushCard);
+            }
+            rt->DrawLine(D2D1::Point2F(x, y), D2D1::Point2F(x, y + rowH), d2d.BrushBorderSubtle, 1.0f);
+
+            IDWriteTextLayout* layout = nullptr;
+            d2d.GetDWriteFactory()->CreateTextLayout(cell.text.c_str(), (UINT32)cell.text.length(),
+                cellFont, colW - 14.0f, rowH, &layout);
+            if (layout) {
+                layout->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+                layout->SetTextAlignment(cell.numeric ? DWRITE_TEXT_ALIGNMENT_TRAILING : DWRITE_TEXT_ALIGNMENT_LEADING);
+                layout->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+                DWRITE_TRIMMING trimming = { DWRITE_TRIMMING_GRANULARITY_CHARACTER, 0, 0 };
+                layout->SetTrimming(&trimming, nullptr);
+                rt->DrawTextLayout(D2D1::Point2F(x + 7.0f, y), layout, d2d.BrushText);
+                layout->Release();
+            }
+        }
+        rt->DrawLine(D2D1::Point2F(originX, y + rowH), D2D1::Point2F(originX + gutterW + (float)columns * colW, y + rowH),
+                     d2d.BrushBorderSubtle, 1.0f);
+    }
+
+    rt->PopAxisAlignedClip();
+
+    m_contentHeight = (float)sheet.rows.size() * rowH + 120.0f;
+}
+
 int RunOfficeDump(const std::wstring& filePath) {
     OfficeEngine engine;
     bool loaded = engine.LoadDocument(filePath);
@@ -938,6 +1599,32 @@ int RunOfficeDump(const std::wstring& filePath) {
 
     wprintf(L"paragraphs=%u headings=%u tables=%u\n",
             engine.ParagraphCount(), engine.HeadingCount(), engine.TableCount());
+
+    if (engine.GetKind() == OfficeKind::Sheet) {
+        wprintf(L"sheets=%d active=%d\n", engine.SheetCount(), engine.ActiveSheet());
+        for (int i = 0; i < engine.SheetCount(); ++i) {
+            wprintf(L"sheet[%d] name='%ls'\n", i, engine.SheetName(i).c_str());
+        }
+        const OfficeSheet* sheet = engine.GetSheet(engine.ActiveSheet());
+        if (sheet) {
+            wprintf(L"rows=%u columns=%u\n", (unsigned)sheet->rows.size(), (unsigned)sheet->columns);
+            auto printRow = [](const std::vector<OfficeCell>& row) {
+                std::wstring line;
+                for (size_t c = 0; c < row.size(); ++c) {
+                    if (c) line += L"\t";
+                    line += row[c].text;
+                }
+                wprintf(L"%ls\n", line.c_str());
+            };
+            size_t maxRows = (std::min)(sheet->rows.size(), (size_t)8);
+            for (size_t r = 0; r < maxRows; ++r) printRow(sheet->rows[r]);
+            if (sheet->rows.size() > maxRows) {
+                wprintf(L"... (%u more rows)\n", (unsigned)(sheet->rows.size() - maxRows));
+                printRow(sheet->rows.back());
+            }
+        }
+        return 0;
+    }
 
     const std::wstring text = engine.GetPlainText();
     wprintf(L"--- plain text ---\n%ls\n", text.c_str());

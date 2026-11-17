@@ -58,6 +58,17 @@ struct OfficeBlock {
     float height = 0.0f;                        // measured while rendering
 };
 
+struct OfficeCell {
+    std::wstring text;
+    bool numeric = false;
+};
+
+struct OfficeSheet {
+    std::wstring name;
+    std::vector<std::vector<OfficeCell>> rows;
+    size_t columns = 0;
+};
+
 class OfficeEngine {
 public:
     OfficeEngine();
@@ -74,6 +85,19 @@ public:
 
     bool IsLoaded() const { return m_isLoaded; }
     OfficeKind GetKind() const { return m_kind; }
+
+    // Sheets
+    int SheetCount() const { return (int)m_sheets.size(); }
+    int ActiveSheet() const { return m_activeSheet; }
+    void SetActiveSheet(int index);
+    std::wstring SheetName(int index) const;
+    const OfficeSheet* GetSheet(int index) const {
+        if (index < 0 || index >= (int)m_sheets.size()) return nullptr;
+        return &m_sheets[(size_t)index];
+    }
+    void ScrollHorizontal(float dx);
+    int HitTestSheetTab(float x, float y) const;
+    bool GetSheetTabRect(int index, D2D1_RECT_F& out) const;
     OfficeFormat GetFormat() const { return m_format; }
     const std::wstring& GetTitle() const { return m_title; }
     const std::wstring& GetErrorText() const { return m_errorText; }
@@ -89,6 +113,10 @@ public:
 private:
     void AddParagraphText(const std::wstring& text, const std::wstring& style, bool listItem, int level);
     void FinishDocument();
+    bool LoadXlsx(const std::wstring& filePath);
+    bool LoadOds(const std::wstring& filePath);
+    void RenderWord(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D1_RECT_F& rect, float marginX, float contentW, float curY);
+    void RenderSheet(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D1_RECT_F& rect, float marginX, float contentW, float curY);
 
     bool m_isLoaded = false;
     OfficeKind m_kind = OfficeKind::None;
@@ -97,6 +125,12 @@ private:
     std::wstring m_title;
     std::wstring m_errorText;
     std::vector<OfficeBlock> m_blocks;
+    std::vector<OfficeSheet> m_sheets;
+    int m_activeSheet = 0;
+    std::vector<std::pair<D2D1_RECT_F, int>> m_sheetTabRects;
+    float m_scrollX = 0.0f;
+    float m_targetScrollX = 0.0f;
+    float m_sheetContentWidth = 0.0f;
     UINT32 m_paragraphCount = 0;
     UINT32 m_tableCount = 0;
     UINT32 m_headingCount = 0;

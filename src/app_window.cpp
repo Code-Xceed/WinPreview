@@ -2473,11 +2473,11 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
     } else if (m_docType == DocumentType::Spreadsheet) {
         widthFull = 473.0f; widthStandard = 354.0f; widthCompact = 222.0f;
         thresholdFull = 520.0f; thresholdCompact = 390.0f;
-    } else if (m_docType == DocumentType::Office || m_docType == DocumentType::Svg ||
-               m_docType == DocumentType::OfficeDoc) {
+    } else if (m_docType == DocumentType::Office || m_docType == DocumentType::Svg) {
         widthFull = 381.0f; widthStandard = 200.0f; widthCompact = 126.0f;
         thresholdFull = 430.0f; thresholdCompact = 240.0f;
-    } else if (m_docType == DocumentType::Markdown || m_docType == DocumentType::Notebook) {
+    } else if (m_docType == DocumentType::Markdown || m_docType == DocumentType::Notebook ||
+               m_docType == DocumentType::OfficeDoc) {
         widthFull = 179.0f; widthStandard = 77.0f; widthCompact = 77.0f;
         thresholdFull = 230.0f; thresholdCompact = 0.0f;
     } else if (m_docType == DocumentType::Font) {
@@ -3468,8 +3468,7 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
     // =========================================================================
     // DOCK RENDERING: OFFICE / PRESENTATION SLIDE MODE
     // =========================================================================
-    else if (m_docType == DocumentType::Office || m_docType == DocumentType::Svg ||
-             m_docType == DocumentType::OfficeDoc) {
+    else if (m_docType == DocumentType::Office || m_docType == DocumentType::Svg) {
         bool isFull = (dockTier == 2);
         bool isCompact = (dockTier == 0);
 
@@ -3605,7 +3604,8 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
         // =========================================================================
     // DOCK RENDERING: MARKDOWN & NOTEBOOK MODE
     // =========================================================================
-    else if (m_docType == DocumentType::Markdown || m_docType == DocumentType::Notebook) {
+    else if (m_docType == DocumentType::Markdown || m_docType == DocumentType::Notebook ||
+             m_docType == DocumentType::OfficeDoc) {
         bool isFull = (dockTier == 2);
 
         m_btnCopyTextRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
@@ -3788,7 +3788,8 @@ std::vector<AppWindow::OverflowMenuItem> AppWindow::GetCurrentOverflowItems() co
         items.push_back({ 0, ICON_MORE, L"", L"", true, false, false }); // divider
         items.push_back({ BTN_SETTINGS, ICON_SETTINGS, L"Settings", L"Ctrl+,", false, false, true });
         items.push_back({ BTN_TOOLBAR_FS, ICON_FULLSCREEN, m_isFullscreen ? L"Exit fullscreen" : L"Fullscreen", L"F", false, false, true });
-    } else if (m_docType == DocumentType::Markdown || m_docType == DocumentType::Notebook) {
+    } else if (m_docType == DocumentType::Markdown || m_docType == DocumentType::Notebook ||
+               m_docType == DocumentType::OfficeDoc) {
         items.push_back({ BTN_COPY_TEXT, ICON_COPY, L"Copy all text", L"Ctrl+C", false, false, true });
         items.push_back({ 0, ICON_MORE, L"", L"", true, false, false }); // divider
         items.push_back({ BTN_INFO, ICON_INFO, L"File info", L"I", false, false, true });
@@ -9489,6 +9490,26 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             if (m_docType != DocumentType::OfficeDoc) return 0;
             return (LRESULT)((m_office.ParagraphCount() & 0xFFFF) | ((m_office.TableCount() & 0xFFFF) << 16));
         }
+        case WM_APP + 259: /* Diagnostic: active sheet index */ {
+            return (LRESULT)(m_docType == DocumentType::OfficeDoc ? m_office.ActiveSheet() : -1);
+        }
+        case WM_APP + 260: /* Diagnostic: sheet count */ {
+            return (LRESULT)(m_docType == DocumentType::OfficeDoc ? m_office.SheetCount() : 0);
+        }
+        case WM_APP + 263: /* Diagnostic: sheet tab rect by index (wParam) */ {
+            D2D1_RECT_F r = {};
+            if (m_docType != DocumentType::OfficeDoc || !m_office.GetSheetTabRect((int)wParam, r)) return 0;
+            auto lane = [](float v) -> unsigned long long {
+                int i = (int)(v + 0.5f);
+                if (i < 0) i = 0;
+                if (i > 65535) i = 65535;
+                return (unsigned long long)(unsigned short)i;
+            };
+            return (LRESULT)(lane(r.left) | (lane(r.top) << 16) | (lane(r.right) << 32) | (lane(r.bottom) << 48));
+        }
+        case WM_APP + 262: /* Diagnostic: office kind (1 word, 2 sheet) */ {
+            return (LRESULT)(m_docType == DocumentType::OfficeDoc ? (int)m_office.GetKind() : 0);
+        }
         case WM_APP + 258: /* Diagnostic: office heading count */ {
             if (m_docType != DocumentType::OfficeDoc) return 0;
             return (LRESULT)m_office.HeadingCount();
@@ -10328,7 +10349,10 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             } else if (cmdId == BTN_CUT) {
                 if (m_text.Cut(m_hwnd)) { UpdateWindowTitle(); ShowToast(L"Cut to clipboard"); InvalidateRect(m_hwnd, NULL, FALSE); }
             } else if (cmdId == BTN_COPY_TEXT) {
-                if (m_docType == DocumentType::Spreadsheet && m_text.IsTableView()) {
+                if (m_docType == DocumentType::OfficeDoc) {
+                    CopyTextToClipboard(m_hwnd, m_office.GetPlainText());
+                    ShowToast(m_office.GetKind() == OfficeKind::Sheet ? L"Sheet copied" : L"Document text copied");
+                } else if (m_docType == DocumentType::Spreadsheet && m_text.IsTableView()) {
                     CopyTextToClipboard(m_hwnd, m_text.GetAllText());
                     ShowToast(L"Table copied");
                 } else {
@@ -10419,7 +10443,11 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             }
 
             if (m_docType == DocumentType::OfficeDoc) {
-                m_office.Scroll((float)delta * 0.8f);
+                if (m_office.GetKind() == OfficeKind::Sheet && (GetKeyState(VK_SHIFT) & 0x8000)) {
+                    m_office.ScrollHorizontal((float)delta * 0.9f);
+                } else {
+                    m_office.Scroll((float)delta * 0.8f);
+                }
                 InvalidateRect(m_hwnd, NULL, FALSE);
                 return 0;
             }
@@ -10535,6 +10563,18 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                     return 0;
                 }
                 return 0;
+            }
+
+            // Spreadsheet view: sheet tabs sit above the grid.
+            if (m_docType == DocumentType::OfficeDoc && m_office.GetKind() == OfficeKind::Sheet) {
+                int tab = m_office.HitTestSheetTab(pt.x, pt.y);
+                if (tab >= 0) {
+                    m_office.SetActiveSheet(tab);
+                    m_formatBadgeText = m_office.GetFormatBadge();
+                    InvalidateRect(m_hwnd, NULL, FALSE);
+                    UpdateWindow(m_hwnd);
+                    return 0;
+                }
             }
 
             // Archive view: breadcrumb first (it sits above the rows), then rows.
