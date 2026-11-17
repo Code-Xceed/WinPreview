@@ -8,6 +8,7 @@
 #include "font_engine.h"
 #include "folder_engine.h"
 #include "markdown_engine.h"
+#include "office_engine.h"
 #include "system_engine.h"
 #include "explorer_hook.h"
 #include "update_engine.h"
@@ -43,7 +44,8 @@ enum class DocumentType {
     Binary,
     Shortcut,
     Certificate,
-    Unsupported
+    Unsupported,
+    OfficeDoc
 };
 
 struct ThumbnailItem {
@@ -181,6 +183,7 @@ private:
     FontEngine m_font;
     FolderEngine m_folder;
     MarkdownEngine m_md;
+    OfficeEngine m_office;
     SystemEngine m_system;
 
     // Current State

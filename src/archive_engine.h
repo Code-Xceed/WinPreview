@@ -49,6 +49,11 @@ public:
                        std::wstring& displayName,
                        std::wstring& errorText);
 
+    // Reads one entry into memory (no temporary file). Used by the Office
+    // engine to pull word/document.xml and friends out of OOXML/ODF packages.
+    bool ReadEntry(const std::wstring& archivePath, const std::wstring& entryPath,
+                   size_t maxBytes, std::string& out, std::wstring& error);
+
     // Deletes expanded temporaries this session created.
     void Cleanup();
 

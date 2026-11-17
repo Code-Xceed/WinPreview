@@ -588,6 +588,42 @@ ArchiveResult ArchiveEngine::Load(const std::wstring& archivePath,
     return ArchiveResult::Ok;
 }
 
+bool ArchiveEngine::ReadEntry(const std::wstring& archivePath, const std::wstring& entryPath,
+                              size_t maxBytes, std::string& out, std::wstring& error) {
+    out.clear();
+    error.clear();
+    if (!IsAvailable()) {
+        error = L"The archive reader is missing from this installation.";
+        return false;
+    }
+    if (GetFileAttributesW(archivePath.c_str()) == INVALID_FILE_ATTRIBUTES) {
+        error = L"The file could not be opened.";
+        return false;
+    }
+
+    std::wstring command = L"\"" + m_backendPath + L"\" e -so -bd -y -sccUTF-8 \"" +
+                           archivePath + L"\" \"" + entryPath + L"\"";
+    ProcessOutput output;
+    if (!RunCapture(command, L"", kListTimeoutMs, output)) {
+        error = L"The archive reader could not be started.";
+        return false;
+    }
+    if (output.timedOut || output.tooLarge) {
+        error = L"This part is too large to read.";
+        return false;
+    }
+    if (output.exitCode != 0 || output.out.empty()) {
+        error = L"This part is missing from the file.";
+        return false;
+    }
+    if (output.out.size() > maxBytes) {
+        error = L"This part is too large to read.";
+        return false;
+    }
+    out = std::move(output.out);
+    return true;
+}
+
 // ---------------------------------------------------------------------------
 // Self-test
 // ---------------------------------------------------------------------------

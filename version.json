@@ -1,12 +1,12 @@
 {
-  "version": "1.3.14",
-  "release_date": "2026-11-17",
+  "version": "1.3.15",
+  "release_date": "2026-11-18",
   "channel": "stable",
   "rollout": 100,
   "paused": false,
   "mandatory": false,
   "min_supported": "",
-  "notes": "What's new\n\n- Files WinPreview can't decode no longer show a generic dead end. They say exactly what is missing: 'Not supported yet' (DDS textures, macOS icons) or 'Needs an additional codec' (Canon/Fuji/Samsung RAW, MIDI, camera RAW video) with one line on what to install.\n- Unknown binaries keep the byte inspector; recognised formats now lead with the explanation.\n- Removed the fake '.prores' extension - ProRes clips live in .mov and still play there.",
-  "changelog": "WinPreview 1.3.14 - honest unsupported states. DDS/ICNS report 'not supported yet'; CR3/RAF/SRW/MIDI and BRAW/R3D/CRM/CINE report 'needs an additional codec' with a specific hint; the hex inspector is reserved for unknown binaries; '.prores' removed from the media list. Covered by 14 new checks in production_check.",
+  "notes": "What's new\n\n- Word and OpenDocument files now show their real content instead of a Windows thumbnail: headings, paragraphs, bullet lists and tables, rendered at document sizes.\n- The header shows the document title from the file's own metadata, plus paragraph, heading and table counts.\n- Legacy .doc / .xls / .ppt files still use the system preview, and now say so: 'PREVIEW IMAGE • LEGACY FORMAT'.\n- Sheets (.xlsx/.ods) and slides (.pptx/.odp) keep the thumbnail for now and get the same honest label until their viewer lands.",
+  "changelog": "WinPreview 1.3.15 - Office text preview (1C, part 1). DOCX/ODT are parsed from word/document.xml and content.xml with a small ordered XML reader, then rendered as headings, paragraphs, nested bullets and tables; entities decode, span text keeps its place, and metadata titles are used. Legacy binaries keep the shell thumbnail with a clear label. 21 new checks cover structure, ordering, entities, tables and a 300-section document.",
   "download_url": "https://github.com/Code-Xceed/WinPreview/releases/latest/download/WinPreview-Setup-x64.exe"
 }

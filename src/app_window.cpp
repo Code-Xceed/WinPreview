@@ -161,6 +161,7 @@ AppWindow::~AppWindow() {
     m_font.Close();
     m_folder.Close();
     m_md.Close();
+    m_office.Close();
     m_text.Close();
     m_system.Close();
     SafeRelease(m_unsupportedIconBitmap);
@@ -469,6 +470,7 @@ bool AppWindow::OpenFile(const std::wstring& filePath) {
     m_font.Close();
     m_folder.Close();
     m_md.Close();
+    m_office.Close();
     m_text.Close();
     m_system.Close();
     ClearThumbnails();
@@ -996,7 +998,17 @@ bool AppWindow::OpenFile(const std::wstring& filePath) {
     }
     // 9. Presentation Slides & Office Documents (PPTX, XLSX, DOCX, ODT, ODS, ODP, KEY, NUMBERS, PAGES)
     else if (isOfficeExt(ext)) {
-        if (WicDecoder::LoadShellThumbnail(m_d2d.GetWICFactory(), m_d2d.GetRenderTarget(), filePath, 1280, &m_officeBitmap)) {
+        // Word/OpenDocument text is parsed into blocks; anything the parser
+        // cannot open yet keeps the shell thumbnail it had before.
+        if (m_office.LoadDocument(filePath)) {
+            m_docType = DocumentType::OfficeDoc;
+            m_showSidebar = false;
+            if (m_hudHwnd) ShowWindow(m_hudHwnd, SW_HIDE);
+            m_formatBadgeText = m_office.GetFormatBadge();
+            AdaptWindowToMedia(900, 720);
+            UpdateWindow(m_hwnd);
+            success = true;
+        } else if (WicDecoder::LoadShellThumbnail(m_d2d.GetWICFactory(), m_d2d.GetRenderTarget(), filePath, 1280, &m_officeBitmap)) {
             m_docType = DocumentType::Office;
             m_showSidebar = false;
             if (m_hudHwnd) ShowWindow(m_hudHwnd, SW_HIDE);
@@ -1013,6 +1025,13 @@ bool AppWindow::OpenFile(const std::wstring& filePath) {
                 m_formatBadgeText = L"WORD DOCUMENT";
             } else {
                 m_formatBadgeText = L"OFFICE DOCUMENT";
+            }
+
+            // Legacy binary formats (.doc/.xls/.ppt) and formats without a
+            // parser yet show the Windows thumbnail, so say that out loud.
+            m_formatBadgeText += L" • PREVIEW IMAGE";
+            if (ext == L".doc" || ext == L".xls" || ext == L".ppt") {
+                m_formatBadgeText += L" • LEGACY FORMAT";
             }
 
             int targetW = (int)m_officeWidth;
@@ -2223,7 +2242,8 @@ void AppWindow::Render(HDC outHdc) {
     // 4. Render Toolbar on top
     if ((m_docType == DocumentType::Image || m_docType == DocumentType::Pdf ||
          m_docType == DocumentType::Text || m_docType == DocumentType::Spreadsheet ||
-         m_docType == DocumentType::Office || m_docType == DocumentType::Markdown ||
+         m_docType == DocumentType::Office || m_docType == DocumentType::OfficeDoc ||
+         m_docType == DocumentType::Markdown ||
          m_docType == DocumentType::Notebook || m_docType == DocumentType::Svg ||
          m_docType == DocumentType::Font || m_docType == DocumentType::Folder ||
          m_docType == DocumentType::Binary || m_docType == DocumentType::Shortcut ||
@@ -2405,7 +2425,8 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
 
     if (m_docType != DocumentType::Image && m_docType != DocumentType::Pdf &&
         m_docType != DocumentType::Text && m_docType != DocumentType::Spreadsheet &&
-        m_docType != DocumentType::Office && m_docType != DocumentType::Markdown &&
+        m_docType != DocumentType::Office && m_docType != DocumentType::OfficeDoc &&
+        m_docType != DocumentType::Markdown &&
         m_docType != DocumentType::Notebook && m_docType != DocumentType::Svg &&
         m_docType != DocumentType::Font && m_docType != DocumentType::Folder &&
         m_docType != DocumentType::Binary && m_docType != DocumentType::Shortcut &&
@@ -2452,7 +2473,8 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
     } else if (m_docType == DocumentType::Spreadsheet) {
         widthFull = 473.0f; widthStandard = 354.0f; widthCompact = 222.0f;
         thresholdFull = 520.0f; thresholdCompact = 390.0f;
-    } else if (m_docType == DocumentType::Office || m_docType == DocumentType::Svg) {
+    } else if (m_docType == DocumentType::Office || m_docType == DocumentType::Svg ||
+               m_docType == DocumentType::OfficeDoc) {
         widthFull = 381.0f; widthStandard = 200.0f; widthCompact = 126.0f;
         thresholdFull = 430.0f; thresholdCompact = 240.0f;
     } else if (m_docType == DocumentType::Markdown || m_docType == DocumentType::Notebook) {
@@ -3446,7 +3468,8 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
     // =========================================================================
     // DOCK RENDERING: OFFICE / PRESENTATION SLIDE MODE
     // =========================================================================
-    else if (m_docType == DocumentType::Office || m_docType == DocumentType::Svg) {
+    else if (m_docType == DocumentType::Office || m_docType == DocumentType::Svg ||
+             m_docType == DocumentType::OfficeDoc) {
         bool isFull = (dockTier == 2);
         bool isCompact = (dockTier == 0);
 
@@ -3755,7 +3778,8 @@ std::vector<AppWindow::OverflowMenuItem> AppWindow::GetCurrentOverflowItems() co
         items.push_back({ 0, ICON_MORE, L"", L"", true, false, false }); // divider
         items.push_back({ BTN_SETTINGS, ICON_SETTINGS, L"Settings", L"Ctrl+,", false, false, true });
         items.push_back({ BTN_TOOLBAR_FS, ICON_FULLSCREEN, m_isFullscreen ? L"Exit fullscreen" : L"Fullscreen", L"F", false, false, true });
-    } else if (m_docType == DocumentType::Office || m_docType == DocumentType::Svg) {
+    } else if (m_docType == DocumentType::Office || m_docType == DocumentType::Svg ||
+               m_docType == DocumentType::OfficeDoc) {
         items.push_back({ BTN_ROTATE_L, ICON_ROTATE_LEFT, L"Rotate left", L"L", false, false, true });
         items.push_back({ BTN_ROTATE_R, ICON_ROTATE_RIGHT, L"Rotate right", L"R", false, false, true });
         items.push_back({ 0, ICON_MORE, L"", L"", true, false, false }); // divider
@@ -5863,6 +5887,12 @@ void AppWindow::RenderCanvas(const D2D1_RECT_F& rect) {
         return;
     }
 
+    // 6.5 Office / OpenDocument text
+    if (m_docType == DocumentType::OfficeDoc) {
+        m_office.Render(rt, m_d2d, rect, m_dpiScale);
+        return;
+    }
+
     // 7. Markdown Documents & Jupyter Notebooks (.md, .ipynb)
     if (m_docType == DocumentType::Markdown || m_docType == DocumentType::Notebook) {
         m_md.Render(rt, m_d2d, rect, m_dpiScale);
@@ -7721,6 +7751,7 @@ void AppWindow::CloseCurrentPreview() {
     m_font.Close();
     m_folder.Close();
     m_md.Close();
+    m_office.Close();
     m_text.Close();
     m_system.Close();
     ClearThumbnails();
@@ -9454,6 +9485,14 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         case WM_APP + 255: /* Diagnostic: painted dock pixels past the pill */ {
             return (LRESULT)(int)(m_dockOverflowPx + 0.5f);
         }
+        case WM_APP + 257: /* Diagnostic: office paragraphs (low) + tables (high) */ {
+            if (m_docType != DocumentType::OfficeDoc) return 0;
+            return (LRESULT)((m_office.ParagraphCount() & 0xFFFF) | ((m_office.TableCount() & 0xFFFF) << 16));
+        }
+        case WM_APP + 258: /* Diagnostic: office heading count */ {
+            if (m_docType != DocumentType::OfficeDoc) return 0;
+            return (LRESULT)m_office.HeadingCount();
+        }
         case WM_APP + 256: /* Diagnostic: unsupported reason (0 none, 1 not yet, 2 codec) */ {
             if (m_docType != DocumentType::Unsupported) return 0;
             return (LRESULT)(int)m_unsupportedKind;
@@ -10375,6 +10414,12 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
 
             if (m_docType == DocumentType::Folder) {
                 m_folder.Scroll((float)delta * 0.75f);
+                InvalidateRect(m_hwnd, NULL, FALSE);
+                return 0;
+            }
+
+            if (m_docType == DocumentType::OfficeDoc) {
+                m_office.Scroll((float)delta * 0.8f);
                 InvalidateRect(m_hwnd, NULL, FALSE);
                 return 0;
             }
