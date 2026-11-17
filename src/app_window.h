@@ -9,6 +9,7 @@
 #include "folder_engine.h"
 #include "markdown_engine.h"
 #include "office_engine.h"
+#include "comic_engine.h"
 #include "system_engine.h"
 #include "explorer_hook.h"
 #include "update_engine.h"
@@ -45,7 +46,8 @@ enum class DocumentType {
     Shortcut,
     Certificate,
     Unsupported,
-    OfficeDoc
+    OfficeDoc,
+    Comic
 };
 
 struct ThumbnailItem {
@@ -186,6 +188,7 @@ private:
     FolderEngine m_folder;
     MarkdownEngine m_md;
     OfficeEngine m_office;
+    ComicEngine m_comic;
     SystemEngine m_system;
 
     // Current State

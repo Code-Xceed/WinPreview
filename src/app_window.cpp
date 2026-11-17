@@ -162,6 +162,7 @@ AppWindow::~AppWindow() {
     m_folder.Close();
     m_md.Close();
     m_office.Close();
+    m_comic.Close();
     m_text.Close();
     m_system.Close();
     SafeRelease(m_unsupportedIconBitmap);
@@ -471,6 +472,7 @@ bool AppWindow::OpenFile(const std::wstring& filePath) {
     m_folder.Close();
     m_md.Close();
     m_office.Close();
+    m_comic.Close();
     m_text.Close();
     m_system.Close();
     ClearThumbnails();
@@ -1042,9 +1044,17 @@ bool AppWindow::OpenFile(const std::wstring& filePath) {
             success = true;
         }
     }
-    // 10. Compressed Archives & Packages (.zip, .jar, .apk, .nupkg, .war, .aar, .whl, .msix, .appx, .vsix, .cbz, .epub, .xpi, .crx, .egg)
+    // 10. Compressed Archives & Packages (.zip, .jar, .apk, .nupkg, .war, .aar, .whl, .msix, .appx, .vsix, .cbz, .xpi, .crx, .egg)
     else if (isArchiveExt(ext)) {
-        if (m_folder.LoadFromArchive(filePath)) {
+        if ((ext == L".cbz" || ext == L".cbr") && m_comic.LoadArchive(filePath)) {
+            m_docType = DocumentType::Comic;
+            m_showSidebar = false;
+            if (m_hudHwnd) ShowWindow(m_hudHwnd, SW_HIDE);
+            m_formatBadgeText = m_comic.GetFormatBadge();
+            AdaptWindowToMedia(900, 760);
+            UpdateWindow(m_hwnd);
+            success = true;
+        } else if (m_folder.LoadFromArchive(filePath)) {
             m_docType = DocumentType::Folder;
             m_showSidebar = false;
             if (m_hudHwnd) ShowWindow(m_hudHwnd, SW_HIDE);
@@ -2244,6 +2254,7 @@ void AppWindow::Render(HDC outHdc) {
     if ((m_docType == DocumentType::Image || m_docType == DocumentType::Pdf ||
          m_docType == DocumentType::Text || m_docType == DocumentType::Spreadsheet ||
          m_docType == DocumentType::Office || m_docType == DocumentType::OfficeDoc ||
+         m_docType == DocumentType::Comic ||
          m_docType == DocumentType::Markdown ||
          m_docType == DocumentType::Notebook || m_docType == DocumentType::Svg ||
          m_docType == DocumentType::Font || m_docType == DocumentType::Folder ||
@@ -2427,6 +2438,7 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
     if (m_docType != DocumentType::Image && m_docType != DocumentType::Pdf &&
         m_docType != DocumentType::Text && m_docType != DocumentType::Spreadsheet &&
         m_docType != DocumentType::Office && m_docType != DocumentType::OfficeDoc &&
+        m_docType != DocumentType::Comic &&
         m_docType != DocumentType::Markdown &&
         m_docType != DocumentType::Notebook && m_docType != DocumentType::Svg &&
         m_docType != DocumentType::Font && m_docType != DocumentType::Folder &&
@@ -2478,7 +2490,7 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
         widthFull = 381.0f; widthStandard = 200.0f; widthCompact = 126.0f;
         thresholdFull = 430.0f; thresholdCompact = 240.0f;
     } else if (m_docType == DocumentType::Markdown || m_docType == DocumentType::Notebook ||
-               m_docType == DocumentType::OfficeDoc) {
+               m_docType == DocumentType::OfficeDoc || m_docType == DocumentType::Comic) {
         widthFull = 179.0f; widthStandard = 77.0f; widthCompact = 77.0f;
         thresholdFull = 230.0f; thresholdCompact = 0.0f;
     } else if (m_docType == DocumentType::Font) {
@@ -3606,7 +3618,7 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
     // DOCK RENDERING: MARKDOWN & NOTEBOOK MODE
     // =========================================================================
     else if (m_docType == DocumentType::Markdown || m_docType == DocumentType::Notebook ||
-             m_docType == DocumentType::OfficeDoc) {
+             m_docType == DocumentType::OfficeDoc || m_docType == DocumentType::Comic) {
         bool isFull = (dockTier == 2);
 
         m_btnCopyTextRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
@@ -3790,7 +3802,7 @@ std::vector<AppWindow::OverflowMenuItem> AppWindow::GetCurrentOverflowItems() co
         items.push_back({ BTN_SETTINGS, ICON_SETTINGS, L"Settings", L"Ctrl+,", false, false, true });
         items.push_back({ BTN_TOOLBAR_FS, ICON_FULLSCREEN, m_isFullscreen ? L"Exit fullscreen" : L"Fullscreen", L"F", false, false, true });
     } else if (m_docType == DocumentType::Markdown || m_docType == DocumentType::Notebook ||
-               m_docType == DocumentType::OfficeDoc) {
+               m_docType == DocumentType::OfficeDoc || m_docType == DocumentType::Comic) {
         items.push_back({ BTN_COPY_TEXT, ICON_COPY, L"Copy all text", L"Ctrl+C", false, false, true });
         items.push_back({ 0, ICON_MORE, L"", L"", true, false, false }); // divider
         items.push_back({ BTN_INFO, ICON_INFO, L"File info", L"I", false, false, true });
@@ -5889,6 +5901,12 @@ void AppWindow::RenderCanvas(const D2D1_RECT_F& rect) {
         return;
     }
 
+    // 6.4 Comic pages
+    if (m_docType == DocumentType::Comic) {
+        m_comic.Render(rt, m_d2d, rect, m_dpiScale);
+        return;
+    }
+
     // 6.5 Office / OpenDocument text
     if (m_docType == DocumentType::OfficeDoc) {
         m_office.Render(rt, m_d2d, rect, m_dpiScale);
@@ -7792,6 +7810,7 @@ void AppWindow::CloseCurrentPreview() {
     m_folder.Close();
     m_md.Close();
     m_office.Close();
+    m_comic.Close();
     m_text.Close();
     m_system.Close();
     ClearThumbnails();
@@ -9535,6 +9554,12 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         case WM_APP + 260: /* Diagnostic: sheet count */ {
             return (LRESULT)(m_docType == DocumentType::OfficeDoc ? m_office.SheetCount() : 0);
         }
+        case WM_APP + 269: /* Diagnostic: comic page index (-1 when not a comic) */ {
+            return (LRESULT)(m_docType == DocumentType::Comic ? m_comic.CurrentPage() : -1);
+        }
+        case WM_APP + 270: /* Diagnostic: comic page count */ {
+            return (LRESULT)(m_docType == DocumentType::Comic ? m_comic.PageCount() : 0);
+        }
         case WM_APP + 267: /* Diagnostic: chapter count */ {
             return (LRESULT)(m_docType == DocumentType::OfficeDoc ? m_office.ChapterCount() : 0);
         }
@@ -10412,7 +10437,13 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             } else if (cmdId == BTN_CUT) {
                 if (m_text.Cut(m_hwnd)) { UpdateWindowTitle(); ShowToast(L"Cut to clipboard"); InvalidateRect(m_hwnd, NULL, FALSE); }
             } else if (cmdId == BTN_COPY_TEXT) {
-                if (m_docType == DocumentType::OfficeDoc) {
+                if (m_docType == DocumentType::Comic) {
+                    WCHAR reference[512];
+                    swprintf_s(reference, L"%ls — page %d / %d", m_comic.GetTitle().c_str(),
+                               m_comic.CurrentPage() + 1, m_comic.PageCount());
+                    CopyTextToClipboard(m_hwnd, reference);
+                    ShowToast(L"Page reference copied");
+                } else if (m_docType == DocumentType::OfficeDoc) {
                     CopyTextToClipboard(m_hwnd, m_office.GetPlainText());
                     ShowToast(m_office.GetKind() == OfficeKind::Sheet ? L"Sheet copied" : L"Document text copied");
                 } else if (m_docType == DocumentType::Spreadsheet && m_text.IsTableView()) {
@@ -10501,6 +10532,12 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
 
             if (m_docType == DocumentType::Folder) {
                 m_folder.Scroll((float)delta * 0.75f);
+                InvalidateRect(m_hwnd, NULL, FALSE);
+                return 0;
+            }
+
+            if (m_docType == DocumentType::Comic) {
+                if (delta > 0) m_comic.PreviousPage(); else m_comic.NextPage();
                 InvalidateRect(m_hwnd, NULL, FALSE);
                 return 0;
             }
@@ -11669,6 +11706,20 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 }
                 if (wParam == VK_BACK) return 0; // WM_CHAR performs the deletion
                 return 0; // swallow every other shortcut while typing
+            }
+
+            // Comic view: arrows and page keys turn pages.
+            if (m_docType == DocumentType::Comic) {
+                if (wParam == VK_RIGHT || wParam == VK_DOWN || wParam == VK_NEXT || wParam == VK_SPACE) {
+                    m_comic.NextPage();
+                    InvalidateRect(m_hwnd, NULL, FALSE);
+                    return 0;
+                }
+                if (wParam == VK_LEFT || wParam == VK_UP || wParam == VK_PRIOR || wParam == VK_BACK) {
+                    m_comic.PreviousPage();
+                    InvalidateRect(m_hwnd, NULL, FALSE);
+                    return 0;
+                }
             }
 
             // Book view: PageDown / PageUp walk chapters.
