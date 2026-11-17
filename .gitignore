@@ -19,6 +19,8 @@ obj/
 *.o
 *.pdb
 *.ilk
+__pycache__/
+*.pyc
 
 # Non-software & development directories
 research/

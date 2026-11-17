@@ -26,6 +26,11 @@ import time
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)
 
+# LRESULT is 64-bit on x64; ctypes defaults to c_int, which silently truncates
+# packed diagnostics such as the 4x16-bit button rects.
+user32.SendMessageW.restype = ctypes.c_ssize_t
+user32.SendMessageW.argtypes = [wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM]
+
 WM_LBUTTONDOWN = 0x0201
 WM_LBUTTONUP = 0x0202
 WM_LBUTTONDBLCLK = 0x0203
