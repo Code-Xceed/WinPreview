@@ -19,8 +19,9 @@ class D2DEngine;
 enum class OfficeKind {
     None,
     Word,       // .docx / .odt
-    Sheet,      // .xlsx / .ods  (next increment)
-    Slide,      // .pptx / .odp  (next increment)
+    Sheet,      // .xlsx / .ods
+    Slide,      // .pptx / .odp
+    Book,       // .epub
     Legacy      // .doc / .xls / .ppt: no parser, caller keeps the thumbnail
 };
 
@@ -31,7 +32,8 @@ enum class OfficeFormat {
     Xlsx,
     Ods,
     Pptx,
-    Odp
+    Odp,
+    Epub
 };
 
 enum class OfficeBlockType {
@@ -42,7 +44,13 @@ enum class OfficeBlockType {
     Bullet,
     Numbered,
     Table,
-    Quote
+    Quote,
+    ChapterTitle
+};
+
+struct OfficeChapter {
+    std::wstring title;
+    size_t blockIndex = 0;
 };
 
 struct OfficeTableRow {
@@ -98,6 +106,13 @@ public:
     std::wstring SheetName(int index) const;
 
     // Slides
+    // Books
+    int ChapterCount() const { return (int)m_chapters.size(); }
+    int ActiveChapter() const { return m_activeChapter; }
+    bool GoToChapter(int index);
+    float ChapterOffset(int index) const;
+    std::wstring ChapterTitle(int index) const;
+
     int SlideCount() const { return (int)m_slides.size(); }
     int ActiveSlide() const { return m_activeSlide; }
     void SetActiveSlide(int index);
@@ -133,6 +148,8 @@ private:
     bool LoadOds(const std::wstring& filePath);
     bool LoadPptx(const std::wstring& filePath);
     bool LoadOdp(const std::wstring& filePath);
+    bool LoadEpub(const std::wstring& filePath);
+    void ParseXhtmlChapter(const std::wstring& xhtml, const std::wstring& fallbackTitle, int chapterNumber);
     void RenderSlides(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D1_RECT_F& rect,
                       float marginX, float contentW, float curY);
     void RenderWord(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D1_RECT_F& rect, float marginX, float contentW, float curY);
@@ -150,6 +167,10 @@ private:
     int m_activeSheet = 0;
     std::vector<OfficeSlide> m_slides;
     int m_activeSlide = 0;
+    std::vector<OfficeChapter> m_chapters;
+    int m_activeChapter = 0;
+    std::vector<float> m_blockOffsets;   // measured tops from the last render
+    float m_bookScrollTarget = -1.0f;
     std::vector<std::pair<D2D1_RECT_F, int>> m_slideRects;
     std::vector<std::pair<D2D1_RECT_F, int>> m_sheetTabRects;
     float m_scrollX = 0.0f;

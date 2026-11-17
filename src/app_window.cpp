@@ -622,7 +622,7 @@ bool AppWindow::OpenFile(const std::wstring& filePath) {
     auto isArchiveExt = [](const std::wstring& e) {
         return (e == L".zip" || e == L".jar" || e == L".apk" || e == L".nupkg" ||
                 e == L".war" || e == L".aar" || e == L".whl" || e == L".msix" || e == L".appx" ||
-                e == L".vsix" || e == L".cbz" || e == L".epub" || e == L".xpi" || e == L".crx" || e == L".egg" ||
+                e == L".vsix" || e == L".cbz" || e == L".xpi" || e == L".crx" || e == L".egg" ||
                 e == L".7z" || e == L".rar" || e == L".tar" || e == L".gz" || e == L".tgz" ||
                 e == L".bz2" || e == L".tbz2" || e == L".xz" || e == L".txz" || e == L".z" ||
                 e == L".lzma" || e == L".zst" || e == L".iso" || e == L".img" || e == L".cab" ||
@@ -645,7 +645,7 @@ bool AppWindow::OpenFile(const std::wstring& filePath) {
     auto isOfficeExt = [](const std::wstring& e) {
         return (e == L".pptx" || e == L".ppt" || e == L".xlsx" || e == L".xls" ||
                 e == L".docx" || e == L".doc" || e == L".key" || e == L".numbers" || e == L".pages" ||
-                e == L".odp" || e == L".ods" || e == L".odt");
+                e == L".odp" || e == L".ods" || e == L".odt" || e == L".epub");
     };
 
     auto isImageExt = [](const std::wstring& e) {
@@ -1001,6 +1001,7 @@ bool AppWindow::OpenFile(const std::wstring& filePath) {
         // Word/OpenDocument text is parsed into blocks; anything the parser
         // cannot open yet keeps the shell thumbnail it had before.
         if (m_office.LoadDocument(filePath)) {
+            if (m_office.GetKind() == OfficeKind::Book) RestoreBookProgress(filePath);
             m_docType = DocumentType::OfficeDoc;
             m_showSidebar = false;
             if (m_hudHwnd) ShowWindow(m_hudHwnd, SW_HIDE);
@@ -6984,6 +6985,43 @@ void AppWindow::NotifyUpdateApplied() {
     EnsureAnimTimer();
 }
 
+void AppWindow::SaveBookProgress() {
+    if (m_docType != DocumentType::OfficeDoc || m_office.GetKind() != OfficeKind::Book) return;
+    if (m_currentFilePath.empty()) return;
+    std::wstring value = m_currentFilePath + L"|" + std::to_wstring(m_office.ActiveChapter());
+    HKEY hKey = NULL;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\WinPreview\\Settings", 0, NULL, 0,
+                        KEY_WRITE, NULL, &hKey, NULL) == ERROR_SUCCESS) {
+        RegSetValueExW(hKey, L"BookProgress", 0, REG_SZ, (const BYTE*)value.c_str(),
+                       (DWORD)((value.size() + 1) * sizeof(wchar_t)));
+        RegCloseKey(hKey);
+    }
+}
+
+void AppWindow::RestoreBookProgress(const std::wstring& filePath) {
+    WCHAR buffer[4096] = {};
+    DWORD size = sizeof(buffer);
+    HKEY hKey = NULL;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\WinPreview\\Settings", 0, KEY_READ, &hKey) != ERROR_SUCCESS) {
+        return;
+    }
+    DWORD type = 0;
+    const bool found = RegQueryValueExW(hKey, L"BookProgress", NULL, &type, (LPBYTE)buffer, &size) == ERROR_SUCCESS;
+    RegCloseKey(hKey);
+    if (!found) return;
+
+    std::wstring saved(buffer);
+    size_t bar = saved.find_last_of(L'|');
+    if (bar == std::wstring::npos) return;
+    std::wstring path = saved.substr(0, bar);
+    if (_wcsicmp(path.c_str(), filePath.c_str()) != 0) return;
+
+    int chapter = _wtoi(saved.c_str() + bar + 1);
+    if (chapter > 0 && chapter < m_office.ChapterCount()) {
+        m_office.GoToChapter(chapter);
+    }
+}
+
 void AppWindow::NotifyRolledBack() {
     ShowToast(L"Restored the previous version. This update won't be offered again.");
     EnsureAnimTimer();
@@ -7701,6 +7739,7 @@ void AppWindow::UpdateHudPosition() {
 }
 
 void AppWindow::CloseCurrentPreview() {
+    SaveBookProgress();
     // 1. Reset all transient modals, menus, and drawers
     m_showSettings = false;
     m_settingsAnim = 0.0f;
@@ -9495,6 +9534,12 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         }
         case WM_APP + 260: /* Diagnostic: sheet count */ {
             return (LRESULT)(m_docType == DocumentType::OfficeDoc ? m_office.SheetCount() : 0);
+        }
+        case WM_APP + 267: /* Diagnostic: chapter count */ {
+            return (LRESULT)(m_docType == DocumentType::OfficeDoc ? m_office.ChapterCount() : 0);
+        }
+        case WM_APP + 268: /* Diagnostic: active chapter */ {
+            return (LRESULT)(m_docType == DocumentType::OfficeDoc ? m_office.ActiveChapter() : -1);
         }
         case WM_APP + 264: /* Diagnostic: active slide index */ {
             return (LRESULT)(m_docType == DocumentType::OfficeDoc && m_office.GetKind() == OfficeKind::Slide
@@ -11624,6 +11669,19 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 }
                 if (wParam == VK_BACK) return 0; // WM_CHAR performs the deletion
                 return 0; // swallow every other shortcut while typing
+            }
+
+            // Book view: PageDown / PageUp walk chapters.
+            if (m_docType == DocumentType::OfficeDoc && m_office.GetKind() == OfficeKind::Book) {
+                if (wParam == VK_NEXT || wParam == VK_PRIOR) {
+                    int delta = (wParam == VK_NEXT) ? 1 : -1;
+                    int target = m_office.ActiveChapter() + delta;
+                    if (m_office.GoToChapter(target)) {
+                        SaveBookProgress();
+                        InvalidateRect(m_hwnd, NULL, FALSE);
+                    }
+                    return 0;
+                }
             }
 
             // Archive list: arrows move the selection, Enter opens, Backspace goes up.

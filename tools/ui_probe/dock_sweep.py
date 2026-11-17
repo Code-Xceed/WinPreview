@@ -60,6 +60,7 @@ def sweep(exe, path):
         return "skip"
     try:
         tiers = set()
+        samples = []
         for width in WIDTHS:
             client = tier = 0
             pill = overflow = 0.0
@@ -72,6 +73,7 @@ def sweep(exe, path):
                     break
                 time.sleep(0.25)
             tiers.add(tier)
+            samples.append((width, tier))
             check(overflow == 0,
                   f"{name} {width}px: buttons stay inside the pill",
                   f"tier={tier} pill={pill} overflow={overflow}px")
@@ -80,6 +82,21 @@ def sweep(exe, path):
                       f"{name} {width}px: pill fits the window",
                       f"client={client:.0f}dip pill={pill}")
         check(len(tiers) >= 1, f"{name}: dock rendered", f"tiers={sorted(tiers)}")
+
+        # A resize can be sampled mid-relayout; re-measure the offending widths
+        # once before calling a tier inversion a real regression.
+        inversions = [(a, b) for (a, b) in zip(samples, samples[1:]) if a[1] > b[1]]
+        if inversions:
+            fixed = []
+            for (a, b) in inversions:
+                for width in (a[0], b[0]):
+                    settle(app, width)
+                    fixed.append((width, app.dock_tier()))
+            check(len(fixed) == 2 and fixed[0][1] <= fixed[1][1],
+                  f"{name}: dock tier is monotonic in width",
+                  f"inversions={inversions} resample={fixed}")
+        else:
+            check(True, f"{name}: dock tier is monotonic in width")
     finally:
         app.close()
     return "ok"

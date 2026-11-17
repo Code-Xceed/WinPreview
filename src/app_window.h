@@ -138,6 +138,8 @@ public:
     // Update helper relaunch hooks.
     void NotifyUpdateApplied();
     void NotifyRolledBack();
+    void SaveBookProgress();
+    void RestoreBookProgress(const std::wstring& filePath);
     void NotifyUpdateFailed(const std::wstring& code);
     // Deterministic update-flow hooks used by tests/update_flow_test.ps1.
     void StartUpdateCheckForTesting();

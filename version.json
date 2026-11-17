@@ -1,12 +1,12 @@
 {
-  "version": "1.3.17",
-  "release_date": "2026-11-19",
+  "version": "1.3.18",
+  "release_date": "2026-11-20",
   "channel": "stable",
   "rollout": 100,
   "paused": false,
   "mandatory": false,
   "min_supported": "",
-  "notes": "What's new\n\n- Presentations open as decks: PowerPoint (.pptx) and OpenDocument (.odp) slides show a numbered slide strip beside the current slide, with its title and bullet points.\n- Click any slide in the strip to jump to it; the header shows the deck size and your position (SLIDE 1 / 3).\n- Office documents now load in one package pass, so large decks open several times faster.",
-  "changelog": "WinPreview 1.3.17 - presentation preview (1C complete). PPTX reads presentation.xml order + slide parts (title/body placeholders, bullet levels, graphic frames); ODP reads draw:page frames by presentation class. Slide strip with click-to-switch, title + bullets, SLIDE n / m counter. All Office parts are read from one extracted package, cutting a 60-slide deck from 6.1s to under the budget. 17 new checks; office suite now 58.",
+  "notes": "What's new\n\n- EPUB books read like books now: chapters flow as real text with headings, paragraphs, lists and tables instead of a file listing.\n- Page Down / Page Up move between chapters, and the header shows where you are (CHAPTER 1 / 3).\n- WinPreview remembers your chapter for a book, so reopening it picks up where you stopped.",
+  "changelog": "WinPreview 1.3.18 - EPUB reader (1D, part 1). container.xml/OPF spine parsing, XHTML chapters sanitised into the document block model, chapter markers with PageUp/PageDown navigation from measured offsets, and reading progress persisted per book. .epub no longer opens as an archive. 19 new checks, office suite now 77.",
   "download_url": "https://github.com/Code-Xceed/WinPreview/releases/latest/download/WinPreview-Setup-x64.exe"
 }

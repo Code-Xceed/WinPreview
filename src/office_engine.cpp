@@ -373,6 +373,10 @@ void OfficeEngine::Close() {
     m_slides.clear();
     m_activeSlide = 0;
     m_slideRects.clear();
+    m_chapters.clear();
+    m_activeChapter = 0;
+    m_blockOffsets.clear();
+    m_bookScrollTarget = -1.0f;
     m_sheetTabRects.clear();
     m_scrollX = 0.0f;
     m_targetScrollX = 0.0f;
@@ -517,6 +521,12 @@ bool OfficeEngine::LoadDocument(const std::wstring& filePath) {
         m_format = OfficeFormat::Odp;
         m_kind = OfficeKind::Slide;
         if (!LoadOdp(filePath)) return false;
+        FinishDocument();
+        return true;
+    } else if (ext == L".epub") {
+        m_format = OfficeFormat::Epub;
+        m_kind = OfficeKind::Book;
+        if (!LoadEpub(filePath)) return false;
         FinishDocument();
         return true;
     } else if (ext == L".doc" || ext == L".xls" || ext == L".ppt") {
@@ -713,6 +723,28 @@ bool OfficeEngine::UpdateAnimation(float dt) {
 
 std::wstring OfficeEngine::GetPlainText() const {
     std::wstring out;
+    if (m_kind == OfficeKind::Book) {
+        for (const auto& block : m_blocks) {
+            if (block.type == OfficeBlockType::ChapterTitle) {
+                out += L"\n## " + block.text + L"\n";
+                continue;
+            }
+            if (block.type == OfficeBlockType::Table) {
+                for (const auto& row : block.rows) {
+                    for (size_t c = 0; c < row.cells.size(); ++c) {
+                        if (c) out.push_back(L'\t');
+                        out += row.cells[c];
+                    }
+                    out.push_back(L'\n');
+                }
+                continue;
+            }
+            if (block.type == OfficeBlockType::Bullet) out += L"• ";
+            out += block.text;
+            out.push_back(L'\n');
+        }
+        return out;
+    }
     if (m_kind == OfficeKind::Slide) {
         for (size_t i = 0; i < m_slides.size(); ++i) {
             out += L"--- Slide " + std::to_wstring(i + 1) + L" ---\n";
@@ -759,6 +791,7 @@ std::wstring OfficeEngine::GetFormatBadge() const {
         case OfficeFormat::Ods: name = L"OPENDOCUMENT SHEET"; break;
         case OfficeFormat::Pptx: name = L"PRESENTATION"; break;
         case OfficeFormat::Odp: name = L"OPENDOCUMENT SLIDES"; break;
+        case OfficeFormat::Epub: name = L"EPUB BOOK"; break;
         default: break;
     }
 
@@ -779,6 +812,10 @@ std::wstring OfficeEngine::GetFormatBadge() const {
     }
     if (m_kind == OfficeKind::Slide) {
         swprintf_s(buffer, L"%s • %d SLIDES", name, (int)m_slides.size());
+        return buffer;
+    }
+    if (m_kind == OfficeKind::Book) {
+        swprintf_s(buffer, L"%s • %d CHAPTERS", name, (int)m_chapters.size());
         return buffer;
     }
     swprintf_s(buffer, L"%s • %u PARAGRAPHS • %u HEADINGS • %u TABLES",
@@ -926,6 +963,14 @@ void OfficeEngine::Render(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D1_RECT
                 swprintf_s(sheetPill, L"%d SHEETS", (int)m_sheets.size());
                 drawPill(sheetPill, bx, d2d.BrushGreen, false);
             }
+        } else if (m_kind == OfficeKind::Book) {
+            WCHAR chapterPill[64];
+            swprintf_s(chapterPill, L"%d CHAPTERS", (int)m_chapters.size());
+            bx += drawPill(chapterPill, bx, d2d.BrushText, false);
+            if (!m_chapters.empty()) {
+                swprintf_s(chapterPill, L"CHAPTER %d / %d", m_activeChapter + 1, (int)m_chapters.size());
+                drawPill(chapterPill, bx, d2d.BrushGreen, false);
+            }
         } else if (m_kind == OfficeKind::Slide) {
             WCHAR slidePill[48];
             swprintf_s(slidePill, L"%d SLIDES", (int)m_slides.size());
@@ -965,7 +1010,10 @@ void OfficeEngine::RenderWord(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D1_
                               float marginX, float contentW, float curY) {
     // Body blocks.
     const float rowPad = 8.0f;
-    for (auto& block : m_blocks) {
+    m_blockOffsets.assign(m_blocks.size(), 0.0f);
+    for (size_t blockIndex = 0; blockIndex < m_blocks.size(); ++blockIndex) {
+        auto& block = m_blocks[blockIndex];
+        m_blockOffsets[blockIndex] = curY - (targetRect.top + 32.0f) - m_scrollY;
         if (block.type == OfficeBlockType::Table) {
             if (block.rows.empty()) continue;
             size_t columns = 1;
@@ -1041,6 +1089,10 @@ void OfficeEngine::RenderWord(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D1_
         bool prefixed = false;
 
         switch (block.type) {
+            case OfficeBlockType::ChapterTitle:
+                if (m_formatH1) font = m_formatH1;
+                if (blockIndex > 0) curY += 26.0f;
+                break;
             case OfficeBlockType::Heading1:
                 if (m_formatH1) font = m_formatH1;
                 break;
@@ -1084,7 +1136,8 @@ void OfficeEngine::RenderWord(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D1_
         layout->Release();
 
         block.height = textH;
-        float spacing = (block.type == OfficeBlockType::Heading1) ? 20.0f
+        float spacing = (block.type == OfficeBlockType::ChapterTitle) ? 16.0f
+                      : (block.type == OfficeBlockType::Heading1) ? 20.0f
                       : (block.type == OfficeBlockType::Heading2) ? 16.0f
                       : (block.type == OfficeBlockType::Heading3) ? 12.0f : 8.0f;
         curY += textH + spacing;
@@ -1093,6 +1146,15 @@ void OfficeEngine::RenderWord(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D1_
     m_contentHeight = curY - (targetRect.top + 32.0f + m_scrollY);
 }
 
+
+static std::wstring Utf8ToWideLocal(const std::string& text) {
+    if (text.empty()) return L"";
+    int len = MultiByteToWideChar(CP_UTF8, 0, text.c_str(), (int)text.size(), NULL, 0);
+    if (len <= 0) return L"";
+    std::wstring out((size_t)len, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, text.c_str(), (int)text.size(), &out[0], len);
+    return out;
+}
 
 // ---------------------------------------------------------------------------
 // Spreadsheets
@@ -2030,6 +2092,316 @@ void OfficeEngine::RenderSlides(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D
                  d2d.BrushTextMuted);
 }
 
+// ---------------------------------------------------------------------------
+// EPUB
+// ---------------------------------------------------------------------------
+
+namespace {
+
+std::wstring ResolveHref(const std::wstring& baseDir, const std::wstring& href) {
+    std::wstring path = href;
+    size_t hash = path.find(L'#');
+    if (hash != std::wstring::npos) path.resize(hash);
+    for (auto& ch : path) {
+        if (ch == L'\\') ch = L'/';
+    }
+    if (path.empty()) return path;
+    if (path[0] == L'/') return path.substr(1);
+    if (!baseDir.empty()) path = baseDir + L"/" + path;
+
+    // Collapse "." and ".." segments.
+    std::vector<std::wstring> parts;
+    size_t start = 0;
+    while (start <= path.size()) {
+        size_t slash = path.find(L'/', start);
+        if (slash == std::wstring::npos) slash = path.size();
+        std::wstring part = path.substr(start, slash - start);
+        if (part == L"..") {
+            if (!parts.empty()) parts.pop_back();
+        } else if (!part.empty() && part != L".") {
+            parts.push_back(part);
+        }
+        start = slash + 1;
+    }
+    std::wstring out;
+    for (size_t i = 0; i < parts.size(); ++i) {
+        if (i) out.push_back(L'/');
+        out += parts[i];
+    }
+    return out;
+}
+
+int HeadingLevelForTag(const std::wstring& name) {
+    if (name.size() != 2) return 0;
+    if (name[0] != L'h') return 0;
+    wchar_t digit = name[1];
+    if (digit < L'1' || digit > L'6') return 0;
+    int level = digit - L'0';
+    return level <= 2 ? level : 3;
+}
+
+} // namespace
+
+bool OfficeEngine::LoadEpub(const std::wstring& filePath) {
+    std::string xml;
+    std::wstring error;
+
+    if (!ReadPart(filePath, L"META-INF/container.xml", 1024 * 1024, xml, error)) {
+        m_errorText = error.empty() ? L"This EPUB has no container." : error;
+        return false;
+    }
+    XmlNode container;
+    if (!ParseXml(xml, container, 5000, 40)) {
+        m_errorText = L"This EPUB's container could not be parsed.";
+        return false;
+    }
+    const XmlNode* rootfile = FindDescendant(&container, L"rootfile", 8);
+    std::wstring opfPath;
+    if (rootfile) {
+        if (const std::wstring* full = rootfile->Attr(L"full-path")) opfPath = *full;
+    }
+    if (opfPath.empty()) {
+        m_errorText = L"This EPUB does not name its package document.";
+        return false;
+    }
+
+    std::string opfXml;
+    if (!ReadPart(filePath, opfPath, 16u * 1024 * 1024, opfXml, error)) {
+        m_errorText = error.empty() ? L"This EPUB's package document is missing." : error;
+        return false;
+    }
+    XmlNode opf;
+    if (!ParseXml(opfXml, opf, 100000, 60)) {
+        m_errorText = L"This EPUB's package document could not be parsed.";
+        return false;
+    }
+
+    std::wstring opfDir = opfPath;
+    size_t slash = opfDir.find_last_of(L'/');
+    opfDir = (slash == std::wstring::npos) ? L"" : opfDir.substr(0, slash);
+
+    const XmlNode* package = FindChild(&opf, L"package");
+    if (!package) package = FindDescendant(&opf, L"package", 4);
+
+    // Metadata title.
+    if (package) {
+        const XmlNode* metadata = FindChild(package, L"metadata");
+        if (metadata) {
+            for (const auto& child : metadata->children) {
+                std::wstring name = child->name;
+                if (name == L"dc:title" || name == L"title") {
+                    std::wstring value = CollapseWhitespace(TextContent(child.get()));
+                    if (!value.empty()) { m_title = value; break; }
+                }
+            }
+        }
+    }
+
+    // Manifest: id -> href.
+    std::map<std::wstring, std::wstring> manifest;
+    std::map<std::wstring, std::wstring> manifestType;
+    if (package) {
+        const XmlNode* items = FindChild(package, L"manifest");
+        if (items) {
+            for (const auto& item : items->children) {
+                if (item->name != L"item") continue;
+                const std::wstring* id = item->Attr(L"id");
+                const std::wstring* href = item->Attr(L"href");
+                if (!id || !href) continue;
+                manifest[*id] = *href;
+                if (const std::wstring* type = item->Attr(L"media-type")) manifestType[*id] = *type;
+            }
+        }
+    }
+
+    // Spine order.
+    std::vector<std::wstring> spine;
+    if (package) {
+        const XmlNode* itemrefs = FindChild(package, L"spine");
+        if (itemrefs) {
+            for (const auto& ref : itemrefs->children) {
+                if (ref->name != L"itemref") continue;
+                if (const std::wstring* idref = ref->Attr(L"idref")) {
+                    if (manifest.find(*idref) != manifest.end()) spine.push_back(*idref);
+                }
+            }
+        }
+    }
+    if (spine.empty()) {
+        m_errorText = L"This EPUB has no reading order.";
+        return false;
+    }
+
+    const size_t kMaxChapters = 300;
+    int chapterNumber = 0;
+    for (const auto& id : spine) {
+        if (chapterNumber >= (int)kMaxChapters) break;
+        std::wstring href = ResolveHref(opfDir, manifest[id]);
+        if (href.empty()) continue;
+        auto type = manifestType.find(id);
+        if (type != manifestType.end() && type->second.find(L"html") == std::wstring::npos) continue;
+
+        std::string chapterXml;
+        if (!ReadPart(filePath, href, 32u * 1024 * 1024, chapterXml, error)) continue;
+        ++chapterNumber;
+        ParseXhtmlChapter(Utf8ToWideLocal(chapterXml), L"Chapter " + std::to_wstring(chapterNumber), chapterNumber);
+    }
+
+    if (m_blocks.empty()) {
+        m_errorText = L"This EPUB has no readable text.";
+        return false;
+    }
+    return true;
+}
+
+void OfficeEngine::ParseXhtmlChapter(const std::wstring& xhtml, const std::wstring& fallbackTitle,
+                                      int chapterNumber) {
+    (void)chapterNumber;
+    // Parse the chapter as XML (EPUB3 chapters are XHTML; tolerate the common
+    // named entities by reusing the tolerant reader).
+    std::string utf8;
+    int bytes = WideCharToMultiByte(CP_UTF8, 0, xhtml.c_str(), (int)xhtml.size(), NULL, 0, NULL, NULL);
+    if (bytes > 0) {
+        utf8.resize((size_t)bytes);
+        WideCharToMultiByte(CP_UTF8, 0, xhtml.c_str(), (int)xhtml.size(), &utf8[0], bytes, NULL, NULL);
+    }
+    XmlNode root;
+    if (!ParseXml(utf8, root, 300000, 120)) return;
+
+    const XmlNode* body = FindDescendant(&root, L"body", 10);
+
+    size_t chapterStart = m_blocks.size();
+    std::wstring chapterTitle;
+
+    std::function<void(const XmlNode*, int)> walk = [&](const XmlNode* parent, int listLevel) {
+        for (const auto& node : parent->children) {
+            const std::wstring& name = node->name;
+            int heading = HeadingLevelForTag(name);
+            if (heading > 0) {
+                std::wstring text = CollapseWhitespace(TextContent(node.get()));
+                if (text.empty()) continue;
+                // A chapter's leading heading is the chapter title; the marker
+                // block already renders it, so don't add it twice.
+                if (chapterTitle.empty() && m_blocks.size() == chapterStart) {
+                    chapterTitle = text;
+                    continue;
+                }
+                OfficeBlock block;
+                block.type = heading == 1 ? OfficeBlockType::Heading1
+                           : heading == 2 ? OfficeBlockType::Heading2 : OfficeBlockType::Heading3;
+                block.text = text;
+                ++m_headingCount;
+                m_blocks.push_back(std::move(block));
+            } else if (name == L"p" || name == L"pre" || name == L"code" || name == L"dt" || name == L"dd") {
+                std::wstring text = CollapseWhitespace(TextContent(node.get()));
+                if (!text.empty()) {
+                    OfficeBlock block;
+                    block.type = listLevel > 0 ? OfficeBlockType::Bullet : OfficeBlockType::Paragraph;
+                    block.level = (std::min)(listLevel, 4);
+                    block.text = text;
+                    ++m_paragraphCount;
+                    m_blocks.push_back(std::move(block));
+                }
+            } else if (name == L"li") {
+                std::wstring text = CollapseWhitespace(TextContent(node.get()));
+                if (!text.empty()) {
+                    OfficeBlock block;
+                    block.type = OfficeBlockType::Bullet;
+                    block.level = (std::min)(listLevel, 4);
+                    block.text = text;
+                    ++m_paragraphCount;
+                    m_blocks.push_back(std::move(block));
+                }
+            } else if (name == L"blockquote") {
+                std::wstring text = CollapseWhitespace(TextContent(node.get()));
+                if (!text.empty()) {
+                    OfficeBlock block;
+                    block.type = OfficeBlockType::Quote;
+                    block.text = text;
+                    ++m_paragraphCount;
+                    m_blocks.push_back(std::move(block));
+                }
+            } else if (name == L"img") {
+                const std::wstring* alt = node->Attr(L"alt");
+                OfficeBlock block;
+                block.type = OfficeBlockType::Paragraph;
+                block.text = (alt && !alt->empty()) ? (L"[image: " + *alt + L"]") : L"[image]";
+                m_blocks.push_back(std::move(block));
+            } else if (name == L"ul" || name == L"ol") {
+                walk(node.get(), listLevel + 1);
+            } else if (name == L"table") {
+                OfficeBlock table;
+                table.type = OfficeBlockType::Table;
+                std::function<void(const XmlNode*)> collectRows = [&](const XmlNode* holder) {
+                    for (const auto& row : holder->children) {
+                        if (row->name != L"tr") continue;
+                        OfficeTableRow outRow;
+                        for (const auto& cell : row->children) {
+                            if (cell->name != L"td" && cell->name != L"th") continue;
+                            outRow.cells.push_back(CollapseWhitespace(TextContent(cell.get())));
+                            if (cell->name == L"th") outRow.header = true;
+                        }
+                        if (!outRow.cells.empty()) table.rows.push_back(std::move(outRow));
+                    }
+                };
+                collectRows(node.get());
+                if (!table.rows.empty()) {
+                    ++m_tableCount;
+                    m_blocks.push_back(std::move(table));
+                }
+            } else if (name == L"br" || name == L"hr") {
+                continue;
+            } else if (name == L"style" || name == L"script" || name == L"head") {
+                continue;
+            } else {
+                walk(node.get(), listLevel);
+            }
+        }
+    };
+
+    if (body) walk(body, 0);
+    if (m_blocks.size() == chapterStart) return;
+
+    OfficeChapter chapter;
+    chapter.title = chapterTitle.empty() ? fallbackTitle : chapterTitle;
+    chapter.blockIndex = chapterStart;
+
+    OfficeBlock marker;
+    marker.type = OfficeBlockType::ChapterTitle;
+    marker.text = chapter.title;
+    marker.level = (int)m_chapters.size() + 1;
+    m_blocks.insert(m_blocks.begin() + (ptrdiff_t)chapterStart, std::move(marker));
+    // The inserted marker shifts the chapter's first real block by one.
+    chapter.blockIndex = chapterStart;
+    m_chapters.push_back(std::move(chapter));
+}
+
+bool OfficeEngine::GoToChapter(int index) {
+    if (index < 0 || index >= (int)m_chapters.size()) return false;
+    m_activeChapter = index;
+    float offset = 0.0f;
+    size_t blockIndex = m_chapters[(size_t)index].blockIndex;
+    if (blockIndex < m_blockOffsets.size()) {
+        offset = m_blockOffsets[blockIndex] - 24.0f;
+        if (offset < 0.0f) offset = 0.0f;
+    }
+    m_scrollY = -offset;
+    m_targetScrollY = m_scrollY;
+    return true;
+}
+
+std::wstring OfficeEngine::ChapterTitle(int index) const {
+    if (index < 0 || index >= (int)m_chapters.size()) return L"";
+    return m_chapters[(size_t)index].title;
+}
+
+float OfficeEngine::ChapterOffset(int index) const {
+    if (index < 0 || index >= (int)m_chapters.size()) return 0.0f;
+    size_t blockIndex = m_chapters[(size_t)index].blockIndex;
+    if (blockIndex < m_blockOffsets.size()) return m_blockOffsets[blockIndex];
+    return 0.0f;
+}
+
 int RunOfficeDump(const std::wstring& filePath) {
     OfficeEngine engine;
     bool loaded = engine.LoadDocument(filePath);
@@ -2041,6 +2413,15 @@ int RunOfficeDump(const std::wstring& filePath) {
     wprintf(L"paragraphs=%u headings=%u tables=%u\n",
             engine.ParagraphCount(), engine.HeadingCount(), engine.TableCount());
 
+    if (engine.GetKind() == OfficeKind::Book) {
+        wprintf(L"chapters=%d active=%d\n", engine.ChapterCount(), engine.ActiveChapter());
+        for (int i = 0; i < engine.ChapterCount(); ++i) {
+            wprintf(L"chapter[%d] title='%ls'\n", i, engine.ChapterTitle(i).c_str());
+        }
+        const std::wstring text = engine.GetPlainText();
+        wprintf(L"--- text ---\n%ls\n", text.c_str());
+        return 0;
+    }
     if (engine.GetKind() == OfficeKind::Slide) {
         wprintf(L"slides=%d active=%d\n", engine.SlideCount(), engine.ActiveSlide());
         for (int i = 0; i < engine.SlideCount(); ++i) {
