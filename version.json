@@ -1,12 +1,12 @@
 {
-  "version": "1.3.16",
-  "release_date": "2026-11-18",
+  "version": "1.3.17",
+  "release_date": "2026-11-19",
   "channel": "stable",
   "rollout": 100,
   "paused": false,
   "mandatory": false,
   "min_supported": "",
-  "notes": "What's new\n\n- Spreadsheets open as real grids: Excel (.xlsx) and OpenDocument (.ods) workbooks show their sheets, with column letters and row numbers.\n- Click the sheet tabs to switch sheets; Shift+wheel scrolls across columns.\n- Numbers are right-aligned, Excel dates show as dates (2025-01-01 rather than 45658), and the header counts rows and columns.\n- Copy takes the whole active sheet as tab-separated text.",
-  "changelog": "WinPreview 1.3.16 - spreadsheet preview (1C, part 2). XLSX and ODS are parsed from their XML parts (shared strings, inline strings, numbers, booleans, cached formulas, ODS repeated rows/columns) and rendered as a grid with sheet tabs, column letters, row numbers, numeric alignment and number-format date conversion. The office dock now carries Copy / info / open with / settings / fullscreen. 20 new checks cover values, dates, dimensions, tab switching, legacy isolation and a 200x12 workbook.",
+  "notes": "What's new\n\n- Presentations open as decks: PowerPoint (.pptx) and OpenDocument (.odp) slides show a numbered slide strip beside the current slide, with its title and bullet points.\n- Click any slide in the strip to jump to it; the header shows the deck size and your position (SLIDE 1 / 3).\n- Office documents now load in one package pass, so large decks open several times faster.",
+  "changelog": "WinPreview 1.3.17 - presentation preview (1C complete). PPTX reads presentation.xml order + slide parts (title/body placeholders, bullet levels, graphic frames); ODP reads draw:page frames by presentation class. Slide strip with click-to-switch, title + bullets, SLIDE n / m counter. All Office parts are read from one extracted package, cutting a 60-slide deck from 6.1s to under the budget. 17 new checks; office suite now 58.",
   "download_url": "https://github.com/Code-Xceed/WinPreview/releases/latest/download/WinPreview-Setup-x64.exe"
 }

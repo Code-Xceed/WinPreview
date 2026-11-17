@@ -54,6 +54,11 @@ public:
     bool ReadEntry(const std::wstring& archivePath, const std::wstring& entryPath,
                    size_t maxBytes, std::string& out, std::wstring& error);
 
+    // Extracts the whole package into dir (used by the Office engine so a
+    // 60-slide deck costs one process instead of one per part).
+    bool ExtractAll(const std::wstring& archivePath, const std::wstring& targetDir,
+                    std::wstring& error);
+
     // Deletes expanded temporaries this session created.
     void Cleanup();
 

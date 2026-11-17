@@ -9496,6 +9496,24 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         case WM_APP + 260: /* Diagnostic: sheet count */ {
             return (LRESULT)(m_docType == DocumentType::OfficeDoc ? m_office.SheetCount() : 0);
         }
+        case WM_APP + 264: /* Diagnostic: active slide index */ {
+            return (LRESULT)(m_docType == DocumentType::OfficeDoc && m_office.GetKind() == OfficeKind::Slide
+                                 ? m_office.ActiveSlide() : -1);
+        }
+        case WM_APP + 265: /* Diagnostic: slide count */ {
+            return (LRESULT)(m_docType == DocumentType::OfficeDoc ? m_office.SlideCount() : 0);
+        }
+        case WM_APP + 266: /* Diagnostic: slide card rect by index (wParam) */ {
+            D2D1_RECT_F r = {};
+            if (m_docType != DocumentType::OfficeDoc || !m_office.GetSlideRect((int)wParam, r)) return 0;
+            auto lane = [](float v) -> unsigned long long {
+                int i = (int)(v + 0.5f);
+                if (i < 0) i = 0;
+                if (i > 65535) i = 65535;
+                return (unsigned long long)(unsigned short)i;
+            };
+            return (LRESULT)(lane(r.left) | (lane(r.top) << 16) | (lane(r.right) << 32) | (lane(r.bottom) << 48));
+        }
         case WM_APP + 263: /* Diagnostic: sheet tab rect by index (wParam) */ {
             D2D1_RECT_F r = {};
             if (m_docType != DocumentType::OfficeDoc || !m_office.GetSheetTabRect((int)wParam, r)) return 0;
@@ -9507,7 +9525,7 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             };
             return (LRESULT)(lane(r.left) | (lane(r.top) << 16) | (lane(r.right) << 32) | (lane(r.bottom) << 48));
         }
-        case WM_APP + 262: /* Diagnostic: office kind (1 word, 2 sheet) */ {
+        case WM_APP + 262: /* Diagnostic: office kind (1 word, 2 sheet, 3 slide) */ {
             return (LRESULT)(m_docType == DocumentType::OfficeDoc ? (int)m_office.GetKind() : 0);
         }
         case WM_APP + 258: /* Diagnostic: office heading count */ {
@@ -10563,6 +10581,18 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                     return 0;
                 }
                 return 0;
+            }
+
+            // Presentation view: the slide strip is clickable.
+            if (m_docType == DocumentType::OfficeDoc && m_office.GetKind() == OfficeKind::Slide) {
+                int slide = m_office.HitTestSlide(pt.x, pt.y);
+                if (slide >= 0) {
+                    m_office.SetActiveSlide(slide);
+                    m_formatBadgeText = m_office.GetFormatBadge();
+                    InvalidateRect(m_hwnd, NULL, FALSE);
+                    UpdateWindow(m_hwnd);
+                    return 0;
+                }
             }
 
             // Spreadsheet view: sheet tabs sit above the grid.

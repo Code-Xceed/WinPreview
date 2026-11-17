@@ -63,6 +63,11 @@ struct OfficeCell {
     bool numeric = false;
 };
 
+struct OfficeSlide {
+    std::wstring title;
+    std::vector<OfficeBlock> blocks;
+};
+
 struct OfficeSheet {
     std::wstring name;
     std::vector<std::vector<OfficeCell>> rows;
@@ -91,6 +96,14 @@ public:
     int ActiveSheet() const { return m_activeSheet; }
     void SetActiveSheet(int index);
     std::wstring SheetName(int index) const;
+
+    // Slides
+    int SlideCount() const { return (int)m_slides.size(); }
+    int ActiveSlide() const { return m_activeSlide; }
+    void SetActiveSlide(int index);
+    std::wstring SlideTitle(int index) const;
+    bool GetSlideRect(int index, D2D1_RECT_F& out) const;
+    int HitTestSlide(float x, float y) const;
     const OfficeSheet* GetSheet(int index) const {
         if (index < 0 || index >= (int)m_sheets.size()) return nullptr;
         return &m_sheets[(size_t)index];
@@ -113,8 +126,15 @@ public:
 private:
     void AddParagraphText(const std::wstring& text, const std::wstring& style, bool listItem, int level);
     void FinishDocument();
+    bool PreparePackage(const std::wstring& filePath);
+    bool ReadPart(const std::wstring& filePath, const std::wstring& entry, size_t maxBytes,
+                  std::string& out, std::wstring& error);
     bool LoadXlsx(const std::wstring& filePath);
     bool LoadOds(const std::wstring& filePath);
+    bool LoadPptx(const std::wstring& filePath);
+    bool LoadOdp(const std::wstring& filePath);
+    void RenderSlides(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D1_RECT_F& rect,
+                      float marginX, float contentW, float curY);
     void RenderWord(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D1_RECT_F& rect, float marginX, float contentW, float curY);
     void RenderSheet(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D1_RECT_F& rect, float marginX, float contentW, float curY);
 
@@ -124,9 +144,13 @@ private:
     std::wstring m_filePath;
     std::wstring m_title;
     std::wstring m_errorText;
+    std::wstring m_packageDir;
     std::vector<OfficeBlock> m_blocks;
     std::vector<OfficeSheet> m_sheets;
     int m_activeSheet = 0;
+    std::vector<OfficeSlide> m_slides;
+    int m_activeSlide = 0;
+    std::vector<std::pair<D2D1_RECT_F, int>> m_slideRects;
     std::vector<std::pair<D2D1_RECT_F, int>> m_sheetTabRects;
     float m_scrollX = 0.0f;
     float m_targetScrollX = 0.0f;

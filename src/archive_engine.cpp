@@ -588,6 +588,37 @@ ArchiveResult ArchiveEngine::Load(const std::wstring& archivePath,
     return ArchiveResult::Ok;
 }
 
+bool ArchiveEngine::ExtractAll(const std::wstring& archivePath, const std::wstring& targetDir,
+                             std::wstring& error) {
+    error.clear();
+    if (!IsAvailable()) {
+        error = L"The archive reader is missing from this installation.";
+        return false;
+    }
+    if (GetFileAttributesW(archivePath.c_str()) == INVALID_FILE_ATTRIBUTES) {
+        error = L"The file could not be opened.";
+        return false;
+    }
+    CreateDirectoryW(targetDir.c_str(), NULL);
+
+    std::wstring command = L"\"" + m_backendPath + L"\" x -y -bd -sccUTF-8 -o\"" + targetDir +
+                           L"\" \"" + archivePath + L"\"";
+    ProcessOutput output;
+    if (!RunCapture(command, L"", 120000, output)) {
+        error = L"The archive reader could not be started.";
+        return false;
+    }
+    if (output.timedOut || output.tooLarge) {
+        error = L"This package is too large to expand.";
+        return false;
+    }
+    if (output.exitCode != 0) {
+        error = L"This package could not be expanded.";
+        return false;
+    }
+    return true;
+}
+
 bool ArchiveEngine::ReadEntry(const std::wstring& archivePath, const std::wstring& entryPath,
                               size_t maxBytes, std::string& out, std::wstring& error) {
     out.clear();

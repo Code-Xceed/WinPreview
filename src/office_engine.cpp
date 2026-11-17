@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cwchar>
 #include <functional>
+#include <shlobj.h>
 #include <map>
 #include <memory>
 #include <string>
@@ -351,6 +352,15 @@ OfficeEngine::~OfficeEngine() {
 
 void OfficeEngine::Close() {
     ReleaseFormats();
+    if (!m_packageDir.empty()) {
+        std::wstring from = m_packageDir + L'\0';
+        SHFILEOPSTRUCTW op = {};
+        op.wFunc = FO_DELETE;
+        op.pFrom = from.c_str();
+        op.fFlags = FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI;
+        SHFileOperationW(&op);
+        m_packageDir.clear();
+    }
     m_isLoaded = false;
     m_kind = OfficeKind::None;
     m_format = OfficeFormat::None;
@@ -360,6 +370,9 @@ void OfficeEngine::Close() {
     m_blocks.clear();
     m_sheets.clear();
     m_activeSheet = 0;
+    m_slides.clear();
+    m_activeSlide = 0;
+    m_slideRects.clear();
     m_sheetTabRects.clear();
     m_scrollX = 0.0f;
     m_targetScrollX = 0.0f;
@@ -404,29 +417,81 @@ void OfficeEngine::FinishDocument() {
     m_isLoaded = true;
 }
 
+static bool ReadWholeFile(const std::wstring& path, size_t maxBytes, std::string& out) {
+    HANDLE hFile = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                               NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile == INVALID_HANDLE_VALUE) return false;
+    LARGE_INTEGER size = {};
+    if (!GetFileSizeEx(hFile, &size) || size.QuadPart <= 0 || (UINT64)size.QuadPart > maxBytes) {
+        CloseHandle(hFile);
+        return false;
+    }
+    out.resize((size_t)size.QuadPart);
+    DWORD read = 0;
+    bool ok = ReadFile(hFile, &out[0], (DWORD)out.size(), &read, NULL) && read == out.size();
+    CloseHandle(hFile);
+    if (!ok) out.clear();
+    return ok;
+}
+
+bool OfficeEngine::PreparePackage(const std::wstring& filePath) {
+    if (!m_packageDir.empty()) return true;
+    WCHAR temp[MAX_PATH] = {};
+    if (!GetTempPathW(MAX_PATH, temp)) return false;
+
+    std::wstring root = std::wstring(temp) + L"WinPreview-office";
+    std::wstring dir = root + L"\\" + std::to_wstring(GetTickCount64());
+    CreateDirectoryW(root.c_str(), NULL);
+
+    ArchiveEngine archive;
+    std::wstring error;
+    if (!archive.ExtractAll(filePath, dir, error)) {
+        return false;
+    }
+    m_packageDir = dir;
+    return true;
+}
+
+bool OfficeEngine::ReadPart(const std::wstring& filePath, const std::wstring& entry,
+                            size_t maxBytes, std::string& out, std::wstring& error) {
+    if (m_packageDir.empty()) {
+        ArchiveEngine archive;
+        return ReadPart(filePath, entry, maxBytes, out, error);
+    }
+    std::wstring path = m_packageDir + L"\\" + entry;
+    for (auto& ch : path) {
+        if (ch == L'/') ch = L'\\';
+    }
+    if (ReadWholeFile(path, maxBytes, out)) return true;
+    error = L"Part missing from the package: " + entry;
+    return false;
+}
+
 bool OfficeEngine::LoadDocument(const std::wstring& filePath) {
     Close();
     m_filePath = filePath;
+    // One extraction per document: reading 60 slide parts through separate
+    // process launches cost seconds.
+    PreparePackage(filePath);
 
     size_t dot = filePath.find_last_of(L'.');
     std::wstring ext = (dot == std::wstring::npos) ? L"" : filePath.substr(dot);
     std::transform(ext.begin(), ext.end(), ext.begin(), ::towlower);
 
-    ArchiveEngine archive;
     std::string xml;
     std::wstring error;
 
     if (ext == L".docx") {
         m_format = OfficeFormat::Docx;
         m_kind = OfficeKind::Word;
-        if (!archive.ReadEntry(filePath, L"word/document.xml", 64u * 1024 * 1024, xml, error)) {
+        if (!ReadPart(filePath, L"word/document.xml", 64u * 1024 * 1024, xml, error)) {
             m_errorText = error.empty() ? L"This document could not be read." : error;
             return false;
         }
     } else if (ext == L".odt") {
         m_format = OfficeFormat::Odt;
         m_kind = OfficeKind::Word;
-        if (!archive.ReadEntry(filePath, L"content.xml", 64u * 1024 * 1024, xml, error)) {
+        if (!ReadPart(filePath, L"content.xml", 64u * 1024 * 1024, xml, error)) {
             m_errorText = error.empty() ? L"This document could not be read." : error;
             return false;
         }
@@ -440,6 +505,18 @@ bool OfficeEngine::LoadDocument(const std::wstring& filePath) {
         m_format = OfficeFormat::Ods;
         m_kind = OfficeKind::Sheet;
         if (!LoadOds(filePath)) return false;
+        FinishDocument();
+        return true;
+    } else if (ext == L".pptx") {
+        m_format = OfficeFormat::Pptx;
+        m_kind = OfficeKind::Slide;
+        if (!LoadPptx(filePath)) return false;
+        FinishDocument();
+        return true;
+    } else if (ext == L".odp") {
+        m_format = OfficeFormat::Odp;
+        m_kind = OfficeKind::Slide;
+        if (!LoadOdp(filePath)) return false;
         FinishDocument();
         return true;
     } else if (ext == L".doc" || ext == L".xls" || ext == L".ppt") {
@@ -596,7 +673,7 @@ bool OfficeEngine::LoadDocument(const std::wstring& filePath) {
     std::string core;
     std::wstring coreError;
     const wchar_t* coreEntry = (m_format == OfficeFormat::Docx) ? L"docProps/core.xml" : L"meta.xml";
-    if (archive.ReadEntry(filePath, coreEntry, 1024 * 1024, core, coreError)) {
+    if (ReadPart(filePath, coreEntry, 1024 * 1024, core, coreError)) {
         XmlNode meta;
         if (ParseXml(core, meta, 5000, 30)) {
             const XmlNode* title = FindDescendant(&meta, L"dc:title", 6);
@@ -636,6 +713,14 @@ bool OfficeEngine::UpdateAnimation(float dt) {
 
 std::wstring OfficeEngine::GetPlainText() const {
     std::wstring out;
+    if (m_kind == OfficeKind::Slide) {
+        for (size_t i = 0; i < m_slides.size(); ++i) {
+            out += L"--- Slide " + std::to_wstring(i + 1) + L" ---\n";
+            if (!m_slides[i].title.empty()) out += m_slides[i].title + L"\n";
+            for (const auto& block : m_slides[i].blocks) out += std::wstring(L"• ") + block.text + L"\n";
+        }
+        return out;
+    }
     if (m_kind == OfficeKind::Sheet) {
         if (m_activeSheet < 0 || m_activeSheet >= (int)m_sheets.size()) return out;
         for (const auto& row : m_sheets[(size_t)m_activeSheet].rows) {
@@ -690,6 +775,10 @@ std::wstring OfficeEngine::GetFormatBadge() const {
         }
         swprintf_s(buffer, L"%s • %u ROWS × %u COLUMNS • %d SHEETS",
                    name, (unsigned)rows, (unsigned)columns, (int)m_sheets.size());
+        return buffer;
+    }
+    if (m_kind == OfficeKind::Slide) {
+        swprintf_s(buffer, L"%s • %d SLIDES", name, (int)m_slides.size());
         return buffer;
     }
     swprintf_s(buffer, L"%s • %u PARAGRAPHS • %u HEADINGS • %u TABLES",
@@ -760,7 +849,8 @@ void OfficeEngine::Render(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D1_RECT
     float marginX = (std::max)(40.0f, (clientW - 780.0f) / 2.0f);
     float contentW = clientW - marginX * 2.0f;
 
-    float curY = targetRect.top + 32.0f + (m_kind == OfficeKind::Sheet ? 0.0f : m_scrollY);
+    bool fixedHeader = (m_kind == OfficeKind::Sheet || m_kind == OfficeKind::Slide);
+    float curY = targetRect.top + 32.0f + (fixedHeader ? 0.0f : m_scrollY);
 
     // Header: icon + title + file path, then a chip row.
     {
@@ -836,6 +926,12 @@ void OfficeEngine::Render(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D1_RECT
                 swprintf_s(sheetPill, L"%d SHEETS", (int)m_sheets.size());
                 drawPill(sheetPill, bx, d2d.BrushGreen, false);
             }
+        } else if (m_kind == OfficeKind::Slide) {
+            WCHAR slidePill[48];
+            swprintf_s(slidePill, L"%d SLIDES", (int)m_slides.size());
+            bx += drawPill(slidePill, bx, d2d.BrushText, false);
+            swprintf_s(slidePill, L"SLIDE %d / %d", m_activeSlide + 1, (int)m_slides.size());
+            drawPill(slidePill, bx, d2d.BrushGreen, false);
         } else {
             swprintf_s(stats, L"%u PARAGRAPHS • %u TABLES", m_paragraphCount, m_tableCount);
             bx += drawPill(stats, bx, d2d.BrushText, false);
@@ -855,6 +951,10 @@ void OfficeEngine::Render(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D1_RECT
 
     if (m_kind == OfficeKind::Sheet) {
         RenderSheet(rt, d2d, targetRect, marginX, contentW, curY);
+        return;
+    }
+    if (m_kind == OfficeKind::Slide) {
+        RenderSlides(rt, d2d, targetRect, marginX, contentW, curY);
         return;
     }
 
@@ -1077,13 +1177,12 @@ bool LooksLikeDateCode(const std::wstring& code) {
 } // namespace
 
 bool OfficeEngine::LoadXlsx(const std::wstring& filePath) {
-    ArchiveEngine archive;
     std::string xml;
     std::wstring error;
 
     // Shared strings (optional).
     std::vector<std::wstring> sharedStrings;
-    if (archive.ReadEntry(filePath, L"xl/sharedStrings.xml", 32u * 1024 * 1024, xml, error)) {
+    if (ReadPart(filePath, L"xl/sharedStrings.xml", 32u * 1024 * 1024, xml, error)) {
         XmlNode root;
         if (ParseXml(xml, root, 300000, 60)) {
             const XmlNode* sst = FindChild(&root, L"sst");
@@ -1100,7 +1199,7 @@ bool OfficeEngine::LoadXlsx(const std::wstring& filePath) {
     std::vector<bool> dateStyles;
     {
         std::string stylesXml;
-        if (archive.ReadEntry(filePath, L"xl/styles.xml", 8u * 1024 * 1024, stylesXml, error)) {
+        if (ReadPart(filePath, L"xl/styles.xml", 8u * 1024 * 1024, stylesXml, error)) {
             XmlNode styles;
             if (ParseXml(stylesXml, styles, 60000, 40)) {
                 std::map<int, std::wstring> customFormats;
@@ -1131,7 +1230,7 @@ bool OfficeEngine::LoadXlsx(const std::wstring& filePath) {
     }
 
     // Workbook sheet list + relationships.
-    if (!archive.ReadEntry(filePath, L"xl/workbook.xml", 8u * 1024 * 1024, xml, error)) {
+    if (!ReadPart(filePath, L"xl/workbook.xml", 8u * 1024 * 1024, xml, error)) {
         m_errorText = error.empty() ? L"This workbook has no sheet list." : error;
         return false;
     }
@@ -1164,7 +1263,7 @@ bool OfficeEngine::LoadXlsx(const std::wstring& filePath) {
     std::map<std::wstring, std::wstring> relTargets;
     {
         std::string relsXml;
-        bool relsRead = archive.ReadEntry(filePath, L"xl/_rels/workbook.xml.rels", 4u * 1024 * 1024, relsXml, error);
+        bool relsRead = ReadPart(filePath, L"xl/_rels/workbook.xml.rels", 4u * 1024 * 1024, relsXml, error);
         if (relsRead) {
             XmlNode rels;
             if (ParseXml(relsXml, rels, 20000, 30)) {
@@ -1197,7 +1296,7 @@ bool OfficeEngine::LoadXlsx(const std::wstring& filePath) {
         if (entry.rfind(L"xl/", 0) != 0) entry = L"xl/" + entry;
 
         std::string sheetXml;
-        if (!archive.ReadEntry(filePath, entry, 64u * 1024 * 1024, sheetXml, error)) {
+        if (!ReadPart(filePath, entry, 64u * 1024 * 1024, sheetXml, error)) {
             continue;
         }
 
@@ -1295,10 +1394,9 @@ bool OfficeEngine::LoadXlsx(const std::wstring& filePath) {
 }
 
 bool OfficeEngine::LoadOds(const std::wstring& filePath) {
-    ArchiveEngine archive;
     std::string xml;
     std::wstring error;
-    if (!archive.ReadEntry(filePath, L"content.xml", 64u * 1024 * 1024, xml, error)) {
+    if (!ReadPart(filePath, L"content.xml", 64u * 1024 * 1024, xml, error)) {
         m_errorText = error.empty() ? L"This spreadsheet could not be read." : error;
         return false;
     }
@@ -1589,6 +1687,349 @@ void OfficeEngine::RenderSheet(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D1
     m_contentHeight = (float)sheet.rows.size() * rowH + 120.0f;
 }
 
+// ---------------------------------------------------------------------------
+// Presentations
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Slide paragraphs live in <a:p> runs; keep one block per paragraph.
+void AppendSlideParagraphs(const XmlNode* container, std::vector<OfficeBlock>& blocks,
+                           std::wstring* title, bool treatAsBullets) {
+    for (const auto& p : container->children) {
+        if (p->name != L"a:p" && p->name != L"text:p" && p->name != L"text:h") continue;
+        std::wstring text = CollapseWhitespace(p->name == L"a:p" ? TextContent(p.get())
+                                                                 : TextContent(p.get()));
+        if (text.empty()) continue;
+
+        if (title && title->empty()) {
+            *title = text;
+            continue;
+        }
+
+        OfficeBlock block;
+        block.type = treatAsBullets ? OfficeBlockType::Bullet : OfficeBlockType::Paragraph;
+        int level = 0;
+        if (p->name == L"a:p") {
+            const XmlNode* pPr = FindChild(p.get(), L"a:pPr");
+            if (pPr) {
+                if (const std::wstring* lvl = pPr->Attr(L"lvl")) level = _wtoi(lvl->c_str());
+            }
+        }
+        block.level = (std::max)(0, (std::min)(level, 4));
+        block.text = text;
+        blocks.push_back(std::move(block));
+    }
+}
+
+} // namespace
+
+bool OfficeEngine::LoadPptx(const std::wstring& filePath) {
+    std::string xml;
+    std::wstring error;
+
+    if (!ReadPart(filePath, L"ppt/presentation.xml", 16u * 1024 * 1024, xml, error)) {
+        m_errorText = error.empty() ? L"This presentation could not be read." : error;
+        return false;
+    }
+    XmlNode presentation;
+    if (!ParseXml(xml, presentation, 100000, 60)) {
+        m_errorText = L"This presentation's XML could not be parsed.";
+        return false;
+    }
+
+    std::vector<std::wstring> slideIds;
+    const XmlNode* idList = FindDescendant(&presentation, L"p:sldIdLst", 8);
+    if (idList) {
+        for (const auto& id : idList->children) {
+            if (id->name != L"p:sldId") continue;
+            std::wstring rid;
+            if (const std::wstring* value = id->Attr(L"r:id")) rid = *value;
+            if (!rid.empty()) slideIds.push_back(rid);
+        }
+    }
+    if (slideIds.empty()) {
+        m_errorText = L"This presentation has no slides.";
+        return false;
+    }
+
+    std::map<std::wstring, std::wstring> relTargets;
+    {
+        std::string relsXml;
+        if (ReadPart(filePath, L"ppt/_rels/presentation.xml.rels", 4u * 1024 * 1024, relsXml, error)) {
+            XmlNode rels;
+            if (ParseXml(relsXml, rels, 20000, 30)) {
+                const XmlNode* relationships = FindChild(&rels, L"Relationships");
+                if (relationships) {
+                    for (const auto& rel : relationships->children) {
+                        if (rel->name != L"Relationship") continue;
+                        const std::wstring* id = rel->Attr(L"Id");
+                        const std::wstring* target = rel->Attr(L"Target");
+                        if (id && target) relTargets[*id] = *target;
+                    }
+                }
+            }
+        }
+    }
+
+    const size_t kMaxSlides = 120;
+    for (const auto& rid : slideIds) {
+        if (m_slides.size() >= kMaxSlides) break;
+        auto it = relTargets.find(rid);
+        if (it == relTargets.end()) continue;
+
+        std::wstring entry = it->second;
+        if (entry.rfind(L"/", 0) == 0) entry = entry.substr(1);
+        if (entry.rfind(L"ppt/", 0) != 0) entry = L"ppt/" + entry;
+
+        std::string slideXml;
+        if (!ReadPart(filePath, entry, 32u * 1024 * 1024, slideXml, error)) continue;
+
+        XmlNode slideRoot;
+        if (!ParseXml(slideXml, slideRoot, 200000, 80)) continue;
+
+        OfficeSlide slide;
+        const XmlNode* cSld = FindDescendant(&slideRoot, L"p:cSld", 8);
+        const XmlNode* spTree = cSld ? FindChild(cSld, L"p:spTree") : nullptr;
+        if (spTree) {
+            for (const auto& node : spTree->children) {
+                if (node->name == L"p:sp") {
+                    std::wstring placeholder;
+                    const XmlNode* ph = FindDescendant(node.get(), L"p:ph", 6);
+                    if (ph) {
+                        if (const std::wstring* type = ph->Attr(L"type")) placeholder = *type;
+                    }
+                    std::vector<OfficeBlock> shapeBlocks;
+                    std::wstring shapeTitle;
+                    const XmlNode* txBody = FindChild(node.get(), L"p:txBody");
+                    if (!txBody) txBody = FindDescendant(node.get(), L"p:txBody", 6);
+                    if (txBody) {
+                        bool isTitle = (placeholder == L"title" || placeholder == L"ctrTitle");
+                        AppendSlideParagraphs(txBody, shapeBlocks, isTitle ? &shapeTitle : nullptr, !isTitle);
+                    }
+                    if (!shapeTitle.empty() && slide.title.empty()) slide.title = shapeTitle;
+                    for (auto& block : shapeBlocks) slide.blocks.push_back(std::move(block));
+                } else if (node->name == L"p:graphicFrame") {
+                    std::vector<OfficeBlock> frameBlocks;
+                    AppendSlideParagraphs(node.get(), frameBlocks, nullptr, false);
+                    for (auto& block : frameBlocks) slide.blocks.push_back(std::move(block));
+                }
+            }
+        }
+
+        if (slide.title.empty()) {
+            for (const auto& block : slide.blocks) {
+                if (!block.text.empty()) { slide.title = block.text; break; }
+            }
+        }
+        if (slide.title.size() > 90) slide.title = slide.title.substr(0, 88) + L"…";
+        m_slides.push_back(std::move(slide));
+    }
+
+    if (m_slides.empty()) {
+        m_errorText = L"No slides in this presentation could be read.";
+        return false;
+    }
+    return true;
+}
+
+bool OfficeEngine::LoadOdp(const std::wstring& filePath) {
+    std::string xml;
+    std::wstring error;
+    if (!ReadPart(filePath, L"content.xml", 64u * 1024 * 1024, xml, error)) {
+        m_errorText = error.empty() ? L"This presentation could not be read." : error;
+        return false;
+    }
+    XmlNode root;
+    if (!ParseXml(xml, root, 400000, 120)) {
+        m_errorText = L"This presentation's XML could not be parsed.";
+        return false;
+    }
+
+    const XmlNode* doc = FindChild(&root, L"office:document-content");
+    const XmlNode* body = doc ? FindChild(doc, L"office:body") : nullptr;
+    const XmlNode* presentation = body ? FindChild(body, L"office:presentation") : nullptr;
+    if (!presentation) {
+        m_errorText = L"This presentation has no slides.";
+        return false;
+    }
+
+    const size_t kMaxSlides = 120;
+    for (const auto& page : presentation->children) {
+        if (page->name != L"draw:page") continue;
+        if (m_slides.size() >= kMaxSlides) break;
+
+        OfficeSlide slide;
+        for (const auto& frame : page->children) {
+            if (frame->name != L"draw:frame") continue;
+            std::wstring frameClass;
+            if (const std::wstring* cls = frame->Attr(L"presentation:class")) frameClass = *cls;
+            bool isTitle = (frameClass == L"title" || frameClass == L"subtitle");
+
+            std::vector<OfficeBlock> frameBlocks;
+            std::wstring frameTitle;
+            AppendSlideParagraphs(frame.get(), frameBlocks, isTitle ? &frameTitle : nullptr, !isTitle);
+            if (isTitle && !frameTitle.empty() && slide.title.empty()) slide.title = frameTitle;
+            for (auto& block : frameBlocks) slide.blocks.push_back(std::move(block));
+        }
+
+        if (slide.title.empty()) {
+            for (const auto& block : slide.blocks) {
+                if (!block.text.empty()) { slide.title = block.text; break; }
+            }
+        }
+        if (slide.title.size() > 90) slide.title = slide.title.substr(0, 88) + L"…";
+        m_slides.push_back(std::move(slide));
+    }
+
+    if (m_slides.empty()) {
+        m_errorText = L"No slides in this presentation could be read.";
+        return false;
+    }
+    return true;
+}
+
+void OfficeEngine::SetActiveSlide(int index) {
+    if (index < 0 || index >= (int)m_slides.size()) return;
+    m_activeSlide = index;
+    m_scrollY = 0.0f;
+    m_targetScrollY = 0.0f;
+}
+
+std::wstring OfficeEngine::SlideTitle(int index) const {
+    if (index < 0 || index >= (int)m_slides.size()) return L"";
+    return m_slides[(size_t)index].title;
+}
+
+bool OfficeEngine::GetSlideRect(int index, D2D1_RECT_F& out) const {
+    for (const auto& entry : m_slideRects) {
+        if (entry.second == index) {
+            out = entry.first;
+            return true;
+        }
+    }
+    return false;
+}
+
+int OfficeEngine::HitTestSlide(float x, float y) const {
+    for (const auto& entry : m_slideRects) {
+        if (x >= entry.first.left && x <= entry.first.right &&
+            y >= entry.first.top && y <= entry.first.bottom) {
+            return entry.second;
+        }
+    }
+    return -1;
+}
+
+void OfficeEngine::RenderSlides(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D1_RECT_F& rect,
+                                 float marginX, float contentW, float curY) {
+    if (m_slides.empty()) return;
+    if (m_activeSlide < 0 || m_activeSlide >= (int)m_slides.size()) m_activeSlide = 0;
+
+    m_slideRects.clear();
+
+    const float stripW = 212.0f;
+    const float cardH = 54.0f;
+    const float stripTop = curY;
+    const float stripBottom = rect.bottom - 16.0f;
+
+    rt->PushAxisAlignedClip(D2D1::RectF(marginX, stripTop, marginX + stripW, stripBottom),
+                            D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+
+    float cardY = stripTop + m_scrollY;
+    for (int i = 0; i < (int)m_slides.size(); ++i) {
+        D2D1_RECT_F card = D2D1::RectF(marginX, cardY, marginX + stripW - 12.0f, cardY + cardH - 6.0f);
+        m_slideRects.emplace_back(card, i);
+        if (card.bottom >= stripTop && card.top <= stripBottom) {
+            bool active = (i == m_activeSlide);
+            D2D1_ROUNDED_RECT r = D2D1::RoundedRect(card, 7.0f, 7.0f);
+            rt->FillRoundedRectangle(r, active ? d2d.BrushCardSelected : d2d.BrushCard);
+            rt->DrawRoundedRectangle(r, active ? (ID2D1Brush*)d2d.BrushAccent : (ID2D1Brush*)d2d.BrushBorder, 1.0f);
+
+            WCHAR number[16];
+            swprintf_s(number, L"%d", i + 1);
+            rt->DrawText(number, (UINT32)wcslen(number),
+                         d2d.FontBadge ? d2d.FontBadge : d2d.FontCaption,
+                         D2D1::RectF(card.left + 10.0f, card.top + 6.0f, card.left + 34.0f, card.top + 26.0f),
+                         d2d.BrushTextMuted);
+
+            const std::wstring& title = m_slides[(size_t)i].title;
+            IDWriteTextLayout* layout = nullptr;
+            d2d.GetDWriteFactory()->CreateTextLayout(title.c_str(), (UINT32)title.length(),
+                m_formatBody ? m_formatBody : d2d.FontBody, card.right - card.left - 44.0f, 38.0f, &layout);
+            if (layout) {
+                layout->SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
+                DWRITE_TRIMMING trimming = { DWRITE_TRIMMING_GRANULARITY_CHARACTER, 0, 0 };
+                layout->SetTrimming(&trimming, nullptr);
+                rt->DrawTextLayout(D2D1::Point2F(card.left + 38.0f, card.top + 6.0f), layout,
+                                   active ? d2d.BrushText : d2d.BrushTextMuted);
+                layout->Release();
+            }
+        }
+        cardY += cardH;
+    }
+
+    rt->PopAxisAlignedClip();
+    m_contentHeight = (float)m_slides.size() * cardH + 100.0f;
+
+    // Current slide.
+    float slideX = marginX + stripW + 24.0f;
+    float slideW = (marginX + contentW) - slideX;
+    if (slideW < 160.0f) return;
+
+    const OfficeSlide& slide = m_slides[(size_t)m_activeSlide];
+    float y = stripTop;
+
+    D2D1_ROUNDED_RECT panel = D2D1::RoundedRect(
+        D2D1::RectF(slideX, y, slideX + slideW, (std::min)(stripBottom, y + 420.0f)), 10.0f, 10.0f);
+    rt->FillRoundedRectangle(panel, d2d.BrushCard);
+    rt->DrawRoundedRectangle(panel, d2d.BrushBorderSubtle, 1.0f);
+
+    float innerX = slideX + 26.0f;
+    float innerW = slideW - 52.0f;
+    y += 24.0f;
+
+    if (!slide.title.empty()) {
+        IDWriteTextLayout* title = nullptr;
+        d2d.GetDWriteFactory()->CreateTextLayout(slide.title.c_str(), (UINT32)slide.title.length(),
+            m_formatH2 ? m_formatH2 : d2d.FontTitle, innerW, 120.0f, &title);
+        if (title) {
+            title->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
+            title->SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
+            float h = 0.0f;
+            DWRITE_TEXT_METRICS metrics = {};
+            title->GetMetrics(&metrics);
+            h = metrics.height;
+            rt->DrawTextLayout(D2D1::Point2F(innerX, y), title, d2d.BrushText);
+            title->Release();
+            y += h + 14.0f;
+        }
+    }
+
+    for (const auto& block : slide.blocks) {
+        if (y > stripBottom - 20.0f) break;
+        float indent = 16.0f + (float)block.level * 18.0f;
+        std::wstring text = L"•  " + block.text;
+        IDWriteTextLayout* layout = nullptr;
+        d2d.GetDWriteFactory()->CreateTextLayout(text.c_str(), (UINT32)text.length(),
+            m_formatBody ? m_formatBody : d2d.FontBody, innerW - indent, 200.0f, &layout);
+        if (!layout) continue;
+        layout->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
+        layout->SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
+        DWRITE_TEXT_METRICS metrics = {};
+        layout->GetMetrics(&metrics);
+        rt->DrawTextLayout(D2D1::Point2F(innerX + indent, y), layout, d2d.BrushText);
+        layout->Release();
+        y += metrics.height + 8.0f;
+    }
+
+    WCHAR counter[48];
+    swprintf_s(counter, L"SLIDE %d / %d", m_activeSlide + 1, (int)m_slides.size());
+    rt->DrawText(counter, (UINT32)wcslen(counter), d2d.FontBadge ? d2d.FontBadge : d2d.FontCaption,
+                 D2D1::RectF(slideX + 4.0f, stripBottom - 22.0f, slideX + slideW, stripBottom),
+                 d2d.BrushTextMuted);
+}
+
 int RunOfficeDump(const std::wstring& filePath) {
     OfficeEngine engine;
     bool loaded = engine.LoadDocument(filePath);
@@ -1600,6 +2041,20 @@ int RunOfficeDump(const std::wstring& filePath) {
     wprintf(L"paragraphs=%u headings=%u tables=%u\n",
             engine.ParagraphCount(), engine.HeadingCount(), engine.TableCount());
 
+    if (engine.GetKind() == OfficeKind::Slide) {
+        wprintf(L"slides=%d active=%d\n", engine.SlideCount(), engine.ActiveSlide());
+        for (int i = 0; i < engine.SlideCount(); ++i) {
+            wprintf(L"slide[%d] title='%ls'\n", i, engine.SlideTitle(i).c_str());
+        }
+        // Body text of the first slide, one bullet per line.
+        {
+            std::wstring text = engine.GetPlainText();
+            size_t start = text.find(L"--- Slide 2 ---");
+            if (start == std::wstring::npos) start = text.size();
+            wprintf(L"first slide body:\n%ls\n", text.substr(0, start).c_str());
+        }
+        return 0;
+    }
     if (engine.GetKind() == OfficeKind::Sheet) {
         wprintf(L"sheets=%d active=%d\n", engine.SheetCount(), engine.ActiveSheet());
         for (int i = 0; i < engine.SheetCount(); ++i) {
