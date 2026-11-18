@@ -726,6 +726,43 @@ UINT WicDecoder::GetFrameCount(const std::wstring& filePath) {
     return count;
 }
 
+UINT WicDecoder::GetFrameDelayMs(const std::wstring& filePath, UINT frameIndex) {
+    IWICImagingFactory* factory = nullptr;
+    if (FAILED(CoCreateInstance(CLSID_WICImagingFactory2, NULL, CLSCTX_INPROC_SERVER,
+                                IID_PPV_ARGS(&factory))) || !factory) {
+        if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, NULL, CLSCTX_INPROC_SERVER,
+                                    IID_PPV_ARGS(&factory))) || !factory) {
+            return 0;
+        }
+    }
+
+    UINT delayMs = 0;
+    IWICBitmapDecoder* decoder = nullptr;
+    IWICBitmapFrameDecode* frame = nullptr;
+    IWICMetadataQueryReader* reader = nullptr;
+    if (SUCCEEDED(factory->CreateDecoderFromFilename(filePath.c_str(), NULL, GENERIC_READ,
+                                                     WICDecodeMetadataCacheOnDemand, &decoder)) && decoder &&
+        SUCCEEDED(decoder->GetFrame(frameIndex, &frame)) && frame &&
+        SUCCEEDED(frame->GetMetadataQueryReader(&reader)) && reader) {
+        PROPVARIANT value;
+        PropVariantInit(&value);
+        if (SUCCEEDED(reader->GetMetadataByName(L"/grctlext/Delay", &value)) && value.vt == VT_UI2) {
+            UINT hundredths = value.uiVal;
+            // Some WIC builds report the two GCE bytes swapped (0x0C00 for 12).
+            if (hundredths > 0xFF && (hundredths & 0xFF) == 0) hundredths >>= 8;
+            delayMs = hundredths * 10u;  // centiseconds -> ms
+            if (delayMs < 20u) delayMs = 20u;
+            if (delayMs > 10000u) delayMs = 100u;  // implausible: use a sane default
+        }
+        PropVariantClear(&value);
+    }
+    SafeRelease(reader);
+    SafeRelease(frame);
+    SafeRelease(decoder);
+    factory->Release();
+    return delayMs;
+}
+
 bool WicDecoder::LoadShellThumbnail(
     IWICImagingFactory* factory,
     ID2D1RenderTarget* renderTarget,

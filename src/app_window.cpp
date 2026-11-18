@@ -152,7 +152,7 @@ AppWindow::~AppWindow() {
     ExplorerHook::UninstallHook();
     SetCursorVisibility(true);
     DestroyHudWindow();
-    SafeRelease(m_imageBitmap);
+    ReleaseImageBitmap();
     SafeRelease(m_pdfPageBitmap);
     SafeRelease(m_audioAlbumArt);
     SafeRelease(m_audioAlbumBrush);
@@ -459,7 +459,7 @@ bool AppWindow::LoadImagePage(UINT index) {
                                        m_currentFilePath, &bitmap, &width, &height, &bounds, index)) {
         return false;
     }
-    if (m_imageBitmap) m_imageBitmap->Release();
+    ReleaseImageBitmap();
     m_imageBitmap = bitmap;
     m_imageWidth = width;
     m_imageHeight = height;
@@ -469,6 +469,65 @@ bool AppWindow::LoadImagePage(UINT index) {
     m_hasDetectedContentBounds = (cw < (float)m_imageWidth - 14.0f) || (ch < (float)m_imageHeight - 14.0f);
     m_imagePage = index;
     UpdateImageBadge();
+    return true;
+}
+
+void AppWindow::ReleaseImageBitmap() {
+    if (!m_animFrames.empty()) {
+        m_imageBitmap = nullptr;  // aliases m_animFrames[0]
+        for (ID2D1Bitmap* frame : m_animFrames) {
+            if (frame) frame->Release();
+        }
+        m_animFrames.clear();
+        m_animDelays.clear();
+        m_animFrame = 0;
+        m_animElapsed = 0.0f;
+        return;
+    }
+    SafeRelease(m_imageBitmap);
+}
+
+bool AppWindow::LoadAnimation(const std::wstring& filePath) {
+    UINT frames = WicDecoder::GetFrameCount(filePath);
+    if (frames < 2 || frames > 240) return false;
+
+    std::vector<ID2D1Bitmap*> bitmaps;
+    std::vector<float> delays;
+    UINT64 totalPixels = 0;
+    const UINT64 kMaxTotalPixels = 48ull * 1024ull * 1024ull;
+
+    for (UINT i = 0; i < frames; ++i) {
+        D2D1_RECT_F bounds = {};
+        ID2D1Bitmap* bitmap = nullptr;
+        UINT width = 0, height = 0;
+        if (!WicDecoder::LoadImageFromFile(m_d2d.GetWICFactory(), m_d2d.GetRenderTarget(),
+                                           filePath, &bitmap, &width, &height, &bounds, i) || !bitmap) {
+            for (ID2D1Bitmap* loaded : bitmaps) loaded->Release();
+            return false;
+        }
+        totalPixels += (UINT64)width * (UINT64)height;
+        if (totalPixels > kMaxTotalPixels) {
+            bitmap->Release();
+            for (ID2D1Bitmap* loaded : bitmaps) loaded->Release();
+            return false;
+        }
+        bitmaps.push_back(bitmap);
+
+        UINT delayMs = WicDecoder::GetFrameDelayMs(filePath, i);
+        float seconds = (delayMs == 0) ? 0.1f : (float)delayMs / 1000.0f;
+        if (seconds < 0.02f) seconds = 0.02f;
+        delays.push_back(seconds);
+    }
+
+    ReleaseImageBitmap();  // drops the still frame
+    m_animFrames = std::move(bitmaps);
+    m_animDelays = std::move(delays);
+    m_animFrame = 0;
+    m_animElapsed = 0.0f;
+    m_imageBitmap = m_animFrames[0];
+    m_imageWidth = (UINT)m_imageBitmap->GetSize().width;
+    m_imageHeight = (UINT)m_imageBitmap->GetSize().height;
+    EnsureAnimTimer();
     return true;
 }
 
@@ -497,7 +556,7 @@ bool AppWindow::OpenFile(const std::wstring& filePath) {
     if (m_pdfRasterCtx) m_pdfRasterCtx->requestedGen.store(m_pdfRasterGen, std::memory_order_release);
     m_media.CloseMedia();
     m_pdf.CloseDocument();
-    SafeRelease(m_imageBitmap);
+    ReleaseImageBitmap();
     SafeRelease(m_pdfPageBitmap);
     SafeRelease(m_audioAlbumArt);
     SafeRelease(m_audioAlbumBrush);
@@ -1158,7 +1217,14 @@ bool AppWindow::OpenFile(const std::wstring& filePath) {
                 UINT frames = WicDecoder::GetFrameCount(filePath);
                 if (frames > 1) m_imagePageCount = frames;
             }
-            UpdateImageBadge();
+            if (ext == L".gif" && LoadAnimation(filePath)) {
+                WCHAR animBadge[96];
+                swprintf_s(animBadge, L"GIF • %u FRAMES • %u × %u",
+                           (unsigned)m_animFrames.size(), m_imageWidth, m_imageHeight);
+                m_formatBadgeText = animBadge;
+            } else {
+                UpdateImageBadge();
+            }
             m_showSidebar = false;
             if (m_hudHwnd) ShowWindow(m_hudHwnd, SW_HIDE);
             success = true;
@@ -2426,7 +2492,7 @@ void AppWindow::Render(HDC outHdc) {
         SafeRelease(m_settingsLayer);
         // Every cached bitmap belonged to the old device; drawing them against the
         // recreated target fails with D2DERR_WRONG_RESOURCE_DOMAIN.
-        SafeRelease(m_imageBitmap);
+        ReleaseImageBitmap();
         SafeRelease(m_pdfPageBitmap);
         SafeRelease(m_audioAlbumArt);
         SafeRelease(m_audioAlbumBrush);
@@ -7864,7 +7930,7 @@ void AppWindow::CloseCurrentPreview() {
     if (m_pdfRasterCtx) m_pdfRasterCtx->requestedGen.store(m_pdfRasterGen, std::memory_order_release);
     m_pdf.CloseDocument();
     SafeRelease(m_pdfPageBitmap);
-    SafeRelease(m_imageBitmap);
+    ReleaseImageBitmap();
     SafeRelease(m_audioAlbumArt);
     SafeRelease(m_audioAlbumBrush);
     SafeRelease(m_officeBitmap);
@@ -9617,6 +9683,13 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         case WM_APP + 260: /* Diagnostic: sheet count */ {
             return (LRESULT)(m_docType == DocumentType::OfficeDoc ? m_office.SheetCount() : 0);
         }
+        case WM_APP + 275: /* Diagnostic: GIF frame index (-1 when not animated) */ {
+            if (m_docType != DocumentType::Image || m_animFrames.size() < 2) return -1;
+            return (LRESULT)m_animFrame;
+        }
+        case WM_APP + 276: /* Diagnostic: GIF frame count */ {
+            return (LRESULT)(m_docType == DocumentType::Image ? m_animFrames.size() : 0);
+        }
         case WM_APP + 273: /* Diagnostic: image page index (-1 when single page) */ {
             if (m_docType != DocumentType::Image || m_imagePageCount <= 1) return -1;
             return (LRESULT)m_imagePage;
@@ -10092,6 +10165,25 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 }
             }
 
+            // 1.5 Animated images (GIF): advance on the frame's own delay.
+            if (m_docType == DocumentType::Image && m_animFrames.size() > 1) {
+                m_animElapsed += dt;
+                bool advanced = false;
+                size_t guard = 0;
+                while (m_animFrames.size() > 1 && guard++ < m_animFrames.size()) {
+                    float delay = m_animDelays[m_animFrame];
+                    if (m_animElapsed < delay) break;
+                    m_animElapsed -= delay;
+                    m_animFrame = (m_animFrame + 1) % m_animFrames.size();
+                    advanced = true;
+                }
+                if (advanced) {
+                    m_imageBitmap = m_animFrames[m_animFrame];
+                    InvalidateRect(m_hwnd, NULL, FALSE);
+                }
+                EnsureAnimTimer();  // keep the pump awake while the GIF plays
+            }
+
             // 2. Viewport direct sync (Images, PDF, Office, SVG)
             if (m_docType == DocumentType::Image || m_docType == DocumentType::Pdf ||
                 m_docType == DocumentType::Office || m_docType == DocumentType::Svg) {
@@ -10177,6 +10269,7 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
 
             bool animationsActive =
                 panelAnimationsActive ||
+                (m_docType == DocumentType::Image && m_animFrames.size() > 1) ||
                 isDockFading || isHudFading ||
                 m_toastOpacity > 0.01f ||
                 (m_tooltipAlpha > 0.0f && m_tooltipAlpha < 0.995f) ||
@@ -11831,7 +11924,7 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
 
             // Book view: Ctrl +/-/0 changes the reading size.
             if (m_docType == DocumentType::OfficeDoc && m_office.GetKind() == OfficeKind::Book &&
-                (GetKeyState(VK_CONTROL) & 0x8000)) {
+                ((GetKeyState(VK_CONTROL) & 0x8000) || (GetAsyncKeyState(VK_CONTROL) & 0x8000))) {
                 const int vk = (int)wParam;
                 if (vk == VK_OEM_PLUS || vk == VK_ADD || vk == 0xBB) {
                     m_office.SetBookFontSize(m_office.GetBookFontSize() + 1);

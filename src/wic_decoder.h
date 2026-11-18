@@ -37,6 +37,9 @@ public:
     // Frames in a container: pages for TIFF, animation frames for GIF.
     static UINT GetFrameCount(const std::wstring& filePath);
 
+    // GIF frame delay in milliseconds (0 when the frame has no delay).
+    static UINT GetFrameDelayMs(const std::wstring& filePath, UINT frameIndex);
+
     static bool CreateThumbnail(
         IWICImagingFactory* factory,
         ID2D1RenderTarget* renderTarget,

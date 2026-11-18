@@ -170,6 +170,13 @@ public:
     UINT m_imagePage = 0;
     bool LoadImagePage(UINT index);
     void UpdateImageBadge();
+    bool LoadAnimation(const std::wstring& filePath);
+    void ReleaseImageBitmap();
+
+    std::vector<ID2D1Bitmap*> m_animFrames;
+    std::vector<float> m_animDelays;
+    size_t m_animFrame = 0;
+    float m_animElapsed = 0.0f;
 
     bool m_forceInstalled = false;       // tests drive the installed update path from a staged build
     int m_bootAttempts = 0;              // consecutive starts without reaching a healthy state
