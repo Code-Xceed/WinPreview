@@ -706,6 +706,7 @@ bool OfficeEngine::LoadDocument(const std::wstring& filePath) {
 }
 
 void OfficeEngine::Scroll(float dy) {
+    m_pinnedChapter = -1;
     float maxScroll = (std::max)(0.0f, m_contentHeight - 400.0f);
     m_scrollY += dy;
     if (m_scrollY > 0.0f) m_scrollY = 0.0f;
@@ -861,14 +862,23 @@ void OfficeEngine::EnsureFormats(D2DEngine& d2d) {
         }
     }
 
+    // Books follow the reading-size preference; documents keep their sizes.
+    float bodySize = 15.0f;
+    if (m_kind == OfficeKind::Book) {
+        bodySize = (m_bookFontSize == 0) ? 13.0f : (m_bookFontSize == 2 ? 18.0f : 15.0f);
+    }
+    const float h1Size = bodySize * 2.0f;
+    const float h2Size = bodySize * 1.45f;
+    const float h3Size = bodySize * 1.12f;
+
     factory->CreateTextFormat(family, nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-                              DWRITE_FONT_STRETCH_NORMAL, 15.0f, L"", &m_formatBody);
+                              DWRITE_FONT_STRETCH_NORMAL, bodySize, L"", &m_formatBody);
     factory->CreateTextFormat(family, nullptr, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_FONT_STYLE_NORMAL,
-                              DWRITE_FONT_STRETCH_NORMAL, 30.0f, L"", &m_formatH1);
+                              DWRITE_FONT_STRETCH_NORMAL, h1Size, L"", &m_formatH1);
     factory->CreateTextFormat(family, nullptr, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_FONT_STYLE_NORMAL,
-                              DWRITE_FONT_STRETCH_NORMAL, 22.0f, L"", &m_formatH2);
+                              DWRITE_FONT_STRETCH_NORMAL, h2Size, L"", &m_formatH2);
     factory->CreateTextFormat(family, nullptr, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_FONT_STYLE_NORMAL,
-                              DWRITE_FONT_STRETCH_NORMAL, 17.0f, L"", &m_formatH3);
+                              DWRITE_FONT_STRETCH_NORMAL, h3Size, L"", &m_formatH3);
 
     for (IDWriteTextFormat* format : { m_formatBody, m_formatH1, m_formatH2, m_formatH3 }) {
         if (!format) continue;
@@ -886,8 +896,27 @@ void OfficeEngine::Render(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D1_RECT
     float marginX = (std::max)(40.0f, (clientW - 780.0f) / 2.0f);
     float contentW = clientW - marginX * 2.0f;
 
-    bool fixedHeader = (m_kind == OfficeKind::Sheet || m_kind == OfficeKind::Slide);
+    bool fixedHeader = (m_kind == OfficeKind::Sheet || m_kind == OfficeKind::Slide ||
+                        m_kind == OfficeKind::Book);
     float curY = targetRect.top + 32.0f + (fixedHeader ? 0.0f : m_scrollY);
+
+    // Books: keep the active chapter in step with the scroll position *before*
+    // the header draws, so the CHAPTER n / m pill is never a frame behind.
+    if (m_kind == OfficeKind::Book && !m_chapters.empty() && !m_blockOffsets.empty()) {
+        if (m_pinnedChapter >= 0) {
+            m_activeChapter = m_pinnedChapter;
+        } else {
+            float visibleTop = -m_scrollY + 40.0f;
+            int active = 0;
+            for (int i = 0; i < (int)m_chapters.size(); ++i) {
+                size_t blockIndex = m_chapters[(size_t)i].blockIndex;
+                if (blockIndex < m_blockOffsets.size() && m_blockOffsets[blockIndex] <= visibleTop) {
+                    active = i;
+                }
+            }
+            m_activeChapter = active;
+        }
+    }
 
     // Header: icon + title + file path, then a chip row.
     {
@@ -1002,6 +1031,36 @@ void OfficeEngine::Render(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D1_RECT
         RenderSlides(rt, d2d, targetRect, marginX, contentW, curY);
         return;
     }
+    if (m_kind == OfficeKind::Book) {
+        float railW = (m_chapters.size() > 1) ? 196.0f : 0.0f;
+        float textLeft = marginX + railW;
+        float textW = (marginX + contentW) - textLeft;
+        // A comfortable measure: long lines are hard to read.
+        if (textW > 700.0f) {
+            textLeft += (textW - 700.0f) / 2.0f;
+            textW = 700.0f;
+        }
+        RenderChapterRail(rt, d2d, marginX, railW, curY, targetRect.bottom);
+
+        // The header is fixed for books, so the text must be clipped to the body
+        // area or a scrolled chapter draws over the title and chips.
+        float bodyTop = curY - 6.0f;
+        rt->PushAxisAlignedClip(D2D1::RectF(marginX, bodyTop, targetRect.right, targetRect.bottom),
+                                D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+        RenderWord(rt, d2d, targetRect, textLeft, textW, curY + m_scrollY);
+        rt->PopAxisAlignedClip();
+
+        if (m_pendingScrollChapter >= 0 && m_pendingScrollChapter < (int)m_chapters.size()) {
+            size_t blockIndex = m_chapters[(size_t)m_pendingScrollChapter].blockIndex;
+            if (blockIndex < m_blockOffsets.size()) {
+                float offset = m_blockOffsets[blockIndex] + 26.0f;
+                m_scrollY = -(std::max)(0.0f, offset);
+                m_targetScrollY = m_scrollY;
+            }
+            m_pendingScrollChapter = -1;
+        }
+        return;
+    }
 
     RenderWord(rt, d2d, targetRect, marginX, contentW, curY);
 }
@@ -1011,9 +1070,12 @@ void OfficeEngine::RenderWord(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D1_
     // Body blocks.
     const float rowPad = 8.0f;
     m_blockOffsets.assign(m_blocks.size(), 0.0f);
+    // Offsets are content-space (first block = 0) so scrolling to a chapter works
+    // identically for the scrolling word view and the fixed-header book view.
+    const float bodyOriginY = curY;
     for (size_t blockIndex = 0; blockIndex < m_blocks.size(); ++blockIndex) {
         auto& block = m_blocks[blockIndex];
-        m_blockOffsets[blockIndex] = curY - (targetRect.top + 32.0f) - m_scrollY;
+        m_blockOffsets[blockIndex] = curY - bodyOriginY;
         if (block.type == OfficeBlockType::Table) {
             if (block.rows.empty()) continue;
             size_t columns = 1;
@@ -1983,6 +2045,57 @@ int OfficeEngine::HitTestSlide(float x, float y) const {
     return -1;
 }
 
+void OfficeEngine::RenderChapterRail(ID2D1RenderTarget* rt, D2DEngine& d2d, float left,
+                                      float width, float top, float bottom) {
+    m_chapterRects.clear();
+    if (width <= 1.0f || m_chapters.empty()) return;
+
+    const float cardH = 40.0f;
+    const float gap = 6.0f;
+    size_t visible = (size_t)((std::max)(0.0f, bottom - top - 16.0f) / (cardH + gap));
+    if (visible == 0) return;
+
+    // Centre the window of chapters on the active one.
+    size_t first = 0;
+    if (m_chapters.size() > visible) {
+        size_t half = visible / 2;
+        first = (m_activeChapter > (int)half) ? (size_t)m_activeChapter - half : 0;
+        if (first + visible > m_chapters.size()) first = m_chapters.size() - visible;
+    }
+
+    float y = top + 6.0f;
+    for (size_t i = first; i < m_chapters.size() && i < first + visible; ++i) {
+        D2D1_RECT_F card = D2D1::RectF(left, y, left + width - 14.0f, y + cardH);
+        m_chapterRects.emplace_back(card, (int)i);
+
+        bool active = ((int)i == m_activeChapter);
+        D2D1_ROUNDED_RECT r = D2D1::RoundedRect(card, 7.0f, 7.0f);
+        rt->FillRoundedRectangle(r, active ? d2d.BrushCardSelected : d2d.BrushCard);
+        rt->DrawRoundedRectangle(r, active ? (ID2D1Brush*)d2d.BrushAccent : (ID2D1Brush*)d2d.BrushBorder, 1.0f);
+
+        WCHAR number[16];
+        swprintf_s(number, L"%d", (int)i + 1);
+        rt->DrawText(number, (UINT32)wcslen(number),
+                     d2d.FontBadge ? d2d.FontBadge : d2d.FontCaption,
+                     D2D1::RectF(card.left + 8.0f, card.top + 4.0f, card.left + 30.0f, card.top + 22.0f),
+                     d2d.BrushTextMuted);
+
+        const std::wstring& title = m_chapters[i].title;
+        IDWriteTextLayout* layout = nullptr;
+        d2d.GetDWriteFactory()->CreateTextLayout(title.c_str(), (UINT32)title.length(),
+            m_formatBody ? m_formatBody : d2d.FontBody, card.right - card.left - 36.0f, 32.0f, &layout);
+        if (layout) {
+            layout->SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
+            DWRITE_TRIMMING trimming = { DWRITE_TRIMMING_GRANULARITY_CHARACTER, 0, 0 };
+            layout->SetTrimming(&trimming, nullptr);
+            rt->DrawTextLayout(D2D1::Point2F(card.left + 32.0f, card.top + 3.0f), layout,
+                               active ? d2d.BrushText : d2d.BrushTextMuted);
+            layout->Release();
+        }
+        y += cardH + gap;
+    }
+}
+
 void OfficeEngine::RenderSlides(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D1_RECT_F& rect,
                                  float marginX, float contentW, float curY) {
     if (m_slides.empty()) return;
@@ -2376,23 +2489,57 @@ void OfficeEngine::ParseXhtmlChapter(const std::wstring& xhtml, const std::wstri
     m_chapters.push_back(std::move(chapter));
 }
 
+void OfficeEngine::SetBookFontSize(int level) {
+    level = (std::max)(0, (std::min)(2, level));
+    if (level == m_bookFontSize) return;
+    m_bookFontSize = level;
+    ReleaseFormats();  // rebuilt on the next frame at the new size
+}
+
 bool OfficeEngine::GoToChapter(int index) {
     if (index < 0 || index >= (int)m_chapters.size()) return false;
     m_activeChapter = index;
-    float offset = 0.0f;
+    m_pinnedChapter = index;
+
     size_t blockIndex = m_chapters[(size_t)index].blockIndex;
-    if (blockIndex < m_blockOffsets.size()) {
-        offset = m_blockOffsets[blockIndex] - 24.0f;
-        if (offset < 0.0f) offset = 0.0f;
+    if (blockIndex >= m_blockOffsets.size()) {
+        // No layout yet (progress restored at open): apply after the first pass.
+        m_pendingScrollChapter = index;
+        return true;
     }
+    // The chapter marker adds a 26px top gap when it draws; cancel it so the
+    // title lands exactly at the top of the reading area.
+    float offset = m_blockOffsets[blockIndex] + 26.0f;
+    if (offset < 0.0f) offset = 0.0f;
     m_scrollY = -offset;
     m_targetScrollY = m_scrollY;
+    m_pendingScrollChapter = -1;
     return true;
 }
 
 std::wstring OfficeEngine::ChapterTitle(int index) const {
     if (index < 0 || index >= (int)m_chapters.size()) return L"";
     return m_chapters[(size_t)index].title;
+}
+
+bool OfficeEngine::GetChapterRect(int index, D2D1_RECT_F& out) const {
+    for (const auto& entry : m_chapterRects) {
+        if (entry.second == index) {
+            out = entry.first;
+            return true;
+        }
+    }
+    return false;
+}
+
+int OfficeEngine::HitTestChapter(float x, float y) const {
+    for (const auto& entry : m_chapterRects) {
+        if (x >= entry.first.left && x <= entry.first.right &&
+            y >= entry.first.top && y <= entry.first.bottom) {
+            return entry.second;
+        }
+    }
+    return -1;
 }
 
 float OfficeEngine::ChapterOffset(int index) const {

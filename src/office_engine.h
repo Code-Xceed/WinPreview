@@ -112,6 +112,12 @@ public:
     bool GoToChapter(int index);
     float ChapterOffset(int index) const;
     std::wstring ChapterTitle(int index) const;
+    bool GetChapterRect(int index, D2D1_RECT_F& out) const;
+    int HitTestChapter(float x, float y) const;
+
+    // Typography for books: 0 small, 1 normal, 2 large.
+    void SetBookFontSize(int level);
+    int GetBookFontSize() const { return m_bookFontSize; }
 
     int SlideCount() const { return (int)m_slides.size(); }
     int ActiveSlide() const { return m_activeSlide; }
@@ -152,6 +158,8 @@ private:
     void ParseXhtmlChapter(const std::wstring& xhtml, const std::wstring& fallbackTitle, int chapterNumber);
     void RenderSlides(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D1_RECT_F& rect,
                       float marginX, float contentW, float curY);
+    void RenderChapterRail(ID2D1RenderTarget* rt, D2DEngine& d2d, float left, float width,
+                           float top, float bottom);
     void RenderWord(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D1_RECT_F& rect, float marginX, float contentW, float curY);
     void RenderSheet(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D1_RECT_F& rect, float marginX, float contentW, float curY);
 
@@ -168,6 +176,10 @@ private:
     std::vector<OfficeSlide> m_slides;
     int m_activeSlide = 0;
     std::vector<OfficeChapter> m_chapters;
+    std::vector<std::pair<D2D1_RECT_F, int>> m_chapterRects;
+    int m_bookFontSize = 1;
+    int m_pinnedChapter = -1;      // set by a jump, cleared when the reader scrolls
+    int m_pendingScrollChapter = -1;  // jump requested before the first layout
     int m_activeChapter = 0;
     std::vector<float> m_blockOffsets;   // measured tops from the last render
     float m_bookScrollTarget = -1.0f;

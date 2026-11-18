@@ -1003,13 +1003,18 @@ bool AppWindow::OpenFile(const std::wstring& filePath) {
         // Word/OpenDocument text is parsed into blocks; anything the parser
         // cannot open yet keeps the shell thumbnail it had before.
         if (m_office.LoadDocument(filePath)) {
-            if (m_office.GetKind() == OfficeKind::Book) RestoreBookProgress(filePath);
+            if (m_office.GetKind() == OfficeKind::Book) {
+                RestoreBookProgress(filePath);
+                RestoreBookFontSize();
+            }
             m_docType = DocumentType::OfficeDoc;
             m_showSidebar = false;
             if (m_hudHwnd) ShowWindow(m_hudHwnd, SW_HIDE);
             m_formatBadgeText = m_office.GetFormatBadge();
             AdaptWindowToMedia(900, 720);
             UpdateWindow(m_hwnd);
+            // A restored chapter can only be scrolled to after the first layout.
+            InvalidateRect(m_hwnd, NULL, FALSE);
             success = true;
         } else if (WicDecoder::LoadShellThumbnail(m_d2d.GetWICFactory(), m_d2d.GetRenderTarget(), filePath, 1280, &m_officeBitmap)) {
             m_docType = DocumentType::Office;
@@ -7016,6 +7021,27 @@ void AppWindow::SaveBookProgress() {
     }
 }
 
+void AppWindow::SaveBookFontSize() {
+    HKEY hKey = NULL;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\WinPreview\\Settings", 0, NULL, 0,
+                        KEY_WRITE, NULL, &hKey, NULL) == ERROR_SUCCESS) {
+        DWORD value = (DWORD)m_office.GetBookFontSize();
+        RegSetValueExW(hKey, L"BookFontSize", 0, REG_DWORD, (const BYTE*)&value, sizeof(value));
+        RegCloseKey(hKey);
+    }
+}
+
+void AppWindow::RestoreBookFontSize() {
+    DWORD value = 1, size = sizeof(value), type = 0;
+    HKEY hKey = NULL;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\WinPreview\\Settings", 0, KEY_READ, &hKey) != ERROR_SUCCESS) {
+        return;
+    }
+    const bool found = RegQueryValueExW(hKey, L"BookFontSize", NULL, &type, (LPBYTE)&value, &size) == ERROR_SUCCESS;
+    RegCloseKey(hKey);
+    if (found) m_office.SetBookFontSize((int)value);
+}
+
 void AppWindow::RestoreBookProgress(const std::wstring& filePath) {
     WCHAR buffer[4096] = {};
     DWORD size = sizeof(buffer);
@@ -9554,6 +9580,21 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         case WM_APP + 260: /* Diagnostic: sheet count */ {
             return (LRESULT)(m_docType == DocumentType::OfficeDoc ? m_office.SheetCount() : 0);
         }
+        case WM_APP + 271: /* Diagnostic: chapter rail card rect by index (wParam) */ {
+            D2D1_RECT_F r = {};
+            if (m_docType != DocumentType::OfficeDoc || !m_office.GetChapterRect((int)wParam, r)) return 0;
+            auto lane = [](float v) -> unsigned long long {
+                int i = (int)(v + 0.5f);
+                if (i < 0) i = 0;
+                if (i > 65535) i = 65535;
+                return (unsigned long long)(unsigned short)i;
+            };
+            return (LRESULT)(lane(r.left) | (lane(r.top) << 16) | (lane(r.right) << 32) | (lane(r.bottom) << 48));
+        }
+        case WM_APP + 272: /* Diagnostic: book reading size (0 small, 1 normal, 2 large) */ {
+            return (LRESULT)(m_docType == DocumentType::OfficeDoc && m_office.GetKind() == OfficeKind::Book
+                                 ? m_office.GetBookFontSize() : -1);
+        }
         case WM_APP + 269: /* Diagnostic: comic page index (-1 when not a comic) */ {
             return (LRESULT)(m_docType == DocumentType::Comic ? m_comic.CurrentPage() : -1);
         }
@@ -10665,6 +10706,16 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 return 0;
             }
 
+            // Book view: the chapter rail is clickable.
+            if (m_docType == DocumentType::OfficeDoc && m_office.GetKind() == OfficeKind::Book) {
+                int chapter = m_office.HitTestChapter(pt.x, pt.y);
+                if (chapter >= 0) {
+                    if (m_office.GoToChapter(chapter)) SaveBookProgress();
+                    InvalidateRect(m_hwnd, NULL, FALSE);
+                    return 0;
+                }
+            }
+
             // Presentation view: the slide strip is clickable.
             if (m_docType == DocumentType::OfficeDoc && m_office.GetKind() == OfficeKind::Slide) {
                 int slide = m_office.HitTestSlide(pt.x, pt.y);
@@ -11717,6 +11768,30 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 }
                 if (wParam == VK_LEFT || wParam == VK_UP || wParam == VK_PRIOR || wParam == VK_BACK) {
                     m_comic.PreviousPage();
+                    InvalidateRect(m_hwnd, NULL, FALSE);
+                    return 0;
+                }
+            }
+
+            // Book view: Ctrl +/-/0 changes the reading size.
+            if (m_docType == DocumentType::OfficeDoc && m_office.GetKind() == OfficeKind::Book &&
+                (GetKeyState(VK_CONTROL) & 0x8000)) {
+                const int vk = (int)wParam;
+                if (vk == VK_OEM_PLUS || vk == VK_ADD || vk == 0xBB) {
+                    m_office.SetBookFontSize(m_office.GetBookFontSize() + 1);
+                    SaveBookFontSize();
+                    InvalidateRect(m_hwnd, NULL, FALSE);
+                    return 0;
+                }
+                if (vk == VK_OEM_MINUS || vk == VK_SUBTRACT || vk == 0xBD) {
+                    m_office.SetBookFontSize(m_office.GetBookFontSize() - 1);
+                    SaveBookFontSize();
+                    InvalidateRect(m_hwnd, NULL, FALSE);
+                    return 0;
+                }
+                if (vk == L'0' || vk == VK_NUMPAD0) {
+                    m_office.SetBookFontSize(1);
+                    SaveBookFontSize();
                     InvalidateRect(m_hwnd, NULL, FALSE);
                     return 0;
                 }

@@ -142,6 +142,8 @@ public:
     void NotifyRolledBack();
     void SaveBookProgress();
     void RestoreBookProgress(const std::wstring& filePath);
+    void SaveBookFontSize();
+    void RestoreBookFontSize();
     void NotifyUpdateFailed(const std::wstring& code);
     // Deterministic update-flow hooks used by tests/update_flow_test.ps1.
     void StartUpdateCheckForTesting();
