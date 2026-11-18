@@ -1,12 +1,12 @@
 {
-  "version": "1.3.20",
-  "release_date": "2026-11-22",
+  "version": "1.3.21",
+  "release_date": "2026-11-23",
   "channel": "stable",
   "rollout": 100,
   "paused": false,
   "mandatory": false,
   "min_supported": "",
-  "notes": "What's new\n\n- EPUB books have a chapter rail: every chapter is a card you can click, and the one you are reading stays highlighted.\n- Page Down / Page Up still turn chapters, and the rail keeps up when you scroll.\n- Reading size is yours: Ctrl + makes the text larger, Ctrl - smaller, Ctrl 0 back to normal, and the choice is remembered.\n- Book text is set to a comfortable line length instead of stretching across the window.",
-  "changelog": "WinPreview 1.3.20 - book reading polish (1D). Fixed chapter rail with click-to-jump from measured offsets, 700px measure for books, reading size (13/15/18px) via Ctrl +/-/0 persisted in BookFontSize, deferred scroll for restored chapters, and chapter tracking that follows manual scrolling. Office suite now 83 checks.",
+  "notes": "What's new\n\n- Multi-page TIFF files open as pages: the header shows PAGE 2 / 3 and the arrow keys or Page Up / Page Down move through the document.\n- Single-page images behave exactly as before - no pager appears.\n- Animated GIF playback is coming next.",
+  "changelog": "WinPreview 1.3.21 - multipage TIFF (1E, part 1). WicDecoder accepts a frame index and reports frame counts; TIFF pages navigate with arrows/PageUp/PageDown/Space, clamp at both ends, and show PAGE n / m in the badge. Still images keep the -1 page diagnostic so no pager appears. 9 new checks.",
   "download_url": "https://github.com/Code-Xceed/WinPreview/releases/latest/download/WinPreview-Setup-x64.exe"
 }

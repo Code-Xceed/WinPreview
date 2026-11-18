@@ -30,8 +30,12 @@ public:
         ID2D1Bitmap** outBitmap,
         UINT* outWidth,
         UINT* outHeight,
-        D2D1_RECT_F* outContentBounds = nullptr
+        D2D1_RECT_F* outContentBounds = nullptr,
+        UINT frameIndex = 0
     );
+
+    // Frames in a container: pages for TIFF, animation frames for GIF.
+    static UINT GetFrameCount(const std::wstring& filePath);
 
     static bool CreateThumbnail(
         IWICImagingFactory* factory,

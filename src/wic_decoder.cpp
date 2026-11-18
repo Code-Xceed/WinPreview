@@ -76,7 +76,8 @@ bool WicDecoder::LoadImageFromFile(
     ID2D1Bitmap** outBitmap,
     UINT* outWidth,
     UINT* outHeight,
-    D2D1_RECT_F* outContentBounds
+    D2D1_RECT_F* outContentBounds,
+    UINT frameIndex
 ) {
     if (!factory || !renderTarget || !outBitmap) return false;
     *outBitmap = nullptr;
@@ -134,7 +135,7 @@ bool WicDecoder::LoadImageFromFile(
     }
 
     IWICBitmapFrameDecode* frame = nullptr;
-    hr = decoder->GetFrame(0, &frame);
+    hr = decoder->GetFrame(frameIndex, &frame);
     if (FAILED(hr) || !frame) {
         SafeRelease(decoder);
         return false;
@@ -702,6 +703,27 @@ bool WicDecoder::SaveImage(
         return false;
     }
     return true;
+}
+
+UINT WicDecoder::GetFrameCount(const std::wstring& filePath) {
+    IWICImagingFactory* factory = nullptr;
+    if (FAILED(CoCreateInstance(CLSID_WICImagingFactory2, NULL, CLSCTX_INPROC_SERVER,
+                                IID_PPV_ARGS(&factory))) || !factory) {
+        if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, NULL, CLSCTX_INPROC_SERVER,
+                                    IID_PPV_ARGS(&factory))) || !factory) {
+            return 0;
+        }
+    }
+
+    UINT count = 0;
+    IWICBitmapDecoder* decoder = nullptr;
+    if (SUCCEEDED(factory->CreateDecoderFromFilename(filePath.c_str(), NULL, GENERIC_READ,
+                                                     WICDecodeMetadataCacheOnDemand, &decoder)) && decoder) {
+        decoder->GetFrameCount(&count);
+        decoder->Release();
+    }
+    factory->Release();
+    return count;
 }
 
 bool WicDecoder::LoadShellThumbnail(

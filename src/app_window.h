@@ -166,6 +166,11 @@ public:
     bool m_installOnClose = false;
     bool m_autoDownloadUpdates = true;   // Discord-style: fetch in the background, then ask to restart
     bool m_isPortable = false;           // unpacked copy: offer the portable build, never run an installer
+    UINT m_imagePageCount = 1;          // multipage TIFF pages (1 for stills)
+    UINT m_imagePage = 0;
+    bool LoadImagePage(UINT index);
+    void UpdateImageBadge();
+
     bool m_forceInstalled = false;       // tests drive the installed update path from a staged build
     int m_bootAttempts = 0;              // consecutive starts without reaching a healthy state
     bool m_healthyMarked = false;

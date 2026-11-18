@@ -437,6 +437,41 @@ void AppWindow::RunMessageLoop() {
     }
 }
 
+void AppWindow::UpdateImageBadge() {
+    std::wstring ext = m_currentFilePath.substr(m_currentFilePath.find_last_of(L'.') + 1);
+    std::transform(ext.begin(), ext.end(), ext.begin(), ::towupper);
+    WCHAR badge[96];
+    if (m_imagePageCount > 1) {
+        swprintf_s(badge, L"%s • PAGE %u / %u • %u × %u", ext.c_str(),
+                   m_imagePage + 1, m_imagePageCount, m_imageWidth, m_imageHeight);
+    } else {
+        swprintf_s(badge, L"%s • %u × %u", ext.c_str(), m_imageWidth, m_imageHeight);
+    }
+    m_formatBadgeText = badge;
+}
+
+bool AppWindow::LoadImagePage(UINT index) {
+    if (index >= m_imagePageCount) return false;
+    D2D1_RECT_F bounds = {};
+    ID2D1Bitmap* bitmap = nullptr;
+    UINT width = 0, height = 0;
+    if (!WicDecoder::LoadImageFromFile(m_d2d.GetWICFactory(), m_d2d.GetRenderTarget(),
+                                       m_currentFilePath, &bitmap, &width, &height, &bounds, index)) {
+        return false;
+    }
+    if (m_imageBitmap) m_imageBitmap->Release();
+    m_imageBitmap = bitmap;
+    m_imageWidth = width;
+    m_imageHeight = height;
+    m_contentBounds = bounds;
+    float cw = bounds.right - bounds.left;
+    float ch = bounds.bottom - bounds.top;
+    m_hasDetectedContentBounds = (cw < (float)m_imageWidth - 14.0f) || (ch < (float)m_imageHeight - 14.0f);
+    m_imagePage = index;
+    UpdateImageBadge();
+    return true;
+}
+
 bool AppWindow::OpenFile(const std::wstring& filePath) {
     if (filePath.empty()) return false;
 
@@ -1106,6 +1141,8 @@ bool AppWindow::OpenFile(const std::wstring& filePath) {
     else if ((isImageExt(ext) || ext.empty()) && !(ext.empty() && looksLikeTextFile(filePath))) {
         m_hasDetectedContentBounds = false;
         m_trimBlackBars = true;
+        m_imagePageCount = 1;
+        m_imagePage = 0;
         D2D1_RECT_F bounds = {};
         if (WicDecoder::LoadImageFromFile(m_d2d.GetWICFactory(), m_d2d.GetRenderTarget(),
                                           filePath, &m_imageBitmap, &m_imageWidth, &m_imageHeight, &bounds)) {
@@ -1117,11 +1154,11 @@ bool AppWindow::OpenFile(const std::wstring& filePath) {
                 m_hasDetectedContentBounds = true;
             }
             WicDecoder::GetImageMetadata(m_d2d.GetWICFactory(), filePath, &m_imageMeta);
-            WCHAR badge[64];
-            std::wstring upperExt = ext.empty() ? L"IMAGE" : ext.substr(1);
-            std::transform(upperExt.begin(), upperExt.end(), upperExt.begin(), ::towupper);
-            swprintf_s(badge, L"%s • %u × %u", upperExt.c_str(), m_imageWidth, m_imageHeight);
-            m_formatBadgeText = badge;
+            if (ext == L".tif" || ext == L".tiff") {
+                UINT frames = WicDecoder::GetFrameCount(filePath);
+                if (frames > 1) m_imagePageCount = frames;
+            }
+            UpdateImageBadge();
             m_showSidebar = false;
             if (m_hudHwnd) ShowWindow(m_hudHwnd, SW_HIDE);
             success = true;
@@ -9580,6 +9617,13 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         case WM_APP + 260: /* Diagnostic: sheet count */ {
             return (LRESULT)(m_docType == DocumentType::OfficeDoc ? m_office.SheetCount() : 0);
         }
+        case WM_APP + 273: /* Diagnostic: image page index (-1 when single page) */ {
+            if (m_docType != DocumentType::Image || m_imagePageCount <= 1) return -1;
+            return (LRESULT)m_imagePage;
+        }
+        case WM_APP + 274: /* Diagnostic: image page count */ {
+            return (LRESULT)(m_docType == DocumentType::Image ? m_imagePageCount : 0);
+        }
         case WM_APP + 271: /* Diagnostic: chapter rail card rect by index (wParam) */ {
             D2D1_RECT_F r = {};
             if (m_docType != DocumentType::OfficeDoc || !m_office.GetChapterRect((int)wParam, r)) return 0;
@@ -11757,6 +11801,18 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 }
                 if (wParam == VK_BACK) return 0; // WM_CHAR performs the deletion
                 return 0; // swallow every other shortcut while typing
+            }
+
+            // Multipage images (TIFF): arrows and page keys change pages.
+            if (m_docType == DocumentType::Image && m_imagePageCount > 1) {
+                if (wParam == VK_RIGHT || wParam == VK_DOWN || wParam == VK_NEXT || wParam == VK_SPACE) {
+                    if (LoadImagePage(m_imagePage + 1)) InvalidateRect(m_hwnd, NULL, FALSE);
+                    return 0;
+                }
+                if (wParam == VK_LEFT || wParam == VK_UP || wParam == VK_PRIOR || wParam == VK_BACK) {
+                    if (LoadImagePage(m_imagePage - 1)) InvalidateRect(m_hwnd, NULL, FALSE);
+                    return 0;
+                }
             }
 
             // Comic view: arrows and page keys turn pages.
