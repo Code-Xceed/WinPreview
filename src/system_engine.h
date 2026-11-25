@@ -62,6 +62,7 @@ struct SystemShortcutInfo {
 };
 
 struct SystemCertificateInfo {
+    unsigned long certificateCount = 0;  // certificates in a PFX / P7B bundle
     std::wstring subjectName;
     std::wstring issuerName;
     std::wstring validFromStr;
@@ -89,6 +90,7 @@ public:
     bool UpdateAnimation(float dt);
 
     bool IsLoaded() const { return m_isLoaded; }
+    unsigned long GetCertificateCount() const { return m_cert.certificateCount; }
     SystemItemType GetItemType() const { return m_itemType; }
     std::wstring GetFormatBadge() const;
     const std::wstring& GetFilePath() const { return m_filePath; }

@@ -191,7 +191,20 @@ $installerDir = Join-Path $ScriptDir "dist\Installer"
 if (-not (Test-Path $installerDir)) { New-Item -ItemType Directory -Path $installerDir -Force | Out-Null }
 $portableZip = Join-Path $installerDir "WinPreview-Portable-x64.zip"
 if (Test-Path $portableZip) { Remove-Item -LiteralPath $portableZip -Force }
-Compress-Archive -Path (Join-Path $targetPublishDir "*") -DestinationPath $portableZip -CompressionLevel Optimal
+# Freshly written binaries are briefly locked by antivirus/indexers. Retry
+# instead of failing the release on a transient sharing violation.
+$zipOk = $false
+for ($attempt = 1; $attempt -le 6 -and -not $zipOk; $attempt++) {
+    try {
+        if (Test-Path $portableZip) { Remove-Item -LiteralPath $portableZip -Force -ErrorAction Stop }
+        Compress-Archive -Path (Join-Path $targetPublishDir "*") -DestinationPath $portableZip -CompressionLevel Optimal -ErrorAction Stop
+        $zipOk = $true
+    } catch {
+        if ($attempt -eq 6) { Fail "Portable archive failed after 6 attempts: $($_.Exception.Message)" }
+        Write-Host "  zip attempt $attempt hit a file lock, retrying..." -ForegroundColor DarkYellow
+        Start-Sleep -Seconds (2 * $attempt)
+    }
+}
 Write-Host "  Portable archive: $portableZip ($([math]::Round((Get-Item $portableZip).Length / 1MB, 2)) MB)" -ForegroundColor Green
 
 # ---------------------------------------------------------------------------
@@ -224,10 +237,21 @@ if (-not $SkipInstaller) {
         Fail "Inno Setup compiler (ISCC.exe) not found. Install Inno Setup 6 or pass -SkipInstaller."
     }
 
-    if (Test-Path $installerPath) { Remove-Item -LiteralPath $installerPath -Force }
     $issFile = Join-Path $ScriptDir "installer\WinPreview.iss"
-    $isccProc = Start-Process -FilePath $iscc -ArgumentList "`"$issFile`"" -NoNewWindow -Wait -PassThru
-    if ($isccProc.ExitCode -ne 0) { Fail "Inno Setup compilation failed with exit code $($isccProc.ExitCode)" }
+    # Inno can fail with "EndUpdateResource failed" while the setup exe is being
+    # scanned; drop the partial output and retry a few times.
+    $installerOk = $false
+    for ($attempt = 1; $attempt -le 6 -and -not $installerOk; $attempt++) {
+        if (Test-Path $installerPath) { Remove-Item -LiteralPath $installerPath -Force -ErrorAction SilentlyContinue }
+        $isccProc = Start-Process -FilePath $iscc -ArgumentList "`"$issFile`"" -NoNewWindow -Wait -PassThru
+        if ($isccProc.ExitCode -eq 0) {
+            $installerOk = $true
+        } else {
+            if ($attempt -eq 6) { Fail "Inno Setup compilation failed with exit code $($isccProc.ExitCode)" }
+            Write-Host "  installer attempt $attempt failed (exit $($isccProc.ExitCode)), retrying..." -ForegroundColor DarkYellow
+            Start-Sleep -Seconds (3 * $attempt)
+        }
+    }
     if (-not (Test-Path $installerPath)) { Fail "Installer was not produced: $installerPath" }
 
     $installerSize = (Get-Item $installerPath).Length

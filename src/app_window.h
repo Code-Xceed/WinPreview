@@ -26,7 +26,8 @@ namespace WinPreview {
 enum class UnsupportedKind {
     None = 0,
     NotSupportedYet = 1,   // WinPreview has no decoder for the container
-    NeedsCodec = 2         // a system / vendor codec is required
+    NeedsCodec = 2,        // a system / vendor codec is required
+    PasswordProtected = 3  // the file needs a password we don't have
 };
 
 enum class DocumentType {

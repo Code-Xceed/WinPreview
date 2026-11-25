@@ -1,12 +1,12 @@
 {
-  "version": "1.3.22",
-  "release_date": "2026-11-24",
+  "version": "1.3.23",
+  "release_date": "2026-11-26",
   "channel": "stable",
   "rollout": 100,
   "paused": false,
   "mandatory": false,
   "min_supported": "",
-  "notes": "What's new\n\n- Animated GIFs play in the preview: frames advance at the file's own timing, and a still GIF simply stays still.\n- Large animations are bounded: up to 240 frames and 48 megapixels, otherwise the first frame is shown.\n- Multi-page TIFF files (from the previous release) keep their page navigation.",
-  "changelog": "WinPreview 1.3.22 - animated GIF playback (1E complete). Every frame is decoded once under a 240-frame / 48 MP budget, per-frame delays come from the GIF control extension (handling WIC's byte-swapped value), the animation timer stays awake while playing, and still GIFs keep the static path. 7 new checks.",
+  "notes": "What's new\n\n- Compressed SVG (.svgz) previews like any other vector graphic.\n- Certificate bundles (.p7b) open the certificate card, and a bundle reports how many certificates it holds.\n- A password-protected certificate file (.pfx/.p12) says so instead of showing an empty card.\n- Releases are now built with automatic retries, so a virus scanner holding a freshly built file can no longer fail a publish.",
+  "changelog": "WinPreview 1.3.23 - native quick wins (1F, part 1). SVGZ decompresses through the archive backend and loads in the SVG engine; P7B bundles load via CryptQueryObject with certificate counts; password-protected PFX/P12 get a dedicated Password protected state. publish.ps1 retries locked portable-zip and Inno builds. 4 new checks.",
   "download_url": "https://github.com/Code-Xceed/WinPreview/releases/latest/download/WinPreview-Setup-x64.exe"
 }

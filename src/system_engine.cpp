@@ -508,7 +508,43 @@ bool SystemEngine::LoadCertificate(const std::wstring& filePath, IDWriteFactory*
     ReadFile(hFile, data.data(), fileSize, &bytesRead, NULL);
     CloseHandle(hFile);
 
-    PCCERT_CONTEXT pCert = CertCreateCertificateContext(X509_ASN_ENCODING | PKCS_7_ASN_ENCODING, data.data(), (DWORD)data.size());
+    PCCERT_CONTEXT pCert = nullptr;
+
+    // PKCS#12 (.pfx/.p12) and PKCS#7 bundles (.p7b) carry a certificate store
+    // rather than one certificate; CryptQueryObject walks them for us.
+    {
+        HCERTSTORE hStore = nullptr;
+        DWORD contentType = 0, formatType = 0;
+        if (CryptQueryObject(CERT_QUERY_OBJECT_FILE, filePath.c_str(),
+                             CERT_QUERY_CONTENT_FLAG_CERT |
+                                 CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED |
+                                 CERT_QUERY_CONTENT_FLAG_PKCS7_UNSIGNED |
+                                 CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED |
+                                 CERT_QUERY_CONTENT_FLAG_PFX,
+                             CERT_QUERY_FORMAT_FLAG_ALL, 0,
+                             &contentType, &formatType, nullptr, &hStore, nullptr, nullptr) &&
+            hStore) {
+            DWORD count = 0;
+            PCCERT_CONTEXT first = nullptr;
+            PCCERT_CONTEXT current = nullptr;
+            while ((current = CertEnumCertificatesInStore(hStore, current)) != nullptr) {
+                if (!first) {
+                    first = CertDuplicateCertificateContext(current);
+                }
+                ++count;
+            }
+            if (count > 0) {
+                m_cert.certificateCount = count;
+            }
+            pCert = first;
+            CertCloseStore(hStore, 0);
+        }
+    }
+
+    if (!pCert) {
+        pCert = CertCreateCertificateContext(X509_ASN_ENCODING | PKCS_7_ASN_ENCODING,
+                                             data.data(), (DWORD)data.size());
+    }
     if (!pCert) {
         // Try PEM base64 decode
         DWORD binSize = 0;

@@ -735,7 +735,8 @@ bool AppWindow::OpenFile(const std::wstring& filePath) {
     };
 
     auto isCertificateExt = [](const std::wstring& e) {
-        return (e == L".cer" || e == L".crt" || e == L".der" || e == L".pem");
+        return (e == L".cer" || e == L".crt" || e == L".der" || e == L".pem" ||
+                e == L".pfx" || e == L".p12" || e == L".p7b");
     };
 
     auto isOfficeExt = [](const std::wstring& e) {
@@ -1033,9 +1034,59 @@ bool AppWindow::OpenFile(const std::wstring& filePath) {
             success = true;
         }
     }
-    // 5. SVG Vector Graphics
-    else if (ext == L".svg") {
-        if (m_svg.LoadFromFile(m_d2d.GetRenderTarget(), filePath)) {
+    // 5. SVG Vector Graphics (.svgz is the same document, gzipped)
+    else if (ext == L".svg" || ext == L".svgz") {
+        std::wstring svgPath = filePath;
+        std::wstring svgTempDir;
+        if (ext == L".svgz") {
+            WCHAR temp[MAX_PATH] = {};
+            if (GetTempPathW(MAX_PATH, temp)) {
+                std::wstring root = std::wstring(temp) + L"WinPreview-svgz";
+                CreateDirectoryW(root.c_str(), NULL);
+                svgTempDir = root + L"\\" + std::to_wstring(GetTickCount64());
+                ArchiveEngine archive;
+                std::wstring error;
+                if (archive.ExtractAll(filePath, svgTempDir, error)) {
+                    WIN32_FIND_DATAW found = {};
+                    std::wstring pattern = svgTempDir + L"\\*";
+                    HANDLE hFind = FindFirstFileW(pattern.c_str(), &found);
+                    if (hFind != INVALID_HANDLE_VALUE) {
+                        do {
+                            if (found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+                            svgPath = svgTempDir + L"\\" + found.cFileName;
+                            break;
+                        } while (FindNextFileW(hFind, &found));
+                        FindClose(hFind);
+                    }
+                }
+            }
+        }
+
+        bool svgLoaded = m_svg.LoadFromFile(m_d2d.GetRenderTarget(), svgPath);
+
+        if (!svgTempDir.empty()) {
+            // The document is parsed into memory by now; drop the extracted copy.
+            WIN32_FIND_DATAW found = {};
+            std::wstring pattern = svgTempDir + L"\\*";
+            HANDLE hFind = FindFirstFileW(pattern.c_str(), &found);
+            if (hFind != INVALID_HANDLE_VALUE) {
+                do {
+                    if (!(found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+                        DeleteFileW((svgTempDir + L"\\" + found.cFileName).c_str());
+                    }
+                } while (FindNextFileW(hFind, &found));
+                FindClose(hFind);
+            }
+            RemoveDirectoryW(svgTempDir.c_str());
+            if (svgPath != filePath) {
+                WCHAR temp[MAX_PATH] = {};
+                if (GetTempPathW(MAX_PATH, temp)) {
+                    RemoveDirectoryW((std::wstring(temp) + L"WinPreview-svgz").c_str());
+                }
+            }
+        }
+
+        if (svgLoaded) {
             m_docType = DocumentType::Svg;
             m_showSidebar = false;
             if (m_hudHwnd) ShowWindow(m_hudHwnd, SW_HIDE);
@@ -1174,6 +1225,22 @@ bool AppWindow::OpenFile(const std::wstring& filePath) {
             success = true;
         }
     }
+    // 11.5 Password-protected certificate bundles (.pfx/.p12)
+    else if ((ext == L".pfx" || ext == L".p12") &&
+             GetFileAttributesW(filePath.c_str()) != INVALID_FILE_ATTRIBUTES &&
+             !m_system.LoadCertificate(filePath, m_d2d.GetDWriteFactory(), m_d2d.GetRenderTarget(),
+                                       m_d2d.GetWICFactory())) {
+        m_unsupportedKind = UnsupportedKind::PasswordProtected;
+        m_unsupportedDetail = L"Password-protected certificate bundles need their password; open this in certmgr.msc or the app that issued it.";
+        m_docType = DocumentType::Unsupported;
+        LoadUnsupportedFileInfo(filePath);
+        m_showSidebar = false;
+        if (m_hudHwnd) ShowWindow(m_hudHwnd, SW_HIDE);
+        m_formatBadgeText = m_unsupportedTypeName;
+        AdaptWindowToMedia(940, 640);
+        success = true;
+    }
+
     // 12. Windows Shell Shortcuts & Links (.lnk, .url)
     else if (isShortcutExt(ext)) {
         if (m_system.LoadShortcut(filePath, m_d2d.GetDWriteFactory(), m_d2d.GetRenderTarget(), m_d2d.GetWICFactory())) {
@@ -1192,6 +1259,9 @@ bool AppWindow::OpenFile(const std::wstring& filePath) {
             m_showSidebar = false;
             if (m_hudHwnd) ShowWindow(m_hudHwnd, SW_HIDE);
             m_formatBadgeText = m_system.GetFormatBadge();
+            if (m_system.GetCertificateCount() > 1) {
+                m_formatBadgeText += L" • " + std::to_wstring(m_system.GetCertificateCount()) + L" IN BUNDLE";
+            }
             AdaptWindowToMedia(880, 640);
             success = true;
         }
@@ -4758,6 +4828,10 @@ void AppWindow::RenderUnsupportedState(const D2D1_RECT_F& rect) {
             noticeText = L"Not supported yet";
         } else if (m_unsupportedKind == UnsupportedKind::NeedsCodec) {
             noticeText = L"Needs an additional codec";
+            pillBrush = m_d2d.BrushAmber ? m_d2d.BrushAmber : m_d2d.BrushBorderSubtle;
+            pillText = m_d2d.BrushText;
+        } else if (m_unsupportedKind == UnsupportedKind::PasswordProtected) {
+            noticeText = L"Password protected";
             pillBrush = m_d2d.BrushAmber ? m_d2d.BrushAmber : m_d2d.BrushBorderSubtle;
             pillText = m_d2d.BrushText;
         }
