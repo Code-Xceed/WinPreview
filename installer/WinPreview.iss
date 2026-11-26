@@ -4,7 +4,7 @@
 ; =====================================================================
 
 #define MyAppName "WinPreview"
-#define MyAppVersion "1.3.24"
+#define MyAppVersion "1.3.25"
 #define MyAppPublisher "Code-Xceed"
 #define MyAppURL "https://github.com/Code-Xceed/WinPreview"
 #define MyAppExeName "WinPreview.exe"
@@ -43,7 +43,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 CloseApplications=yes
 RestartApplications=no
 DisableProgramGroupPage=yes
-VersionInfoVersion=1.3.24.0
+VersionInfoVersion=1.3.25.0
 VersionInfoCompany={#MyAppPublisher}
 VersionInfoDescription=WinPreview - Apple Preview for Windows
 VersionInfoCopyright=Copyright (C) 2026 Code-Xceed
@@ -65,6 +65,10 @@ Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFile
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppExeName}"; AppUserModelID: "WinPreview.App"; Tasks: desktopicon
 
 [Registry]
+; The app stores its settings under HKCU\Software\WinPreview; remove them with
+; the product instead of leaving stale preferences behind.
+Root: HKA; Subkey: "Software\WinPreview"; Flags: uninsdeletekey
+
 ; Autostart on Windows logon
 Root: HKA; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "WinPreview"; ValueData: """{app}\{#MyAppExeName}"" --background"; Tasks: autostart; Flags: uninsdeletevalue
 
@@ -159,6 +163,10 @@ Root: HKA; Subkey: "Software\Classes\.ts\OpenWithProgids"; ValueType: string; Va
 Root: HKA; Subkey: "Software\Classes\WinPreview.Document.Media"; ValueType: string; ValueName: ""; ValueData: "Media File"; Tasks: fileassoc; Flags: uninsdeletekey
 Root: HKA; Subkey: "Software\Classes\WinPreview.Document.Media\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"",0"; Tasks: fileassoc
 Root: HKA; Subkey: "Software\Classes\WinPreview.Document.Media\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""; Tasks: fileassoc
+
+[UninstallDelete]
+; Logs, the rollback backup and any temporary state created by the app.
+Type: filesandordirs; Name: "{localappdata}\WinPreview"
 
 [Run]
 ; Silent update: relaunch in the mode the app asked for (the update helper waits

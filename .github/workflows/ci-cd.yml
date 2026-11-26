@@ -61,6 +61,32 @@ jobs:
           powershell -ExecutionPolicy Bypass -File publish.ps1 -NoLaunch
           if ($LASTEXITCODE -ne 0) { throw "publish.ps1 failed with exit code $LASTEXITCODE" }
 
+      - name: Authenticode (optional)
+        shell: pwsh
+        env:
+          WINPREVIEW_SIGN_PFX_BASE64: ${{ secrets.WINPREVIEW_SIGN_PFX_BASE64 }}
+          WINPREVIEW_SIGN_PFX_PASSWORD: ${{ secrets.WINPREVIEW_SIGN_PFX_PASSWORD }}
+        run: |
+          if (-not $env:WINPREVIEW_SIGN_PFX_BASE64) {
+            Write-Host "No signing certificate configured; the installer stays unsigned."
+            Write-Host "Add WINPREVIEW_SIGN_PFX_BASE64 and WINPREVIEW_SIGN_PFX_PASSWORD to sign releases."
+            exit 0
+          }
+          $pfx = Join-Path $env:RUNNER_TEMP "winpreview-sign.pfx"
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINPREVIEW_SIGN_PFX_BASE64))
+          $env:WINPREVIEW_SIGN_PFX = $pfx
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
+                      Where-Object { $_.FullName -match "\\x64\\" } | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $signtool) { throw "signtool.exe not found on the runner" }
+          foreach ($target in @("dist/WinPreview/WinPreview.exe", "dist/Installer/WinPreview-Setup-x64.exe")) {
+            if (-not (Test-Path $target)) { throw "missing $target" }
+            & $signtool.FullName sign /fd sha256 /tr http://timestamp.digicert.com /td sha256 /f $pfx /p $env:WINPREVIEW_SIGN_PFX_PASSWORD /v $target
+            if ($LASTEXITCODE -ne 0) { throw "signing failed for $target" }
+            $status = (Get-AuthenticodeSignature -LiteralPath $target).Status
+            if ($status -ne "Valid") { throw "signature invalid for $target ($status)" }
+            Write-Host "signed: $target ($status)"
+          }
+
       - name: Verify signed update manifest
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh

@@ -20,7 +20,8 @@ param(
     [string]$OutputDir = "dist\WinPreview",
     [switch]$NoLaunch,
     [switch]$SkipTests,
-    [switch]$SkipInstaller
+    [switch]$SkipInstaller,
+    [switch]$Sign
 )
 
 $ErrorActionPreference = "Stop"
@@ -33,6 +34,56 @@ function Fail([string]$Message) {
 
 function Get-Sha256([string]$Path) {
     (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+}
+
+# ---------------------------------------------------------------------------
+# Authenticode signing (optional).
+#
+# Enabled by -Sign, or automatically when WINPREVIEW_SIGN_PFX is set (CI). The
+# certificate comes from one of:
+#   WINPREVIEW_SIGN_PFX          path to a .pfx
+#   WINPREVIEW_SIGN_PFX_PASSWORD password for that .pfx
+#   WINPREVIEW_SIGN_THUMBPRINT   thumbprint of a cert in CurrentUser\My
+# A timestamp is always applied so signatures outlive the certificate.
+# ---------------------------------------------------------------------------
+function Find-SignTool {
+    $cmd = Get-Command "signtool.exe" -ErrorAction SilentlyContinue
+    if ($cmd) { return $cmd.Source }
+    $roots = @(
+        (Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\bin"),
+        (Join-Path $env:ProgramFiles "Windows Kits\10\bin")
+    )
+    foreach ($root in $roots) {
+        if (-not $root -or -not (Test-Path $root)) { continue }
+        $found = Get-ChildItem -Path $root -Recurse -Filter "signtool.exe" -ErrorAction SilentlyContinue |
+                 Where-Object { $_.FullName -match "\\x64\\" } |
+                 Sort-Object FullName -Descending | Select-Object -First 1
+        if ($found) { return $found.FullName }
+    }
+    return $null
+}
+
+function Invoke-SignFile([string]$Path) {
+    $signtool = Find-SignTool
+    if (-not $signtool) {
+        Fail "Signing requested but signtool.exe was not found. Install the Windows SDK signing tools."
+    }
+    $args = @("sign", "/fd", "sha256", "/tr", "http://timestamp.digicert.com", "/td", "sha256")
+    if ($env:WINPREVIEW_SIGN_PFX) {
+        if (-not (Test-Path $env:WINPREVIEW_SIGN_PFX)) { Fail "WINPREVIEW_SIGN_PFX not found: $env:WINPREVIEW_SIGN_PFX" }
+        $args += @("/f", $env:WINPREVIEW_SIGN_PFX)
+        if ($env:WINPREVIEW_SIGN_PFX_PASSWORD) { $args += @("/p", $env:WINPREVIEW_SIGN_PFX_PASSWORD) }
+    } elseif ($env:WINPREVIEW_SIGN_THUMBPRINT) {
+        $args += @("/sha1", $env:WINPREVIEW_SIGN_THUMBPRINT, "/s", "My")
+    } else {
+        Fail "Signing requested but no certificate is configured (WINPREVIEW_SIGN_PFX or WINPREVIEW_SIGN_THUMBPRINT)."
+    }
+    $args += @("/v", $Path)
+    $proc = Start-Process -FilePath $signtool -ArgumentList $args -NoNewWindow -Wait -PassThru
+    if ($proc.ExitCode -ne 0) { Fail "signtool failed on $Path (exit $($proc.ExitCode))" }
+    $status = (Get-AuthenticodeSignature -LiteralPath $Path).Status
+    if ($status -ne "Valid") { Fail "Signature did not verify on $Path (status: $status)" }
+    Write-Host "  Signed: $Path ($status)" -ForegroundColor Green
 }
 
 Write-Host "==========================================================" -ForegroundColor Cyan
@@ -124,6 +175,13 @@ if (Test-Path $targetPublishDir) {
 }
 
 Copy-Item -LiteralPath $builtExe -Destination (Join-Path $targetPublishDir "WinPreview.exe") -Force
+
+$shouldSign = $Sign -or [bool]$env:WINPREVIEW_SIGN_PFX -or [bool]$env:WINPREVIEW_SIGN_THUMBPRINT
+if ($shouldSign) {
+    Invoke-SignFile (Join-Path $targetPublishDir "WinPreview.exe")
+} else {
+    Write-Host "  Authenticode: skipped (no certificate configured; pass -Sign to require it)" -ForegroundColor DarkYellow
+}
 
 $requiredDlls = @(
     "pdfium.dll",
@@ -253,6 +311,8 @@ if (-not $SkipInstaller) {
         }
     }
     if (-not (Test-Path $installerPath)) { Fail "Installer was not produced: $installerPath" }
+
+    if ($shouldSign) { Invoke-SignFile $installerPath }
 
     $installerSize = (Get-Item $installerPath).Length
     if ($installerSize -lt 1MB) { Fail "Installer is suspiciously small ($installerSize bytes); aborting." }
