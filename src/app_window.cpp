@@ -1309,8 +1309,19 @@ bool AppWindow::OpenFile(const std::wstring& filePath) {
         }
     }
 
-    // 15. Auto-Detect Plain Text Content for extensionless files or unrecognized extensions
-    if (!success && fileAttrs != INVALID_FILE_ATTRIBUTES && !(fileAttrs & FILE_ATTRIBUTE_DIRECTORY)) {
+    // 15. Auto-Detect Plain Text Content for extensionless files or unrecognized
+    //     extensions. Known binary families are excluded: a truncated PDF or a
+    //     corrupt image must report failure, not open as mojibake.
+    auto isFontExt = [](const std::wstring& e) {
+        return (e == L".ttf" || e == L".otf" || e == L".woff" || e == L".woff2" || e == L".ttc");
+    };
+    const bool knownBinaryFamily =
+        isImageExt(ext) || isMediaExt(ext) || isSpreadsheetExt(ext) || isOfficeExt(ext) ||
+        isArchiveExt(ext) || isBinaryExt(ext) || isCertificateExt(ext) || isFontExt(ext) ||
+        ext == L".pdf" || ext == L".epub" || ext == L".dbf";
+
+    if (!success && !knownBinaryFamily && fileAttrs != INVALID_FILE_ATTRIBUTES &&
+        !(fileAttrs & FILE_ATTRIBUTE_DIRECTORY)) {
         HANDLE hProbe = CreateFileW(filePath.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
         if (hProbe != INVALID_HANDLE_VALUE) {
             LARGE_INTEGER liProbe;

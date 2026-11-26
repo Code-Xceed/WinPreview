@@ -459,8 +459,10 @@ bool OfficeEngine::PreparePackage(const std::wstring& filePath) {
 bool OfficeEngine::ReadPart(const std::wstring& filePath, const std::wstring& entry,
                             size_t maxBytes, std::string& out, std::wstring& error) {
     if (m_packageDir.empty()) {
+        // No extracted package (corrupt or unsupported container): read the part
+        // straight out of the archive backend instead.
         ArchiveEngine archive;
-        return ReadPart(filePath, entry, maxBytes, out, error);
+        return archive.ReadEntry(filePath, entry, maxBytes, out, error);
     }
     std::wstring path = m_packageDir + L"\\" + entry;
     for (auto& ch : path) {

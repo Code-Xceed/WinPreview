@@ -1,12 +1,12 @@
 {
-  "version": "1.3.23",
+  "version": "1.3.24",
   "release_date": "2026-11-26",
   "channel": "stable",
   "rollout": 100,
   "paused": false,
   "mandatory": false,
   "min_supported": "",
-  "notes": "What's new\n\n- Compressed SVG (.svgz) previews like any other vector graphic.\n- Certificate bundles (.p7b) open the certificate card, and a bundle reports how many certificates it holds.\n- A password-protected certificate file (.pfx/.p12) says so instead of showing an empty card.\n- Releases are now built with automatic retries, so a virus scanner holding a freshly built file can no longer fail a publish.",
-  "changelog": "WinPreview 1.3.23 - native quick wins (1F, part 1). SVGZ decompresses through the archive backend and loads in the SVG engine; P7B bundles load via CryptQueryObject with certificate counts; password-protected PFX/P12 get a dedicated Password protected state. publish.ps1 retries locked portable-zip and Inno builds. 4 new checks.",
+  "notes": "What's new\n\n- Fixed a crash when opening a Word, Excel, PowerPoint or EPUB file that is empty or damaged: the app now shows its usual 'can't open this' card instead of closing.\n- A damaged PDF no longer opens as gibberish text; it reports that it could not be read.\n- The sample book that shipped with the previewer is now a real EPUB.",
+  "changelog": "WinPreview 1.3.24 - pre-release QA sweep. Fixed a stack-overflow crash in the Office engine (ReadPart recursed into itself for any container that could not be extracted, since 1.3.17) and stopped known binary families from falling through to text sniffing (truncated PDFs opened as mojibake). Added tests/release_audit.py (427 checks over 131 files, doc types, drawn pixels, per-family interactions) and tests/scenario_audit.py (45 checks: empty/truncated inputs, unicode paths, extreme sizes, repeated opens, clipboard, single instance, hygiene); both run in production_check.",
   "download_url": "https://github.com/Code-Xceed/WinPreview/releases/latest/download/WinPreview-Setup-x64.exe"
 }
