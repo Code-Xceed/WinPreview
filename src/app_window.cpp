@@ -159,6 +159,7 @@ AppWindow::~AppWindow() {
     SafeRelease(m_officeBitmap);
     m_svg.Close();
     m_font.Close();
+    m_rtf.Close();
     m_folder.Close();
     m_md.Close();
     m_office.Close();
@@ -563,6 +564,7 @@ bool AppWindow::OpenFile(const std::wstring& filePath) {
     SafeRelease(m_officeBitmap);
     m_svg.Close();
     m_font.Close();
+    m_rtf.Close();
     m_folder.Close();
     m_md.Close();
     m_office.Close();
@@ -1018,6 +1020,29 @@ bool AppWindow::OpenFile(const std::wstring& filePath) {
             success = true;
         }
     }
+    // 3.5 Rich Text Format (.rtf) — formatted through RichEdit, never raw markup.
+    // Tried before the text branch (which still handles it if RichEdit fails).
+    else if (ext == L".rtf") {
+        if (m_rtf.Load(m_hwnd, filePath)) {
+            m_docType = DocumentType::Rtf;
+            m_showSidebar = false;
+            if (m_hudHwnd) ShowWindow(m_hudHwnd, SW_HIDE);
+            m_formatBadgeText = m_rtf.GetFormatBadge();
+            AdaptWindowToMedia(920, 780);
+            success = true;
+        } else if (m_text.LoadFile(filePath, m_d2d.GetDWriteFactory())) {
+            m_docType = DocumentType::Text;
+            m_showSidebar = false;
+            if (m_hudHwnd) ShowWindow(m_hudHwnd, SW_HIDE);
+            WCHAR badge[128];
+            swprintf_s(badge, L"%s • %d LINES • %0.1f KB",
+                m_text.GetLanguageName().c_str(), m_text.GetLineCount(),
+                (float)m_text.GetFileSize() / 1024.0f);
+            m_formatBadgeText = badge;
+            AdaptWindowToMedia(960, 720);
+            success = true;
+        }
+    }
     // 4. Source Code & Text Documents
     else if (isTextExt(ext) || isKnownTextFilename(m_fileName)) {
         if (m_text.LoadFile(filePath, m_d2d.GetDWriteFactory())) {
@@ -1101,7 +1126,7 @@ bool AppWindow::OpenFile(const std::wstring& filePath) {
         }
     }
     // 6. Typographic Fonts (.ttf, .otf, .woff, .woff2)
-    else if (ext == L".ttf" || ext == L".otf" || ext == L".woff" || ext == L".woff2") {
+    else if (ext == L".ttf" || ext == L".otf" || ext == L".woff" || ext == L".woff2" || ext == L".ttc") {
         if (m_font.LoadFromFile(m_d2d.GetDWriteFactory(), filePath)) {
             m_docType = DocumentType::Font;
             m_showSidebar = false;
@@ -1216,7 +1241,10 @@ bool AppWindow::OpenFile(const std::wstring& filePath) {
     }
     // 11. Windows System Binaries (.exe, .dll, .sys, .ocx, .cpl, .scr, .msi)
     else if (isBinaryExt(ext)) {
-        if (m_system.LoadBinary(filePath, m_d2d.GetDWriteFactory(), m_d2d.GetRenderTarget(), m_d2d.GetWICFactory())) {
+        const bool loaded = (ext == L".msi")
+            ? m_system.LoadMsi(filePath, m_d2d.GetDWriteFactory(), m_d2d.GetRenderTarget(), m_d2d.GetWICFactory())
+            : m_system.LoadBinary(filePath, m_d2d.GetDWriteFactory(), m_d2d.GetRenderTarget(), m_d2d.GetWICFactory());
+        if (loaded) {
             m_docType = DocumentType::Binary;
             m_showSidebar = false;
             if (m_hudHwnd) ShowWindow(m_hudHwnd, SW_HIDE);
@@ -1703,6 +1731,10 @@ void AppWindow::NavigateFolder(int delta) {
 void AppWindow::NextPage() {
     if (m_docType == DocumentType::Pdf && m_currentPage + 1 < m_totalPages) {
         SetPage(m_currentPage + 1);
+    } else if (m_docType == DocumentType::Rtf && m_rtf.GetPage() + 1 < m_rtf.GetPageCount()) {
+        m_rtf.NextPage();
+        m_formatBadgeText = m_rtf.GetFormatBadge();
+        InvalidateRect(m_hwnd, NULL, FALSE);
     } else {
         NavigateFolder(1);
     }
@@ -1711,6 +1743,10 @@ void AppWindow::NextPage() {
 void AppWindow::PrevPage() {
     if (m_docType == DocumentType::Pdf && m_currentPage > 0) {
         SetPage(m_currentPage - 1);
+    } else if (m_docType == DocumentType::Rtf && m_rtf.GetPage() > 0) {
+        m_rtf.PrevPage();
+        m_formatBadgeText = m_rtf.GetFormatBadge();
+        InvalidateRect(m_hwnd, NULL, FALSE);
     } else {
         NavigateFolder(-1);
     }
@@ -2443,7 +2479,7 @@ void AppWindow::Render(HDC outHdc) {
     if ((m_docType == DocumentType::Image || m_docType == DocumentType::Pdf ||
          m_docType == DocumentType::Text || m_docType == DocumentType::Spreadsheet ||
          m_docType == DocumentType::Office || m_docType == DocumentType::OfficeDoc ||
-         m_docType == DocumentType::Comic ||
+         m_docType == DocumentType::Comic || m_docType == DocumentType::Rtf ||
          m_docType == DocumentType::Markdown ||
          m_docType == DocumentType::Notebook || m_docType == DocumentType::Svg ||
          m_docType == DocumentType::Font || m_docType == DocumentType::Folder ||
@@ -2627,7 +2663,7 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
     if (m_docType != DocumentType::Image && m_docType != DocumentType::Pdf &&
         m_docType != DocumentType::Text && m_docType != DocumentType::Spreadsheet &&
         m_docType != DocumentType::Office && m_docType != DocumentType::OfficeDoc &&
-        m_docType != DocumentType::Comic &&
+        m_docType != DocumentType::Comic && m_docType != DocumentType::Rtf &&
         m_docType != DocumentType::Markdown &&
         m_docType != DocumentType::Notebook && m_docType != DocumentType::Svg &&
         m_docType != DocumentType::Font && m_docType != DocumentType::Folder &&
@@ -2679,7 +2715,8 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
         widthFull = 381.0f; widthStandard = 200.0f; widthCompact = 126.0f;
         thresholdFull = 430.0f; thresholdCompact = 240.0f;
     } else if (m_docType == DocumentType::Markdown || m_docType == DocumentType::Notebook ||
-               m_docType == DocumentType::OfficeDoc || m_docType == DocumentType::Comic) {
+               m_docType == DocumentType::OfficeDoc || m_docType == DocumentType::Comic ||
+               m_docType == DocumentType::Rtf) {
         widthFull = 179.0f; widthStandard = 77.0f; widthCompact = 77.0f;
         thresholdFull = 230.0f; thresholdCompact = 0.0f;
     } else if (m_docType == DocumentType::Font) {
@@ -3807,7 +3844,8 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
     // DOCK RENDERING: MARKDOWN & NOTEBOOK MODE
     // =========================================================================
     else if (m_docType == DocumentType::Markdown || m_docType == DocumentType::Notebook ||
-             m_docType == DocumentType::OfficeDoc || m_docType == DocumentType::Comic) {
+             m_docType == DocumentType::OfficeDoc || m_docType == DocumentType::Comic ||
+             m_docType == DocumentType::Rtf) {
         bool isFull = (dockTier == 2);
 
         m_btnCopyTextRect = D2D1::RectF(curX, btnY, curX + 30.0f, btnY + btnH);
@@ -3991,7 +4029,8 @@ std::vector<AppWindow::OverflowMenuItem> AppWindow::GetCurrentOverflowItems() co
         items.push_back({ BTN_SETTINGS, ICON_SETTINGS, L"Settings", L"Ctrl+,", false, false, true });
         items.push_back({ BTN_TOOLBAR_FS, ICON_FULLSCREEN, m_isFullscreen ? L"Exit fullscreen" : L"Fullscreen", L"F", false, false, true });
     } else if (m_docType == DocumentType::Markdown || m_docType == DocumentType::Notebook ||
-               m_docType == DocumentType::OfficeDoc || m_docType == DocumentType::Comic) {
+               m_docType == DocumentType::OfficeDoc || m_docType == DocumentType::Comic ||
+               m_docType == DocumentType::Rtf) {
         items.push_back({ BTN_COPY_TEXT, ICON_COPY, L"Copy all text", L"Ctrl+C", false, false, true });
         items.push_back({ 0, ICON_MORE, L"", L"", true, false, false }); // divider
         items.push_back({ BTN_INFO, ICON_INFO, L"File info", L"I", false, false, true });
@@ -5684,6 +5723,14 @@ void AppWindow::ShowContextMenu(int screenX, int screenY) {
 
 void AppWindow::RenderCanvas(const D2D1_RECT_F& rect) {
     ID2D1HwndRenderTarget* rt = m_d2d.GetRenderTarget();
+
+    // 0. Formatted Rich Text
+    if (m_docType == DocumentType::Rtf) {
+        m_rtf.Render(rt, m_d2d, rect, m_dpiScale);
+        std::wstring badge = m_rtf.GetFormatBadge();
+        if (m_formatBadgeText != badge) m_formatBadgeText = badge;
+        return;
+    }
 
     // 1. Text & Code Documents
     if (m_docType == DocumentType::Text) {
@@ -8021,6 +8068,7 @@ void AppWindow::CloseCurrentPreview() {
     SafeRelease(m_officeBitmap);
     m_svg.Close();
     m_font.Close();
+    m_rtf.Close();
     m_folder.Close();
     m_md.Close();
     m_office.Close();
@@ -9782,6 +9830,24 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         case WM_APP + 274: /* Diagnostic: image page count */ {
             return (LRESULT)(m_docType == DocumentType::Image ? m_imagePageCount : 0);
         }
+        case WM_APP + 277: /* Diagnostic: font face count (1 when not a collection) */ {
+            return (LRESULT)(m_docType == DocumentType::Font ? m_font.GetFaceCount() : 0);
+        }
+        case WM_APP + 278: /* Diagnostic: active font face index */ {
+            return (LRESULT)(m_docType == DocumentType::Font ? m_font.GetFaceIndex() : 0);
+        }
+        case WM_APP + 281: /* Diagnostic: RTF page index */ {
+            return (LRESULT)(m_docType == DocumentType::Rtf ? m_rtf.GetPage() : -1);
+        }
+        case WM_APP + 282: /* Diagnostic: RTF page count */ {
+            return (LRESULT)(m_docType == DocumentType::Rtf ? m_rtf.GetPageCount() : 0);
+        }
+        case WM_APP + 279: /* Diagnostic: MSI file count (-1 when not a package) */ {
+            return (LRESULT)(m_docType == DocumentType::Binary && m_system.IsMsi() ? m_system.GetMsiFileCount() : -1);
+        }
+        case WM_APP + 280: /* Diagnostic: MSI feature count (-1 when not a package) */ {
+            return (LRESULT)(m_docType == DocumentType::Binary && m_system.IsMsi() ? m_system.GetMsiFeatureCount() : -1);
+        }
         case WM_APP + 271: /* Diagnostic: chapter rail card rect by index (wParam) */ {
             D2D1_RECT_F r = {};
             if (m_docType != DocumentType::OfficeDoc || !m_office.GetChapterRect((int)wParam, r)) return 0;
@@ -10706,6 +10772,9 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                                m_comic.CurrentPage() + 1, m_comic.PageCount());
                     CopyTextToClipboard(m_hwnd, reference);
                     ShowToast(L"Page reference copied");
+                } else if (m_docType == DocumentType::Rtf) {
+                    CopyTextToClipboard(m_hwnd, m_rtf.GetPlainText());
+                    ShowToast(L"Document text copied");
                 } else if (m_docType == DocumentType::OfficeDoc) {
                     CopyTextToClipboard(m_hwnd, m_office.GetPlainText());
                     ShowToast(m_office.GetKind() == OfficeKind::Sheet ? L"Sheet copied" : L"Document text copied");
@@ -10783,6 +10852,14 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 } else {
                     m_text.Scroll(-(float)delta * 0.8f, 0.0f);
                 }
+                InvalidateRect(m_hwnd, NULL, FALSE);
+                return 0;
+            }
+
+            if (m_docType == DocumentType::Rtf) {
+                if (delta > 0) m_rtf.PrevPage();
+                else m_rtf.NextPage();
+                m_formatBadgeText = m_rtf.GetFormatBadge();
                 InvalidateRect(m_hwnd, NULL, FALSE);
                 return 0;
             }
@@ -12405,6 +12482,11 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
 
             if (isCtrl) {
                 if (wParam == 'C' || wParam == 'c') {
+                    if (m_docType == DocumentType::Rtf) {
+                        CopyTextToClipboard(m_hwnd, m_rtf.GetPlainText());
+                        ShowToast(L"Document text copied");
+                        return 0;
+                    }
                     if (m_docType == DocumentType::Pdf) {
                         CopySelectedText();
                         return 0;
@@ -12489,14 +12571,18 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                     if (m_arrowKeyNavEnabled) NavigateFolder(1);
                     return 0;
                 case VK_PRIOR: // Page Up
-                    if (m_docType == DocumentType::Text || m_docType == DocumentType::Spreadsheet) {
+                    if (m_docType == DocumentType::Font && m_font.GetFaceCount() > 1) {
+                        if (m_font.StepFace(-1)) InvalidateRect(m_hwnd, NULL, FALSE);
+                    } else if (m_docType == DocumentType::Text || m_docType == DocumentType::Spreadsheet) {
                         m_text.PageUp(600.0f);
                     } else {
                         PrevPage();
                     }
                     break;
                 case VK_NEXT: // Page Down
-                    if (m_docType == DocumentType::Text || m_docType == DocumentType::Spreadsheet) {
+                    if (m_docType == DocumentType::Font && m_font.GetFaceCount() > 1) {
+                        if (m_font.StepFace(1)) InvalidateRect(m_hwnd, NULL, FALSE);
+                    } else if (m_docType == DocumentType::Text || m_docType == DocumentType::Spreadsheet) {
                         m_text.PageDown(600.0f);
                     } else {
                         NextPage();

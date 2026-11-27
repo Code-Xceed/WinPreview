@@ -27,6 +27,11 @@ void FontEngine::Close() {
     m_isLoaded = false;
     m_info = {};
     m_filePath.clear();
+    m_faceCount = 1;
+    m_faceIndex = 0;
+    m_fileSizeBytes = 0;
+    m_fileType = DWRITE_FONT_FILE_TYPE_UNKNOWN;
+    m_faceType = DWRITE_FONT_FACE_TYPE_UNKNOWN;
     m_scrollY = 0.0f;
     m_targetScrollY = 0.0f;
     m_contentHeight = 0.0f;
@@ -95,20 +100,38 @@ bool FontEngine::LoadFromFile(IDWriteFactory* dwrite, const std::wstring& filePa
     if (FAILED(hr) || !m_fontFile) return false;
 
     BOOL isSupported = FALSE;
-    DWRITE_FONT_FILE_TYPE fileType;
-    DWRITE_FONT_FACE_TYPE faceType;
     UINT32 numFaces = 0;
-    hr = m_fontFile->Analyze(&isSupported, &fileType, &faceType, &numFaces);
-    if (FAILED(hr) || !isSupported) return false;
+    hr = m_fontFile->Analyze(&isSupported, &m_fileType, &m_faceType, &numFaces);
+    if (FAILED(hr) || !isSupported || numFaces == 0) return false;
+    m_faceCount = numFaces;
 
-    hr = dwrite->CreateFontFace(faceType, 1, &m_fontFile, 0, DWRITE_FONT_SIMULATIONS_NONE, &m_fontFace);
-    if (FAILED(hr) || !m_fontFace) return false;
-
-    // File size
     WIN32_FILE_ATTRIBUTE_DATA fad = {};
     if (GetFileAttributesExW(filePath.c_str(), GetFileExInfoStandard, &fad)) {
-        m_info.fileSizeBytes = ((UINT64)fad.nFileSizeHigh << 32) | fad.nFileSizeLow;
+        m_fileSizeBytes = ((UINT64)fad.nFileSizeHigh << 32) | fad.nFileSizeLow;
     }
+
+    return LoadFace(0);
+}
+
+bool FontEngine::LoadFace(UINT32 index) {
+    if (!m_dwrite || !m_fontFile || m_faceCount == 0 || index >= m_faceCount) return false;
+
+    SafeRelease(m_fmtHero);
+    SafeRelease(m_fmtLarge);
+    SafeRelease(m_fmtMedium);
+    SafeRelease(m_fmtSmall);
+    SafeRelease(m_fmtMono);
+    SafeRelease(m_fontFace);
+
+    m_isLoaded = false;
+    m_info = {};
+    m_info.fileSizeBytes = m_fileSizeBytes;
+    m_faceIndex = index;
+
+    // A collection stores several independent faces; the index selects one.
+    HRESULT hr = m_dwrite->CreateFontFace(m_faceType, 1, &m_fontFile, index,
+                                          DWRITE_FONT_SIMULATIONS_NONE, &m_fontFace);
+    if (FAILED(hr) || !m_fontFace) return false;
 
     // Font Face Metrics
     DWRITE_FONT_METRICS metrics = {};
@@ -121,10 +144,12 @@ bool FontEngine::LoadFromFile(IDWriteFactory* dwrite, const std::wstring& filePa
     m_info.capHeight = metrics.capHeight;
     m_info.xHeight = metrics.xHeight;
 
-    if (faceType == DWRITE_FONT_FACE_TYPE_TRUETYPE) {
-        m_info.formatType = L"TRUETYPE";
-    } else if (faceType == DWRITE_FONT_FACE_TYPE_CFF || faceType == DWRITE_FONT_FACE_TYPE_RAW_CFF) {
+    if (m_faceType == DWRITE_FONT_FACE_TYPE_TRUETYPE) {
+        m_info.formatType = m_faceCount > 1 ? L"TRUETYPE COLLECTION" : L"TRUETYPE";
+    } else if (m_faceType == DWRITE_FONT_FACE_TYPE_CFF || m_faceType == DWRITE_FONT_FACE_TYPE_RAW_CFF) {
         m_info.formatType = L"OPENTYPE";
+    } else if (m_faceType == DWRITE_FONT_FACE_TYPE_TRUETYPE_COLLECTION) {
+        m_info.formatType = L"TRUETYPE COLLECTION";
     } else {
         m_info.formatType = L"VECTOR FONT";
     }
@@ -141,11 +166,16 @@ bool FontEngine::LoadFromFile(IDWriteFactory* dwrite, const std::wstring& filePa
     }
 
     if (m_info.familyName.empty()) {
-        size_t dot = filePath.find_last_of(L'.');
-        size_t slash = filePath.find_last_of(L"\\/");
+        size_t dot = m_filePath.find_last_of(L'.');
+        size_t slash = m_filePath.find_last_of(L"\\/");
         size_t start = (slash != std::wstring::npos) ? slash + 1 : 0;
         size_t len = (dot != std::wstring::npos && dot > start) ? dot - start : std::wstring::npos;
-        m_info.familyName = filePath.substr(start, len);
+        m_info.familyName = m_filePath.substr(start, len);
+        if (m_faceCount > 1) {
+            WCHAR suffix[32];
+            swprintf_s(suffix, L" (Face %u)", index + 1);
+            m_info.familyName += suffix;
+        }
     }
     if (m_info.styleName.empty()) {
         m_info.styleName = L"Regular";
@@ -153,14 +183,29 @@ bool FontEngine::LoadFromFile(IDWriteFactory* dwrite, const std::wstring& filePa
 
     // Create DirectWrite formats for specimen presentation
     const wchar_t* family = m_info.familyName.c_str();
-    dwrite->CreateTextFormat(family, NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 42.0f, L"en-us", &m_fmtHero);
-    dwrite->CreateTextFormat(family, NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 26.0f, L"en-us", &m_fmtLarge);
-    dwrite->CreateTextFormat(family, NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 17.0f, L"en-us", &m_fmtMedium);
-    dwrite->CreateTextFormat(family, NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 14.0f, L"en-us", &m_fmtSmall);
-    dwrite->CreateTextFormat(L"Cascadia Code", NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 12.0f, L"en-us", &m_fmtMono);
+    m_dwrite->CreateTextFormat(family, NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 42.0f, L"en-us", &m_fmtHero);
+    m_dwrite->CreateTextFormat(family, NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 26.0f, L"en-us", &m_fmtLarge);
+    m_dwrite->CreateTextFormat(family, NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 17.0f, L"en-us", &m_fmtMedium);
+    m_dwrite->CreateTextFormat(family, NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 14.0f, L"en-us", &m_fmtSmall);
+    m_dwrite->CreateTextFormat(L"Cascadia Code", NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 12.0f, L"en-us", &m_fmtMono);
 
+    m_scrollY = 0.0f;
+    m_targetScrollY = 0.0f;
+    m_contentHeight = 0.0f;
     m_isLoaded = true;
     return true;
+}
+
+bool FontEngine::SetFace(UINT32 index) {
+    return LoadFace(index);
+}
+
+bool FontEngine::StepFace(int delta) {
+    if (m_faceCount <= 1 || delta == 0) return false;
+    int count = (int)m_faceCount;
+    int next = ((int)m_faceIndex + delta) % count;
+    if (next < 0) next += count;
+    return LoadFace((UINT32)next);
 }
 
 void FontEngine::Scroll(float dy) {
@@ -228,6 +273,12 @@ void FontEngine::Render(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D1_RECT_F
         WCHAR unitsStr[64];
         swprintf_s(unitsStr, L"%u UPM", m_info.designUnitsPerEm);
         bx += drawPill(unitsStr, bx, d2d.BrushCard, d2d.BrushTextMuted);
+
+        if (m_faceCount > 1) {
+            WCHAR faceStr[64];
+            swprintf_s(faceStr, L"FACE %u / %u", m_faceIndex + 1, m_faceCount);
+            drawPill(faceStr, bx, d2d.BrushCard, d2d.BrushAccent);
+        }
 
         curY += 86.0f;
     }
@@ -303,6 +354,11 @@ void FontEngine::Render(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D1_RECT_F
             l1->Release();
         }
 
+        if (m_faceCount > 1) {
+            std::wstring hint = std::wstring(meta2) + L"  •  Page Up / Page Down switches face";
+            wcscpy_s(meta2, hint.c_str());
+        }
+
         IDWriteTextLayout* l2 = nullptr;
         d2d.GetDWriteFactory()->CreateTextLayout(meta2, (UINT32)wcslen(meta2), d2d.FontCaption, textW - 32.0f, 20.0f, &l2);
         if (l2) {
@@ -317,8 +373,13 @@ void FontEngine::Render(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D1_RECT_F
 }
 
 std::wstring FontEngine::GetFormatBadge() const {
-    WCHAR buf[128];
-    swprintf_s(buf, L"FONT • %s • %u GLYPHS", m_info.formatType.c_str(), m_info.glyphCount);
+    WCHAR buf[160];
+    if (m_faceCount > 1) {
+        swprintf_s(buf, L"FONT • %s • FACE %u/%u • %u GLYPHS", m_info.formatType.c_str(),
+                   m_faceIndex + 1, m_faceCount, m_info.glyphCount);
+    } else {
+        swprintf_s(buf, L"FONT • %s • %u GLYPHS", m_info.formatType.c_str(), m_info.glyphCount);
+    }
     return buf;
 }
 

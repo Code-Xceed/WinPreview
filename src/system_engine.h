@@ -43,6 +43,18 @@ struct SystemBinaryInfo {
     std::wstring formattedSize;
     std::wstring formattedDate;
     std::wstring binaryType;        // "APPLICATION", "DYNAMIC LIBRARY", "SYSTEM DRIVER"
+
+    // Windows Installer packages (.msi) carry an OLE database instead of a PE image.
+    bool isMsi = false;
+    std::wstring msiProductCode;
+    std::wstring msiUpgradeCode;
+    std::wstring msiPackageCode;
+    std::wstring msiLanguage;
+    std::wstring msiScope;          // "Per-machine" / "Per-user"
+    int msiFeatureCount = -1;
+    int msiFileCount = -1;
+    std::wstring msiInstallSize;
+    std::wstring msiShortcutCount;
 };
 
 struct SystemShortcutInfo {
@@ -82,6 +94,7 @@ public:
     void Close();
 
     bool LoadBinary(const std::wstring& filePath, IDWriteFactory* dwrite, ID2D1RenderTarget* rt, IWICImagingFactory* wic);
+    bool LoadMsi(const std::wstring& filePath, IDWriteFactory* dwrite, ID2D1RenderTarget* rt, IWICImagingFactory* wic);
     bool LoadShortcut(const std::wstring& filePath, IDWriteFactory* dwrite, ID2D1RenderTarget* rt, IWICImagingFactory* wic);
     bool LoadCertificate(const std::wstring& filePath, IDWriteFactory* dwrite, ID2D1RenderTarget* rt, IWICImagingFactory* wic);
 
@@ -90,6 +103,9 @@ public:
     bool UpdateAnimation(float dt);
 
     bool IsLoaded() const { return m_isLoaded; }
+    bool IsMsi() const { return m_bin.isMsi; }
+    int GetMsiFileCount() const { return m_bin.msiFileCount; }
+    int GetMsiFeatureCount() const { return m_bin.msiFeatureCount; }
     unsigned long GetCertificateCount() const { return m_cert.certificateCount; }
     SystemItemType GetItemType() const { return m_itemType; }
     std::wstring GetFormatBadge() const;

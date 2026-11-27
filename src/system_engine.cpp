@@ -1,4 +1,7 @@
 #include "system_engine.h"
+#include <msi.h>
+#include <msiquery.h>
+#include <map>
 #include "d2d_engine.h"
 #include <winver.h>
 #include <wintrust.h>
@@ -126,7 +129,12 @@ std::wstring SystemEngine::GetFormatBadge() const {
     switch (m_itemType) {
         case SystemItemType::Binary: {
             std::wstring b = m_bin.binaryType;
-            if (!m_bin.architecture.empty()) b += L" • " + m_bin.architecture;
+            if (m_bin.isMsi) {
+                if (!m_bin.productVersion.empty()) b += L" • v" + m_bin.productVersion;
+                if (!m_bin.msiLanguage.empty() && m_bin.msiLanguage != L"—") b += L" • " + m_bin.msiLanguage;
+            } else if (!m_bin.architecture.empty()) {
+                b += L" • " + m_bin.architecture;
+            }
             if (m_bin.isSigned && m_bin.isSignatureValid) b += L" • VERIFIED SIGNATURE";
             return b;
         }
@@ -140,6 +148,84 @@ std::wstring SystemEngine::GetFormatBadge() const {
     }
     return L"SYSTEM SPEC";
 }
+
+namespace {
+
+std::wstring MsiRecordString(MSIHANDLE record, UINT field, DWORD capacity = 1024) {
+    std::vector<wchar_t> buffer(capacity, 0);
+    DWORD length = capacity;
+    if (MsiRecordGetStringW(record, field, buffer.data(), &length) != ERROR_SUCCESS) return L"";
+    return std::wstring(buffer.data(), length);
+}
+
+// Row count for a table; -1 when the table does not exist in this package.
+int MsiCountRows(MSIHANDLE db, const wchar_t* table) {
+    std::wstring query = L"SELECT `" + std::wstring(table) + L"` FROM `" + table + L"`";
+    MSIHANDLE view = 0;
+    if (MsiDatabaseOpenViewW(db, query.c_str(), &view) != ERROR_SUCCESS) return -1;
+    if (MsiViewExecute(view, 0) != ERROR_SUCCESS) {
+        MsiCloseHandle(view);
+        return -1;
+    }
+    int count = 0;
+    MSIHANDLE record = 0;
+    while (MsiViewFetch(view, &record) == ERROR_SUCCESS) {
+        ++count;
+        MsiCloseHandle(record);
+        record = 0;
+    }
+    MsiCloseHandle(view);
+    return count;
+}
+
+UINT64 MsiTotalFileSize(MSIHANDLE db) {
+    MSIHANDLE view = 0;
+    if (MsiDatabaseOpenViewW(db, L"SELECT `FileSize` FROM `File`", &view) != ERROR_SUCCESS) return 0;
+    if (MsiViewExecute(view, 0) != ERROR_SUCCESS) {
+        MsiCloseHandle(view);
+        return 0;
+    }
+    UINT64 total = 0;
+    MSIHANDLE record = 0;
+    while (MsiViewFetch(view, &record) == ERROR_SUCCESS) {
+        int size = MsiRecordGetInteger(record, 1);
+        if (size > 0) total += (UINT64)size;
+        MsiCloseHandle(record);
+        record = 0;
+    }
+    MsiCloseHandle(view);
+    return total;
+}
+
+std::wstring MsiLanguageName(const std::wstring& lcidText) {
+    int lcid = _wtoi(lcidText.c_str());
+    switch (lcid & 0x3FF) {
+        case 0x09: return L"English (United States)";
+        case 0x07: return L"German (Germany)";
+        case 0x0C: return L"French (France)";
+        case 0x19: return L"Russian (Russia)";
+        case 0x0A: return L"Spanish (Spain)";
+        case 0x10: return L"Italian (Italy)";
+        case 0x11: return L"Japanese (Japan)";
+        case 0x04: return L"Chinese (Simplified)";
+        case 0x12: return L"Korean (Korea)";
+        case 0x15: return L"Polish (Poland)";
+        case 0x16: return L"Portuguese (Brazil)";
+        case 0x13: return L"Dutch (Netherlands)";
+        case 0x06: return L"Danish (Denmark)";
+        case 0x0B: return L"Finnish (Finland)";
+        case 0x14: return L"Norwegian (Bokmal)";
+        case 0x1D: return L"Swedish (Sweden)";
+        case 0x05: return L"Czech (Czechia)";
+        case 0x0E: return L"Hungarian (Hungary)";
+        case 0x18: return L"Romanian (Romania)";
+        case 0x1F: return L"Turkish (Turkey)";
+        default: break;
+    }
+    return lcidText.empty() ? L"—" : (L"LCID " + lcidText);
+}
+
+} // namespace
 
 bool SystemEngine::LoadBinary(const std::wstring& filePath, IDWriteFactory* dwrite, ID2D1RenderTarget* rt, IWICImagingFactory* wic) {
     Close();
@@ -485,6 +571,94 @@ bool SystemEngine::LoadShortcut(const std::wstring& filePath, IDWriteFactory* dw
     return true;
 }
 
+bool SystemEngine::LoadMsi(const std::wstring& filePath, IDWriteFactory* dwrite, ID2D1RenderTarget* rt, IWICImagingFactory* wic) {
+    // The shell icon, file size, dates and Authenticode signature are shared
+    // with every other binary; the package metadata comes from the MSI database.
+    if (!LoadBinary(filePath, dwrite, rt, wic)) return false;
+    m_bin.isMsi = true;
+    m_bin.binaryType = L"WINDOWS INSTALLER PACKAGE";
+
+    MSIHANDLE db = 0;
+    if (MsiOpenDatabaseW(filePath.c_str(), MSIDBOPEN_READONLY, &db) != ERROR_SUCCESS || !db) {
+        return true;  // Corrupt or not an installer: keep the plain binary card.
+    }
+
+    std::map<std::wstring, std::wstring> props;
+    MSIHANDLE view = 0;
+    if (MsiDatabaseOpenViewW(db, L"SELECT `Property`,`Value` FROM `Property`", &view) == ERROR_SUCCESS &&
+        MsiViewExecute(view, 0) == ERROR_SUCCESS) {
+        MSIHANDLE record = 0;
+        while (MsiViewFetch(view, &record) == ERROR_SUCCESS) {
+            props[MsiRecordString(record, 1, 256)] = MsiRecordString(record, 2, 2048);
+            MsiCloseHandle(record);
+            record = 0;
+        }
+    }
+    if (view) MsiCloseHandle(view);
+
+    auto prop = [&](const wchar_t* name) -> std::wstring {
+        auto it = props.find(name);
+        return it == props.end() ? std::wstring() : it->second;
+    };
+
+    // Product identity lives in the Property table, not the PE version resource.
+    std::wstring productName = prop(L"ProductName");
+    std::wstring manufacturer = prop(L"Manufacturer");
+    std::wstring productVersion = prop(L"ProductVersion");
+    if (!productName.empty()) m_bin.productName = productName;
+    if (!manufacturer.empty()) m_bin.companyName = manufacturer;
+    if (!productVersion.empty()) {
+        m_bin.productVersion = productVersion;
+        m_bin.fileVersion = productVersion;
+    }
+    m_bin.msiProductCode = prop(L"ProductCode");
+    m_bin.msiUpgradeCode = prop(L"UpgradeCode");
+    m_bin.msiLanguage = MsiLanguageName(prop(L"ProductLanguage"));
+    m_bin.msiScope = prop(L"ALLUSERS").empty() ? L"Per-user" : L"Per-machine";
+
+    // A package has no PE image; clear the fields LoadBinary guessed at.
+    m_bin.architecture.clear();
+    m_bin.subsystem.clear();
+    m_bin.subsystemVersion.clear();
+    m_bin.sectionNames.clear();
+    m_bin.numSections = 0;
+    m_bin.entryPointRva = 0;
+    m_bin.imageBase = 0;
+
+    m_bin.msiFeatureCount = MsiCountRows(db, L"Feature");
+    m_bin.msiFileCount = MsiCountRows(db, L"File");
+    int shortcuts = MsiCountRows(db, L"Shortcut");
+    m_bin.msiShortcutCount = shortcuts >= 0 ? std::to_wstring(shortcuts) : L"—";
+
+    UINT64 installBytes = MsiTotalFileSize(db);
+    m_bin.msiInstallSize = installBytes > 0 ? FormatSize(installBytes) : L"—";
+
+    // The package code lives in the summary information stream.
+    MSIHANDLE summary = 0;
+    if (MsiGetSummaryInformationW(NULL, filePath.c_str(), 0, &summary) == ERROR_SUCCESS && summary) {
+        wchar_t buffer[128] = {};
+        DWORD length = 128;
+        UINT type = 0;
+        INT intValue = 0;
+        FILETIME ft = {};
+        if (MsiSummaryInfoGetPropertyW(summary, 9 /* PID_REVNUMBER */, &type, &intValue, &ft, buffer, &length) == ERROR_SUCCESS) {
+            m_bin.msiPackageCode = buffer;
+        }
+        if (m_bin.msiLanguage == L"—") {
+            length = 128;
+            if (MsiSummaryInfoGetPropertyW(summary, 7 /* PID_TEMPLATE */, &type, &intValue, &ft, buffer, &length) == ERROR_SUCCESS) {
+                std::wstring templ = buffer;
+                size_t semi = templ.find(L';');
+                if (semi != std::wstring::npos) m_bin.msiLanguage = MsiLanguageName(templ.substr(semi + 1));
+            }
+        }
+        MsiCloseHandle(summary);
+    }
+
+    MsiCloseHandle(db);
+    return true;
+}
+
 bool SystemEngine::LoadCertificate(const std::wstring& filePath, IDWriteFactory* dwrite, ID2D1RenderTarget* rt, IWICImagingFactory* wic) {
     Close();
     m_itemType = SystemItemType::Certificate;
@@ -782,7 +956,12 @@ void SystemEngine::RenderBinary(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D
     };
 
     float bx = marginX;
-    if (!m_bin.architecture.empty()) {
+    if (m_bin.isMsi) {
+        bx += drawPill(L"MSI PACKAGE", bx, d2d.BrushCard, d2d.BrushAccent);
+        if (!m_bin.msiScope.empty()) {
+            bx += drawPill(m_bin.msiScope, bx, d2d.BrushCard, d2d.BrushText);
+        }
+    } else if (!m_bin.architecture.empty()) {
         bx += drawPill(m_bin.architecture, bx, d2d.BrushCard, d2d.BrushAccent);
     }
     if (!m_bin.subsystem.empty()) {
@@ -793,7 +972,8 @@ void SystemEngine::RenderBinary(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D
         if (!m_bin.signerName.empty()) sig += L": " + m_bin.signerName;
         bx += drawPill(sig, bx, d2d.BrushCard, m_bin.isSignatureValid ? d2d.BrushGreen : d2d.BrushAmber);
     } else {
-        bx += drawPill(L"UNSIGNED BINARY", bx, d2d.BrushCard, d2d.BrushTextMuted);
+        bx += drawPill(m_bin.isMsi ? L"UNSIGNED PACKAGE" : L"UNSIGNED BINARY",
+                       bx, d2d.BrushCard, d2d.BrushTextMuted);
     }
     if (!m_bin.fileVersion.empty()) {
         bx += drawPill(L"v" + m_bin.fileVersion, bx, d2d.BrushCard, d2d.BrushTextMuted);
@@ -844,14 +1024,26 @@ void SystemEngine::RenderBinary(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D
         return totalH;
     };
 
-    std::vector<std::pair<std::wstring, std::wstring>> col1 = {
-        { L"Product name", !m_bin.productName.empty() ? m_bin.productName : L"—" },
-        { L"Description", !m_bin.fileDescription.empty() ? m_bin.fileDescription : L"—" },
-        { L"Publisher", !m_bin.companyName.empty() ? m_bin.companyName : L"—" },
-        { L"File version", !m_bin.fileVersion.empty() ? m_bin.fileVersion : L"—" },
-        { L"Product version", !m_bin.productVersion.empty() ? m_bin.productVersion : L"—" },
-        { L"Copyright", !m_bin.copyright.empty() ? m_bin.copyright : L"—" }
-    };
+    std::vector<std::pair<std::wstring, std::wstring>> col1;
+    if (m_bin.isMsi) {
+        col1 = {
+            { L"Product name", !m_bin.productName.empty() ? m_bin.productName : L"—" },
+            { L"Publisher", !m_bin.companyName.empty() ? m_bin.companyName : L"—" },
+            { L"Product version", !m_bin.productVersion.empty() ? m_bin.productVersion : L"—" },
+            { L"Language", !m_bin.msiLanguage.empty() ? m_bin.msiLanguage : L"—" },
+            { L"Install scope", !m_bin.msiScope.empty() ? m_bin.msiScope : L"—" },
+            { L"Package size", m_bin.formattedSize }
+        };
+    } else {
+        col1 = {
+            { L"Product name", !m_bin.productName.empty() ? m_bin.productName : L"—" },
+            { L"Description", !m_bin.fileDescription.empty() ? m_bin.fileDescription : L"—" },
+            { L"Publisher", !m_bin.companyName.empty() ? m_bin.companyName : L"—" },
+            { L"File version", !m_bin.fileVersion.empty() ? m_bin.fileVersion : L"—" },
+            { L"Product version", !m_bin.productVersion.empty() ? m_bin.productVersion : L"—" },
+            { L"Copyright", !m_bin.copyright.empty() ? m_bin.copyright : L"—" }
+        };
+    }
 
     WCHAR entryHex[64] = {};
     if (m_bin.entryPointRva) swprintf_s(entryHex, L"0x%08X", m_bin.entryPointRva);
@@ -863,14 +1055,34 @@ void SystemEngine::RenderBinary(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D
         if (!m_bin.sectionNames.empty()) peSectStr += L" (" + m_bin.sectionNames + L")";
     }
 
-    std::vector<std::pair<std::wstring, std::wstring>> col2 = {
-        { L"Architecture", !m_bin.architecture.empty() ? m_bin.architecture : L"—" },
-        { L"Subsystem", !m_bin.subsystem.empty() ? (m_bin.subsystem + L" (" + m_bin.subsystemVersion + L")") : L"—" },
-        { L"PE sections", peSectStr },
-        { L"Entry point", entryHex },
-        { L"File size", m_bin.formattedSize + L" (" + std::to_wstring(m_bin.fileSizeBytes) + L" bytes)" },
-        { L"Modified", m_bin.formattedDate }
-    };
+    std::vector<std::pair<std::wstring, std::wstring>> col2;
+    if (m_bin.isMsi) {
+        std::wstring contents = L"—";
+        if (m_bin.msiFeatureCount >= 0 || m_bin.msiFileCount >= 0) {
+            contents = std::to_wstring((std::max)(0, m_bin.msiFeatureCount)) + L" features, " +
+                       std::to_wstring((std::max)(0, m_bin.msiFileCount)) + L" files";
+        }
+        col2 = {
+            { L"Product code", !m_bin.msiProductCode.empty() ? m_bin.msiProductCode : L"—" },
+            { L"Upgrade code", !m_bin.msiUpgradeCode.empty() ? m_bin.msiUpgradeCode : L"—" },
+            { L"Package code", !m_bin.msiPackageCode.empty() ? m_bin.msiPackageCode : L"—" },
+            { L"Language", !m_bin.msiLanguage.empty() ? m_bin.msiLanguage : L"—" },
+            { L"Contents", contents },
+            { L"Install size", m_bin.msiInstallSize.empty() ? L"—" : m_bin.msiInstallSize },
+            { L"Shortcuts", m_bin.msiShortcutCount.empty() ? L"—" : m_bin.msiShortcutCount },
+            { L"File size", m_bin.formattedSize + L" (" + std::to_wstring(m_bin.fileSizeBytes) + L" bytes)" },
+            { L"Modified", m_bin.formattedDate }
+        };
+    } else {
+        col2 = {
+            { L"Architecture", !m_bin.architecture.empty() ? m_bin.architecture : L"—" },
+            { L"Subsystem", !m_bin.subsystem.empty() ? (m_bin.subsystem + L" (" + m_bin.subsystemVersion + L")") : L"—" },
+            { L"PE sections", peSectStr },
+            { L"Entry point", entryHex },
+            { L"File size", m_bin.formattedSize + L" (" + std::to_wstring(m_bin.fileSizeBytes) + L" bytes)" },
+            { L"Modified", m_bin.formattedDate }
+        };
+    }
 
     std::vector<MeasuredRow> mCol1, mCol2;
     float h1 = measureCard(col1, mCol1);
@@ -898,7 +1110,8 @@ void SystemEngine::RenderBinary(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D
     };
 
     renderMeasuredCard(marginX, curY, L"Product & identity", mCol1);
-    renderMeasuredCard(marginX + cardW + 18.0f, curY, L"Binary architecture & specs", mCol2);
+    renderMeasuredCard(marginX + cardW + 18.0f, curY,
+                       m_bin.isMsi ? L"Package & install" : L"Binary architecture & specs", mCol2);
 
     for (auto& mr : mCol1) { if (mr.layout) mr.layout->Release(); }
     for (auto& mr : mCol2) { if (mr.layout) mr.layout->Release(); }

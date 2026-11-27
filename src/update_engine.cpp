@@ -31,7 +31,7 @@ static const wchar_t* kUpdatePublicKeyBlobBase64 =
 
 // When true a manifest without a valid signature is rejected. Flip this to true
 // in the release that first ships with a signing key configured in CI.
-static const bool kRequireSignedManifest = false;
+static const bool kRequireSignedManifest = true;
 
 // Self-test vectors (signed offline with the release key). See RunUpdateSelfTest.
 static const char* kSelfTestManifest =

@@ -6,6 +6,7 @@
 #include "text_engine.h"
 #include "svg_engine.h"
 #include "font_engine.h"
+#include "rtf_engine.h"
 #include "folder_engine.h"
 #include "markdown_engine.h"
 #include "office_engine.h"
@@ -48,7 +49,8 @@ enum class DocumentType {
     Certificate,
     Unsupported,
     OfficeDoc,
-    Comic
+    Comic,
+    Rtf
 };
 
 struct ThumbnailItem {
@@ -200,6 +202,7 @@ private:
     TextEngine m_text;
     SvgEngine m_svg;
     FontEngine m_font;
+    RtfEngine m_rtf;
     FolderEngine m_folder;
     MarkdownEngine m_md;
     OfficeEngine m_office;

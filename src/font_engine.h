@@ -35,6 +35,11 @@ public:
     ~FontEngine();
 
     bool LoadFromFile(IDWriteFactory* dwrite, const std::wstring& filePath);
+    // TrueType collections (.ttc) hold several faces in one file.
+    bool SetFace(UINT32 index);
+    bool StepFace(int delta);
+    UINT32 GetFaceCount() const { return m_faceCount; }
+    UINT32 GetFaceIndex() const { return m_faceIndex; }
     void Render(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D1_RECT_F& targetRect, float dpiScale);
     void Scroll(float dy);
     bool UpdateAnimation(float dt);
@@ -46,10 +51,16 @@ public:
 
 private:
     void ParseNameTable(const void* tableData, UINT32 tableSize);
+    bool LoadFace(UINT32 index);
 
     bool m_isLoaded = false;
     std::wstring m_filePath;
     FontInfo m_info;
+    UINT32 m_faceCount = 1;
+    UINT32 m_faceIndex = 0;
+    UINT64 m_fileSizeBytes = 0;
+    DWRITE_FONT_FILE_TYPE m_fileType = DWRITE_FONT_FILE_TYPE_UNKNOWN;
+    DWRITE_FONT_FACE_TYPE m_faceType = DWRITE_FONT_FACE_TYPE_UNKNOWN;
     float m_scrollY = 0.0f;
     float m_targetScrollY = 0.0f;
     float m_contentHeight = 0.0f;
