@@ -40,6 +40,7 @@ public:
     ~MarkdownEngine();
 
     bool LoadMarkdownFile(const std::wstring& filePath);
+    bool LoadMarkdownText(const std::string& rawText);
     bool LoadNotebookFile(const std::wstring& filePath);
     void Render(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D1_RECT_F& targetRect, float dpiScale);
     void Scroll(float dy);
@@ -47,6 +48,7 @@ public:
     void Close();
 
     bool IsLoaded() const { return m_isLoaded; }
+    void SetBadgeOverride(const std::wstring& badge) { m_badgeOverride = badge; }
     bool IsNotebook() const { return m_isNotebook; }
     std::wstring GetFormatBadge() const;
 
@@ -63,6 +65,7 @@ private:
     float m_contentHeight = 0.0f;
     UINT32 m_cellCount = 0;
     std::wstring m_kernelName;
+    std::wstring m_badgeOverride;
 };
 
 } // namespace WinPreview

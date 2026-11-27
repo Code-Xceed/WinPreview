@@ -57,17 +57,19 @@ Tested on Windows 11 Pro 64-bit (Intel Core i7 / 16GB RAM / NVMe SSD):
 | Category | Supported Extensions | Engine / Capabilities |
 | :--- | :--- | :--- |
 | **Documents & PDFs** | `.pdf` | Chromium PDFium vector rendering, multi-page sidebar, smooth zoom |
-| **Images & RAW Photos** | `.heic`, `.heif`, `.avif`, `.webp`, `.png`, `.jpg`, `.jpeg`, `.gif`, `.tiff`, `.tif`, `.bmp`, `.ico`, `.cr2`, `.nef`, `.arw`, `.dng`, `.raw`, `.orf`, `.rw2`, `.pef` | Multi-tier LibHEIF + WIC hardware decoding, embedded Camera RAW preview extraction, Display P3 wide-gamut, EXIF inspector metadata |
+| **Images & RAW Photos** | `.heic`, `.heif`, `.avif`, `.webp`, `.jxl`, `.png`, `.jpg`, `.jpeg`, `.gif`, `.tiff`, `.tif`, `.bmp`, `.ico`, `.cr2`, `.nef`, `.arw`, `.dng`, `.raw`, `.orf`, `.rw2`, `.pef` | Multi-tier LibHEIF + WIC hardware decoding, embedded Camera RAW preview extraction, Display P3 wide-gamut, EXIF inspector metadata. WebP and JPEG XL use the installed Windows codec; without it you get an "install the extension" card, never a file-type icon pretending to be the picture |
 | **Video & Audio** | `.mov`, `.mp4`, `.mkv`, `.m4v`, `.webm`, `.avi`, `.wmv`, `.flv`, `.ts`*, `.m2ts`, `.mts`*, `.mxf`, `.vob`, `.3gp`, `.ogv`, `.mp3`, `.wav`, `.flac`, `.m4a`, `.m4b`, `.aac`, `.ogg`, `.opus`, `.wma`, `.aiff`, `.ac3`, `.mka`, `.ape` | LibVLC playback when VLC 3.x is installed (or a portable `libvlc` folder next to the EXE); real-time Log-to-Rec.709 tone-mapping, acrylic transport HUD. `*` `.ts`/`.mts` are byte-sniffed: TypeScript opens in the code editor, transport streams play as video. |
 | **Programming Languages** | `.cpp`, `.c`, `.h`, `.hpp`, `.cs`, `.py`, `.rs`, `.go`, `.js`, `.ts`, `.tsx`, `.jsx`, `.swift`, `.kt`, `.zig`, `.lua`, `.php`, `.rb`, `.java`, `.r`, `.sql`, `.dart` | DirectWrite hardware text rendering, fast keyword/string/comment tinting, line numbers, caret navigation, editing & save (`Ctrl+S`) |
 | **Scripts & Shells** | `.ps1`, `.bat`, `.cmd`, `.sh`, `.bash`, `.zsh` | Shell syntax highlighting, line wrapping toggle |
-| **Web & Stylesheets** | `.html`, `.htm`, `.css`, `.scss`, `.less` | Semantic tag & property coloring |
+| **Web & Stylesheets** | `.html`, `.htm`, `.xhtml`, `.css`, `.scss`, `.less` | HTML opens in a dependency-free reader view (headings, lists, tables, links); scripts, styles, iframes and frames are discarded and never executed. Stylesheets open as highlighted source |
 | **Data & Configs** | `.json`, `.yaml`, `.yml`, `.toml`, `.xml`, `.ini`, `.env`, `.conf`, `.properties` | Key-value formatting, bracket matching |
 | **Spreadsheets & Tables**| `.csv`, `.tsv`, `.tab`, `.psv` | Automatic column alignment, alternating row zebra striping |
 | **Documentation** | `.md`, `.markdown`, `.diff`, `.patch`, `.txt`, `.log`, `.ipynb` | Markdown structure parser, unified diff highlighting, Jupyter JSON parsing |
-| **Vector & Fonts** | `.svg`, `.ttf`, `.otf`, `.woff`, `.woff2` | Direct2D SVG vector geometry rasterizer, typography previewer with font metrics |
+| **Office, Books & Rich Text** | `.docx`, `.odt`, `.xlsx`, `.ods`, `.pptx`, `.odp`, `.epub`, `.rtf` | Block reader for Word/ODF, sheet grid with tabs, slide deck, EPUB chapters with reading progress, and RichEdit-formatted RTF laid out on pages |
+| **Comics** | `.cbz`, `.cbr` | Page-by-page comic viewer with keyboard, wheel and rail navigation |
+| **Vector & Fonts** | `.svg`, `.svgz`, `.ttf`, `.otf`, `.ttc`, `.woff`, `.woff2` | Direct2D SVG vector geometry rasterizer, typography previewer with font metrics; `.ttc` collections enumerate their faces (Page Up / Page Down switches) |
 | **Archives** | `.zip`, `.7z`, `.rar`, `.tar`, `.gz`, `.tgz`, `.bz2`, `.tbz2`, `.xz`, `.txz`, `.z`, `.lzma`, `.zst`, `.iso`, `.img`, `.cab`, `.lzh`, `.lha`, `.cbr`, and zip-based packages (`.jar`, `.apk`, `.nupkg`, `.vsix`, `.cbz`, `.epub`, `.xpi`, `.crx`, `.whl`, `.msix`, `.appx`) | Entry listing with nested folder navigation, breadcrumbs, keyboard selection, archive/compressed totals; `.tar.gz`-style streams are unwrapped so the files inside the tar can be browsed; header-encrypted archives show a password state instead of an empty list |
-| **System & Binaries** | `.exe`, `.dll`, `.lnk`, `.url`, `.reg`, `.cer`, `.crt`, `.der`, `.pem`, `[Binary / Unknown]` | PE version/architecture cards, shortcut and certificate viewers, fallback Direct2D hex inspector |
+| **System & Binaries** | `.exe`, `.dll`, `.sys`, `.lnk`, `.url`, `.reg`, `.cer`, `.crt`, `.der`, `.pem`, `.p7b`, `.pfx`, `.p12`, `.msi`, `[Binary / Unknown]` | PE version/architecture cards, shortcut and certificate viewers (including bundles), a Windows Installer inspector (product, codes, language, scope, file/feature counts), fallback Direct2D hex inspector |
 
 ---
 
@@ -118,6 +120,13 @@ flowchart TD
 | `Escape` | Close Preview Window / Exit Fullscreen |
 
 ---
+
+## ♿ Accessibility & Verification
+
+- **Screen readers:** the Direct2D surface exposes one UI Automation document with the file name, current format/page position and shortcut help; page turns raise status notifications. Old MSAA clients are covered by UI Automation's bridge.
+- **Keyboard:** `Tab` / `Shift+Tab` move a visible focus ring through every toolbar button, `Enter` presses the focused one, and `Esc` leaves focus mode. All actions also keep their direct shortcuts.
+- **Local gate:** `tests/production_check.ps1` runs the UI flow, dock geometry, release audit (every sample file), scenario audit (empty/truncated/unicode/huge inputs), per-format suites, accessibility and a silent uninstall/reinstall round-trip.
+- **Public CI:** `tools/ci_probe.py` generates its own fixtures (images, SVG, text, archives, DOCX/XLSX/PPTX/EPUB/CBZ, RTF, HTML, TTC) so the repository can verify every format family without shipping third-party samples.
 
 ## 🚀 Installation
 

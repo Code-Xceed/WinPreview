@@ -10,6 +10,7 @@
 #include "app_window.h"
 #include "archive_engine.h"
 #include "office_engine.h"
+#include "html_reader.h"
 #include "explorer_hook.h"
 
 // Force integrated GPU to eliminate NVIDIA PCIe bus spin-up latency (~800ms)
@@ -96,6 +97,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     unsigned long applyUpdateWaitPid = 0;
     bool runUpdateSelfTest = false;
     bool runArchiveSelfTest = false;
+    std::wstring htmlDumpPath;
     bool forceUpdateCheck = false;
     bool downloadUpdateTest = false;
     bool openUpdateSheet = false;
@@ -128,6 +130,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
                 runArchiveSelfTest = true;
             } else if ((_wcsicmp(argv[i], L"--office-dump") == 0) && i + 1 < argc) {
                 officeDumpPath = argv[++i];
+            } else if ((_wcsicmp(argv[i], L"--html-dump") == 0) && i + 1 < argc) {
+                htmlDumpPath = argv[++i];
             } else if (_wcsicmp(argv[i], L"--force-update-check") == 0) {
                 forceUpdateCheck = true;
             } else if (_wcsicmp(argv[i], L"--download-update-test") == 0) {
@@ -193,6 +197,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     }
     if (!officeDumpPath.empty()) {
         return WinPreview::RunOfficeDump(officeDumpPath);
+    }
+    if (!htmlDumpPath.empty()) {
+        return WinPreview::RunHtmlDump(htmlDumpPath);
     }
 
     // Single-instance enforcement: Forward file to running instance if already active

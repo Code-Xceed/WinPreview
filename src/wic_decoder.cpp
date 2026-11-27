@@ -120,8 +120,9 @@ bool WicDecoder::LoadImageFromFile(
             }
         }
 
-        // Tier 4: Shell Image Factory (large preview)
-        if (LoadShellThumbnail(factory, renderTarget, filePath, 3840, outBitmap)) {
+        // Tier 4: Shell Image Factory (large preview). Thumbnails only: a file
+        // icon is not a decoded image.
+        if (LoadShellThumbnail(factory, renderTarget, filePath, 3840, outBitmap, true)) {
             if (outBitmap && *outBitmap) {
                 D2D1_SIZE_F sz = (*outBitmap)->GetSize();
                 if (outWidth) *outWidth = (UINT)sz.width;
@@ -705,6 +706,27 @@ bool WicDecoder::SaveImage(
     return true;
 }
 
+namespace {
+long g_lastDecoderHr = 0;
+}
+
+long WicDecoder::LastDecoderHr() {
+    return g_lastDecoderHr;
+}
+
+bool WicDecoder::MissingCodec(IWICImagingFactory* wic, const std::wstring& filePath) {
+    if (!wic) return false;
+    IWICBitmapDecoder* decoder = nullptr;
+    HRESULT hr = wic->CreateDecoderFromFilename(filePath.c_str(), nullptr, GENERIC_READ,
+                                                WICDecodeMetadataCacheOnDemand, &decoder);
+    if (decoder) decoder->Release();
+    g_lastDecoderHr = (long)hr;
+    // 0x88982F50: no component registered. 0x88982F8B: a component exists but
+    // failed to initialise (a Store codec that is missing or broken). Both are
+    // "install a codec" situations, not a damaged file.
+    return hr == WINCODEC_ERR_COMPONENTNOTFOUND || hr == (HRESULT)0x88982F8B;
+}
+
 UINT WicDecoder::GetFrameCount(const std::wstring& filePath) {
     IWICImagingFactory* factory = nullptr;
     if (FAILED(CoCreateInstance(CLSID_WICImagingFactory2, NULL, CLSCTX_INPROC_SERVER,
@@ -768,7 +790,8 @@ bool WicDecoder::LoadShellThumbnail(
     ID2D1RenderTarget* renderTarget,
     const std::wstring& filePath,
     UINT targetDimension,
-    ID2D1Bitmap** outBitmap
+    ID2D1Bitmap** outBitmap,
+    bool thumbnailOnly
 ) {
     if (!factory || !renderTarget || !outBitmap) return false;
     *outBitmap = nullptr;
@@ -786,12 +809,21 @@ bool WicDecoder::LoadShellThumbnail(
 
     SIZE sz = { (LONG)targetDimension, (LONG)targetDimension };
     HBITMAP hBmp = nullptr;
-    hr = pFactory->GetImage(sz, SIIGBF_BIGGERSIZEOK | SIIGBF_SCALEUP, &hBmp);
-    if (FAILED(hr) || !hBmp) {
-        hr = pFactory->GetImage(sz, SIIGBF_RESIZETOFIT, &hBmp);
-    }
-    if (FAILED(hr) || !hBmp) {
-        hr = pFactory->GetImage(sz, SIIGBF_THUMBNAILONLY, &hBmp);
+    if (thumbnailOnly) {
+        // Only a real thumbnail counts; the shell would otherwise hand back the
+        // registered file-type icon for formats it cannot render.
+        hr = pFactory->GetImage(sz, SIIGBF_THUMBNAILONLY | SIIGBF_BIGGERSIZEOK, &hBmp);
+        if (FAILED(hr) || !hBmp) {
+            hr = pFactory->GetImage(sz, SIIGBF_THUMBNAILONLY, &hBmp);
+        }
+    } else {
+        hr = pFactory->GetImage(sz, SIIGBF_BIGGERSIZEOK | SIIGBF_SCALEUP, &hBmp);
+        if (FAILED(hr) || !hBmp) {
+            hr = pFactory->GetImage(sz, SIIGBF_RESIZETOFIT, &hBmp);
+        }
+        if (FAILED(hr) || !hBmp) {
+            hr = pFactory->GetImage(sz, SIIGBF_THUMBNAILONLY, &hBmp);
+        }
     }
 
     pFactory->Release();

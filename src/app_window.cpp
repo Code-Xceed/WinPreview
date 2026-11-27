@@ -1,4 +1,5 @@
 ﻿#include "app_window.h"
+#include "html_reader.h"
 #include <algorithm>
 #include <cmath>
 #include <fstream>
@@ -117,6 +118,7 @@ LRESULT CALLBACK AppWindow::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         app = (AppWindow*)cs->lpCreateParams;
         SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)app);
         app->m_hwnd = hwnd;
+        app->m_a11y.Attach(hwnd);
     } else {
         app = (AppWindow*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
     }
@@ -136,6 +138,7 @@ static UINT g_wmTaskbarCreated = 0;
 static HMODULE g_hWtsApi32 = NULL;
 
 AppWindow::~AppWindow() {
+    m_a11y.Detach();
     // Stop and serialize with any in-flight PDF raster before members are freed.
     if (m_pdfRasterCtx) {
         std::lock_guard<std::mutex> lock(m_pdfRasterCtx->mutex);
@@ -160,6 +163,7 @@ AppWindow::~AppWindow() {
     m_svg.Close();
     m_font.Close();
     m_rtf.Close();
+    m_keyboardFocusId = 0;
     m_folder.Close();
     m_md.Close();
     m_office.Close();
@@ -565,6 +569,7 @@ bool AppWindow::OpenFile(const std::wstring& filePath) {
     m_svg.Close();
     m_font.Close();
     m_rtf.Close();
+    m_keyboardFocusId = 0;
     m_folder.Close();
     m_md.Close();
     m_office.Close();
@@ -753,7 +758,8 @@ bool AppWindow::OpenFile(const std::wstring& filePath) {
                 e == L".ico" || e == L".webp" || e == L".heic" || e == L".heif" || e == L".avif" ||
                 e == L".raw" || e == L".cr2" || e == L".cr3" || e == L".nef" || e == L".arw" || e == L".dng" ||
                 e == L".orf" || e == L".rw2" || e == L".pef" || e == L".raf" || e == L".srw" ||
-                e == L".psd" || e == L".cur" || e == L".dds" || e == L".tga" || e == L".icns");
+                e == L".psd" || e == L".cur" || e == L".dds" || e == L".tga" || e == L".icns" ||
+                e == L".jxl");
     };
 
     auto isMediaExt = [](const std::wstring& e) {
@@ -1043,6 +1049,29 @@ bool AppWindow::OpenFile(const std::wstring& filePath) {
             success = true;
         }
     }
+    // 3.6 HTML — a safe reader view, never a browser (no script, no styles).
+    else if (ext == L".html" || ext == L".htm" || ext == L".xhtml") {
+        std::string readerText;
+        std::wstring pageTitle;
+        int links = 0;
+        if (WinPreview::ConvertHtmlFile(filePath, readerText, pageTitle, links) &&
+            m_md.LoadMarkdownText(readerText)) {
+            std::wstring badge = L"HTML • READER VIEW";
+            if (!pageTitle.empty()) {
+                std::wstring shortTitle = pageTitle;
+                if (shortTitle.size() > 58) shortTitle = shortTitle.substr(0, 57) + L"…";
+                badge += L" • " + shortTitle;
+            }
+            if (links > 0) badge += L" • " + std::to_wstring(links) + L" LINKS";
+            m_md.SetBadgeOverride(badge);
+            m_docType = DocumentType::Markdown;
+            m_showSidebar = false;
+            if (m_hudHwnd) ShowWindow(m_hudHwnd, SW_HIDE);
+            m_formatBadgeText = badge;
+            AdaptWindowToMedia(940, 760);
+            success = true;
+        }
+    }
     // 4. Source Code & Text Documents
     else if (isTextExt(ext) || isKnownTextFilename(m_fileName)) {
         if (m_text.LoadFile(filePath, m_d2d.GetDWriteFactory())) {
@@ -1301,8 +1330,14 @@ bool AppWindow::OpenFile(const std::wstring& filePath) {
         m_imagePageCount = 1;
         m_imagePage = 0;
         D2D1_RECT_F bounds = {};
-        if (WicDecoder::LoadImageFromFile(m_d2d.GetWICFactory(), m_d2d.GetRenderTarget(),
-                                          filePath, &m_imageBitmap, &m_imageWidth, &m_imageHeight, &bounds)) {
+        const bool imageLoaded = WicDecoder::LoadImageFromFile(
+            m_d2d.GetWICFactory(), m_d2d.GetRenderTarget(), filePath,
+            &m_imageBitmap, &m_imageWidth, &m_imageHeight, &bounds);
+        if (!imageLoaded) {
+            m_imageDecodeFailed = true;
+            m_imageDecodeMissingCodec = WicDecoder::MissingCodec(m_d2d.GetWICFactory(), filePath);
+        }
+        if (imageLoaded) {
             m_docType = DocumentType::Image;
             m_contentBounds = bounds;
             float cw = bounds.right - bounds.left;
@@ -1386,6 +1421,23 @@ bool AppWindow::OpenFile(const std::wstring& filePath) {
     if (!success && fileAttrs != INVALID_FILE_ATTRIBUTES && !(fileAttrs & FILE_ATTRIBUTE_DIRECTORY)) {
         m_unsupportedKind = UnsupportedKind::None;
         m_unsupportedDetail.clear();
+        if (m_imageDecodeFailed) {
+            if (m_imageDecodeMissingCodec) {
+                m_unsupportedKind = UnsupportedKind::NeedsCodec;
+                if (ext == L".jxl") {
+                    m_unsupportedDetail = L"JPEG XL needs the Microsoft JPEG XL Image Extension (or another JPEG XL codec) to decode.";
+                } else if (ext == L".webp") {
+                    m_unsupportedDetail = L"WebP images need the WebP Image Extensions from the Microsoft Store (or another WebP codec) to decode.";
+                } else if (ext == L".heic" || ext == L".heif" || ext == L".avif") {
+                    m_unsupportedDetail = L"HEIF and AVIF images need the HEIF Image Extensions from the Microsoft Store.";
+                } else if (isImageExt(ext)) {
+                    m_unsupportedDetail = L"Windows has no image codec registered for this format.";
+                }
+            } else {
+                m_unsupportedKind = UnsupportedKind::NotSupportedYet;
+                m_unsupportedDetail = L"This image could not be decoded; it may be truncated or use a feature the decoder does not support.";
+            }
+        }
         m_docType = DocumentType::Unsupported;
         LoadUnsupportedFileInfo(filePath);
         m_showSidebar = false;
@@ -2440,6 +2492,7 @@ bool AppWindow::SaveScreenshot(const std::wstring& outPath) {
 }
 
 void AppWindow::Render(HDC outHdc) {
+    SyncAccessibilityValue();
     if (!m_d2d.GetRenderTarget()) {
         m_d2d.CreateDeviceResources(m_hwnd);
     }
@@ -3946,6 +3999,17 @@ void AppWindow::RenderToolbar(const D2D1_RECT_F& rect) {
 
             m_btnOverflowRect = D2D1::RectF(curX, btnY, curX + 28.0f, btnY + btnH);
             DrawIconButton(m_btnOverflowRect, ICON_MORE, BTN_OVERFLOW_MENU, true);
+        }
+    }
+
+    // Keyboard focus ring: Tab reaches every dock button, Enter presses it.
+    if (m_keyboardFocusId != 0 && m_dockOpacity > 0.02f) {
+        D2D1_RECT_F focused = GetButtonRect(m_keyboardFocusId);
+        if (focused.right > focused.left && focused.bottom > focused.top) {
+            D2D1_ROUNDED_RECT ring = D2D1::RoundedRect(
+                D2D1::RectF(focused.left - 3.0f, focused.top - 3.0f,
+                            focused.right + 3.0f, focused.bottom + 3.0f), 9.0f, 9.0f);
+            rt->DrawRoundedRectangle(ring, m_d2d.BrushAccent, 2.0f);
         }
     }
 
@@ -5509,6 +5573,90 @@ void AppWindow::UpdateWindowTitle() {
         title = L"WinPreview";
     }
     SetWindowTextW(m_hwnd, title.c_str());
+    RefreshAccessibility();
+}
+
+void AppWindow::RefreshAccessibility() {
+    if (!m_hwnd) return;
+    std::wstring name = m_fileName.empty() ? L"WinPreview" : m_fileName;
+    std::wstring value = m_formatBadgeText;
+    std::wstring help =
+        L"Preview window. Ctrl+O opens another file. Left and right arrows move between files, "
+        L"Page Up and Page Down move through pages or faces, I shows file information, "
+        L"Ctrl+comma opens settings, F toggles fullscreen and Escape closes the preview. "
+        L"Tab moves focus through the toolbar buttons and Enter presses the focused one.";
+    m_a11y.SetIdentity(name, value, help);
+}
+
+void AppWindow::SyncAccessibilityValue() {
+    std::wstring value = m_formatBadgeText;
+    if (m_docType == DocumentType::Pdf && m_totalPages > 1) {
+        value += L" • Page " + std::to_wstring(m_currentPage + 1) + L" of " +
+                 std::to_wstring(m_totalPages);
+    } else if (m_docType == DocumentType::Rtf && m_rtf.GetPageCount() > 1) {
+        value += L" • Page " + std::to_wstring(m_rtf.GetPage() + 1) + L" of " +
+                 std::to_wstring(m_rtf.GetPageCount());
+    } else if (m_docType == DocumentType::Image && m_imagePageCount > 1) {
+        value += L" • Page " + std::to_wstring(m_imagePage + 1) + L" of " +
+                 std::to_wstring(m_imagePageCount);
+    }
+    m_a11y.SetValue(value);
+}
+
+std::vector<int> AppWindow::VisibleDockButtons() const {
+    static const int kCandidates[] = {
+        BTN_SIDEBAR, BTN_SEARCH, BTN_PREV_PAGE, BTN_NEXT_PAGE,
+        BTN_ZOOM_OUT, BTN_ZOOM_IN, BTN_ZOOM_FIT, BTN_ZOOM_RESET,
+        BTN_ROTATE_L, BTN_ROTATE_R, BTN_SAVE_FILE, BTN_UNDO, BTN_REDO,
+        BTN_CUT, BTN_COPY_TEXT, BTN_PASTE, BTN_WRAP_TEXT, BTN_TABLE_VIEW,
+        BTN_CROP, BTN_INFO, BTN_OPEN_WITH, BTN_SETTINGS, BTN_TOOLBAR_FS,
+        BTN_OVERFLOW_MENU
+    };
+    std::vector<std::pair<float, int>> found;
+    for (int id : kCandidates) {
+        D2D1_RECT_F rect = GetButtonRect(id);
+        if (rect.right > rect.left + 1.0f && rect.bottom > rect.top + 1.0f) {
+            found.push_back({ rect.left, id });
+        }
+    }
+    std::sort(found.begin(), found.end(),
+              [](const std::pair<float, int>& a, const std::pair<float, int>& b) {
+                  return a.first < b.first;
+              });
+    std::vector<int> ids;
+    ids.reserve(found.size());
+    for (const auto& entry : found) ids.push_back(entry.second);
+    return ids;
+}
+
+void AppWindow::CycleDockFocus(bool backwards) {
+    std::vector<int> ids = VisibleDockButtons();
+    if (ids.empty()) return;
+    int index = -1;
+    for (size_t i = 0; i < ids.size(); ++i) {
+        if (ids[i] == m_keyboardFocusId) index = (int)i;
+    }
+    if (index < 0) {
+        index = 0;
+    } else {
+        index = (index + (backwards ? -1 : 1) + (int)ids.size()) % (int)ids.size();
+    }
+    m_keyboardFocusId = ids[(size_t)index];
+    m_dockOpacity = 1.0f;
+    m_dockTargetOpacity = 1.0f;
+    m_inactivityMs = 0;
+    InvalidateRect(m_hwnd, NULL, FALSE);
+}
+
+void AppWindow::ActivateFocusedDockButton() {
+    if (m_keyboardFocusId == 0) return;
+    D2D1_RECT_F rect = GetButtonRect(m_keyboardFocusId);
+    if (rect.right <= rect.left || rect.bottom <= rect.top) return;
+    int x = (int)((rect.left + rect.right) * 0.5f * m_dpiScale + 0.5f);
+    int y = (int)((rect.top + rect.bottom) * 0.5f * m_dpiScale + 0.5f);
+    LPARAM position = MAKELPARAM(x, y);
+    PostMessage(m_hwnd, WM_LBUTTONDOWN, MK_LBUTTON, position);
+    PostMessage(m_hwnd, WM_LBUTTONUP, 0, position);
 }
 
 void AppWindow::SyncSpaceSuppression() {
@@ -8069,6 +8217,7 @@ void AppWindow::CloseCurrentPreview() {
     m_svg.Close();
     m_font.Close();
     m_rtf.Close();
+    m_keyboardFocusId = 0;
     m_folder.Close();
     m_md.Close();
     m_office.Close();
@@ -8720,6 +8869,7 @@ LRESULT AppWindow::HandleHudMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
 
         case WM_LBUTTONDBLCLK:
         case WM_LBUTTONDOWN: {
+            if (m_keyboardFocusId != 0) m_keyboardFocusId = 0;
             SetCapture(m_hudHwnd);
             WakeAllUiAndCursor();
 
@@ -9766,6 +9916,12 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         case WM_APP + 235: /* Diagnostic: HUD opacity (0..255) */ {
             return (LRESULT)(int)(m_hudOpacity + 0.5f);
         }
+        case WM_GETOBJECT: {
+            // The surface is Direct2D-drawn; expose it as one UIA document.
+            LRESULT accessible = m_a11y.HandleGetObject(wParam, lParam);
+            if (accessible) return accessible;
+            break;
+        }
         case WM_APP + 237: /* Diagnostic: document type */ {
             return (LRESULT)(int)m_docType;
         }
@@ -9835,6 +9991,18 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         }
         case WM_APP + 278: /* Diagnostic: active font face index */ {
             return (LRESULT)(m_docType == DocumentType::Font ? m_font.GetFaceIndex() : 0);
+        }
+        case WM_APP + 289: /* Diagnostic: last WIC decoder probe HRESULT */ {
+            return (LRESULT)(unsigned long)WicDecoder::LastDecoderHr();
+        }
+        case WM_APP + 288: /* Diagnostic: last WM_GETOBJECT LresultFromObject value */ {
+            return (LRESULT)m_a11y.LastObjectResult();
+        }
+        case WM_APP + 286: /* Diagnostic: keyboard-focused dock button id (0 = none) */ {
+            return (LRESULT)m_keyboardFocusId;
+        }
+        case WM_APP + 287: /* Diagnostic: file-info inspector open */ {
+            return (LRESULT)(m_showInspector ? 1 : 0);
         }
         case WM_APP + 281: /* Diagnostic: RTF page index */ {
             return (LRESULT)(m_docType == DocumentType::Rtf ? m_rtf.GetPage() : -1);
@@ -12160,6 +12328,27 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             bool isCtrl = ((GetKeyState(VK_CONTROL) & 0x8000) != 0) || ((GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0);
             bool isShift = ((GetKeyState(VK_SHIFT) & 0x8000) != 0) || ((GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0);
             bool isAlt = ((GetKeyState(VK_MENU) & 0x8000) != 0) || ((GetAsyncKeyState(VK_MENU) & 0x8000) != 0) || (msg == WM_SYSKEYDOWN);
+
+            // -0.5 Keyboard focus for the floating dock. Tab never steals the
+            // Tab key from a text editor (it inserts indentation there).
+            if (!m_isRecordingKeybind) {
+                const bool editorWantsTab =
+                    (m_docType == DocumentType::Text || m_docType == DocumentType::Spreadsheet) && !isCtrl;
+                if (wParam == VK_TAB && !editorWantsTab) {
+                    CycleDockFocus(isShift);
+                    return 0;
+                }
+                if (wParam == VK_ESCAPE && m_keyboardFocusId != 0) {
+                    m_keyboardFocusId = 0;
+                    InvalidateRect(m_hwnd, NULL, FALSE);
+                    return 0;
+                }
+                if ((wParam == VK_RETURN || wParam == VK_SPACE) && m_keyboardFocusId != 0 &&
+                    !isCtrl && !isAlt && m_dockOpacity > 0.02f) {
+                    ActivateFocusedDockButton();
+                    return 0;
+                }
+            }
 
             // -1. Keybind Recording Mode (Interactive Key Capture)
             if (m_isRecordingKeybind) {

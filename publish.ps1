@@ -21,7 +21,8 @@ param(
     [switch]$NoLaunch,
     [switch]$SkipTests,
     [switch]$SkipInstaller,
-    [switch]$Sign
+    [switch]$Sign,
+    [switch]$RequireSignature
 )
 
 $ErrorActionPreference = "Stop"
@@ -68,22 +69,44 @@ function Invoke-SignFile([string]$Path) {
     if (-not $signtool) {
         Fail "Signing requested but signtool.exe was not found. Install the Windows SDK signing tools."
     }
-    $args = @("sign", "/fd", "sha256", "/tr", "http://timestamp.digicert.com", "/td", "sha256")
+
+    $base = @("sign", "/fd", "sha256", "/td", "sha256")
     if ($env:WINPREVIEW_SIGN_PFX) {
         if (-not (Test-Path $env:WINPREVIEW_SIGN_PFX)) { Fail "WINPREVIEW_SIGN_PFX not found: $env:WINPREVIEW_SIGN_PFX" }
-        $args += @("/f", $env:WINPREVIEW_SIGN_PFX)
-        if ($env:WINPREVIEW_SIGN_PFX_PASSWORD) { $args += @("/p", $env:WINPREVIEW_SIGN_PFX_PASSWORD) }
+        $base += @("/f", $env:WINPREVIEW_SIGN_PFX)
+        if ($env:WINPREVIEW_SIGN_PFX_PASSWORD) { $base += @("/p", $env:WINPREVIEW_SIGN_PFX_PASSWORD) }
     } elseif ($env:WINPREVIEW_SIGN_THUMBPRINT) {
-        $args += @("/sha1", $env:WINPREVIEW_SIGN_THUMBPRINT, "/s", "My")
+        $base += @("/sha1", $env:WINPREVIEW_SIGN_THUMBPRINT, "/s", "My")
+    } elseif ($env:WINPREVIEW_SIGN_SUBJECT) {
+        $base += @("/n", $env:WINPREVIEW_SIGN_SUBJECT, "/s", "My")
     } else {
-        Fail "Signing requested but no certificate is configured (WINPREVIEW_SIGN_PFX or WINPREVIEW_SIGN_THUMBPRINT)."
+        Fail "Signing requested but no certificate is configured (WINPREVIEW_SIGN_PFX, WINPREVIEW_SIGN_THUMBPRINT or WINPREVIEW_SIGN_SUBJECT)."
     }
-    $args += @("/v", $Path)
-    $proc = Start-Process -FilePath $signtool -ArgumentList $args -NoNewWindow -Wait -PassThru
-    if ($proc.ExitCode -ne 0) { Fail "signtool failed on $Path (exit $($proc.ExitCode))" }
+
+    # RFC 3161 timestamps: try the usual public TSAs in turn. A signature without
+    # a timestamp stops validating when the certificate expires.
+    $timestamps = @(
+        "http://timestamp.digicert.com",
+        "http://timestamp.sectigo.com",
+        "http://timestamp.globalsign.com/tsa/r6advanced1"
+    )
+    $signed = $false
+    foreach ($tsa in $timestamps) {
+        $args = $base + @("/tr", $tsa, "/v", $Path)
+        $proc = Start-Process -FilePath $signtool -ArgumentList $args -NoNewWindow -Wait -PassThru
+        if ($proc.ExitCode -eq 0) {
+            $signed = $true
+            Write-Host "  Timestamped via $tsa" -ForegroundColor DarkGray
+            break
+        }
+        Write-Host "  Timestamp server failed: $tsa (exit $($proc.ExitCode)); trying the next" -ForegroundColor DarkYellow
+    }
+    if (-not $signed) { Fail "signtool could not sign $Path with any timestamp server" }
+
     $status = (Get-AuthenticodeSignature -LiteralPath $Path).Status
     if ($status -ne "Valid") { Fail "Signature did not verify on $Path (status: $status)" }
-    Write-Host "  Signed: $Path ($status)" -ForegroundColor Green
+    $signature = Get-AuthenticodeSignature -LiteralPath $Path
+    Write-Host "  Signed: $Path ($status, $($signature.SignerCertificate.Subject))" -ForegroundColor Green
 }
 
 Write-Host "==========================================================" -ForegroundColor Cyan
@@ -176,7 +199,11 @@ if (Test-Path $targetPublishDir) {
 
 Copy-Item -LiteralPath $builtExe -Destination (Join-Path $targetPublishDir "WinPreview.exe") -Force
 
-$shouldSign = $Sign -or [bool]$env:WINPREVIEW_SIGN_PFX -or [bool]$env:WINPREVIEW_SIGN_THUMBPRINT
+$shouldSign = $Sign -or $RequireSignature -or [bool]$env:WINPREVIEW_SIGN_PFX -or
+              [bool]$env:WINPREVIEW_SIGN_THUMBPRINT -or [bool]$env:WINPREVIEW_SIGN_SUBJECT
+if ($RequireSignature -and -not $shouldSign) {
+    Fail "A signature is required, but no certificate is configured."
+}
 if ($shouldSign) {
     Invoke-SignFile (Join-Path $targetPublishDir "WinPreview.exe")
 } else {

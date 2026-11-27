@@ -22,6 +22,7 @@ MarkdownEngine::~MarkdownEngine() {
 }
 
 void MarkdownEngine::Close() {
+    m_badgeOverride.clear();
     m_isLoaded = false;
     m_isNotebook = false;
     m_filePath.clear();
@@ -61,6 +62,14 @@ bool MarkdownEngine::LoadMarkdownFile(const std::wstring& filePath) {
     m_filePath = filePath;
     m_isNotebook = false;
     ParseMarkdown(content);
+    m_isLoaded = true;
+    return true;
+}
+
+bool MarkdownEngine::LoadMarkdownText(const std::string& rawText) {
+    Close();
+    m_isNotebook = false;
+    ParseMarkdown(rawText);
     m_isLoaded = true;
     return true;
 }
@@ -326,7 +335,9 @@ void MarkdownEngine::Render(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D1_RE
     float marginX = (std::max)(48.0f, (clientW - 860.0f) / 2.0f);
     float textW = clientW - marginX * 2.0f;
 
-    float curY = targetRect.top + 36.0f + m_scrollY;
+    // The floating dock sits over the top of the canvas; prose starts below it.
+    const float kTopInset = 92.0f;
+    float curY = targetRect.top + kTopInset + m_scrollY;
 
     float viewTop = targetRect.top - 60.0f;
     float viewBottom = targetRect.bottom + 60.0f;
@@ -501,12 +512,13 @@ void MarkdownEngine::Render(ID2D1RenderTarget* rt, D2DEngine& d2d, const D2D1_RE
         b.height = curY - blockStartY;
     }
 
-    m_contentHeight = curY - (targetRect.top + 36.0f + m_scrollY);
+    m_contentHeight = curY - (targetRect.top + kTopInset + m_scrollY);
 
     rt->PopAxisAlignedClip();
 }
 
 std::wstring MarkdownEngine::GetFormatBadge() const {
+    if (!m_badgeOverride.empty()) return m_badgeOverride;
     if (m_isNotebook) {
         WCHAR buf[128];
         swprintf_s(buf, L"JUPYTER NOTEBOOK • %u CELLS • %s", m_cellCount, m_kernelName.c_str());

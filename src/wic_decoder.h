@@ -37,6 +37,13 @@ public:
     // Frames in a container: pages for TIFF, animation frames for GIF.
     static UINT GetFrameCount(const std::wstring& filePath);
 
+    // True when Windows has no decoder registered for this file's format
+    // (WINCODEC_ERR_COMPONENTNOTFOUND), as opposed to a damaged file.
+    static bool MissingCodec(IWICImagingFactory* wic, const std::wstring& filePath);
+
+    // HRESULT of the last decoder probe (diagnostics: 0x88982F50 = no codec).
+    static long LastDecoderHr();
+
     // GIF frame delay in milliseconds (0 when the frame has no delay).
     static UINT GetFrameDelayMs(const std::wstring& filePath, UINT frameIndex);
 
@@ -65,12 +72,15 @@ public:
         float qualityJpeg = 0.92f
     );
 
+    // thumbnailOnly refuses to fall back to the file-type icon: an icon is not a
+    // preview, and showing one made undecodable images look like they opened.
     static bool LoadShellThumbnail(
         IWICImagingFactory* factory,
         ID2D1RenderTarget* renderTarget,
         const std::wstring& filePath,
         UINT targetDimension,
-        ID2D1Bitmap** outBitmap
+        ID2D1Bitmap** outBitmap,
+        bool thumbnailOnly = false
     );
 
     static bool LoadImageFromMemory(

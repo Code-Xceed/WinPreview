@@ -70,6 +70,9 @@ jobs:
           if (-not $env:WINPREVIEW_SIGN_PFX_BASE64) {
             Write-Host "No signing certificate configured; the installer stays unsigned."
             Write-Host "Add WINPREVIEW_SIGN_PFX_BASE64 and WINPREVIEW_SIGN_PFX_PASSWORD to sign releases."
+            if ("${{ vars.WINPREVIEW_REQUIRE_SIGNATURE }}" -eq "1") {
+              throw "WINPREVIEW_REQUIRE_SIGNATURE is set but no signing certificate secret exists. Refusing to publish an unsigned release."
+            }
             exit 0
           }
           $pfx = Join-Path $env:RUNNER_TEMP "winpreview-sign.pfx"
@@ -141,6 +144,14 @@ jobs:
           python tools/ui_probe/dock_sweep.py --exe $exe (Join-Path $probe "sample.cpp") (Join-Path $probe "sample.png") (Join-Path $probe "sample.zip")
           if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 3) { throw "dock sweep failed ($LASTEXITCODE)" }
           if ($LASTEXITCODE -eq 3) { Write-Host "dock sweep skipped (no window in this session)" }
+
+      - name: Format matrix (generated fixtures)
+        shell: pwsh
+        run: |
+          # The full sample corpus is local; this matrix generates its own files so
+          # the public repository still exercises every shipped format family.
+          python tools/ci_probe.py
+          if ($LASTEXITCODE -ne 0) { throw "format matrix failed ($LASTEXITCODE)" }
 
       - name: Verify generated files are committed
         shell: pwsh

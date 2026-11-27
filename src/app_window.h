@@ -7,6 +7,7 @@
 #include "svg_engine.h"
 #include "font_engine.h"
 #include "rtf_engine.h"
+#include "accessibility.h"
 #include "folder_engine.h"
 #include "markdown_engine.h"
 #include "office_engine.h"
@@ -202,6 +203,9 @@ private:
     TextEngine m_text;
     SvgEngine m_svg;
     FontEngine m_font;
+    Accessibility m_a11y;
+    bool m_imageDecodeFailed = false;
+    bool m_imageDecodeMissingCodec = false;
     RtfEngine m_rtf;
     FolderEngine m_folder;
     MarkdownEngine m_md;
@@ -215,6 +219,7 @@ private:
     std::wstring m_fileName;
     std::wstring m_fileInfoText;
     std::wstring m_formatBadgeText;
+    int m_keyboardFocusId = 0;
     bool m_isAudioOnly = false;
 
     // Image document
@@ -263,6 +268,12 @@ private:
     void ShowToast(const std::wstring& msg);
     void RenderToast(const D2D1_RECT_F& rect);
     void UpdateWindowTitle();
+    // Accessibility (MSAA document provider) + keyboard focus for the dock.
+    void RefreshAccessibility();
+    void SyncAccessibilityValue();
+    std::vector<int> VisibleDockButtons() const;
+    void CycleDockFocus(bool backwards);
+    void ActivateFocusedDockButton();
     void SaveCurrentTextFile();
     void SyncSpaceSuppression();
 
