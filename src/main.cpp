@@ -98,6 +98,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     bool runUpdateSelfTest = false;
     bool runArchiveSelfTest = false;
     std::wstring htmlDumpPath;
+    std::wstring htmlCapturePath;
+    bool htmlCaptureExit = false;
     bool forceUpdateCheck = false;
     bool downloadUpdateTest = false;
     bool openUpdateSheet = false;
@@ -132,6 +134,10 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
                 officeDumpPath = argv[++i];
             } else if ((_wcsicmp(argv[i], L"--html-dump") == 0) && i + 1 < argc) {
                 htmlDumpPath = argv[++i];
+            } else if ((_wcsicmp(argv[i], L"--html-capture") == 0) && i + 1 < argc) {
+                htmlCapturePath = argv[++i];
+            } else if (_wcsicmp(argv[i], L"--html-capture-exit") == 0) {
+                htmlCaptureExit = true;
             } else if (_wcsicmp(argv[i], L"--force-update-check") == 0) {
                 forceUpdateCheck = true;
             } else if (_wcsicmp(argv[i], L"--download-update-test") == 0) {
@@ -287,6 +293,26 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
                     SetForegroundWindow(app.GetHwnd());
                 }
                 LogTime("File opened");
+            }
+
+            // Browser-rendered HTML: ask WebView2 for a PNG of the page, then exit
+            // on request. This captures the page only, never the desktop.
+            if (!htmlCapturePath.empty()) {
+                MSG settle;
+                DWORD deadline = GetTickCount() + 800;
+                while (GetTickCount() < deadline) {
+                    while (PeekMessageW(&settle, NULL, 0, 0, PM_REMOVE)) {
+                        TranslateMessage(&settle);
+                        DispatchMessageW(&settle);
+                    }
+                    Sleep(20);
+                }
+                bool captured = app.CaptureHtmlPreview(htmlCapturePath);
+                LogTime(captured ? "html capture: written" : "html capture: failed");
+                if (htmlCaptureExit) {
+                    DestroyWindow(app.GetHwnd());
+                    return captured ? 0 : 2;
+                }
             }
 
             // Direct deterministic screenshot mode: captures Direct2D frame and exits immediately

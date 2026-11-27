@@ -53,9 +53,11 @@ if %ERRORLEVEL% neq 0 (
 
 echo [WinPreview Native] Compiling C++20 engine with Clang -O3 -flto -static -municode...
 "!CLANG_EXE!" -std=c++20 -O3 -flto -ffunction-sections -fdata-sections -fno-exceptions -fno-rtti -static -mwindows -municode -s ^
-    -DUNICODE -D_UNICODE -DNDEBUG -DNTDDI_VERSION=0x0A000005 ^
+    -DUNICODE -D_UNICODE -DNDEBUG -DNTDDI_VERSION=0x0A000005 -I webp -I jxl/include -I webview2 -msse2 ^
     -Wl,--gc-sections -Wl,--no-insert-timestamp ^
-    main.cpp app_window.cpp d2d_engine.cpp icon_engine.cpp wic_decoder.cpp heif_decoder.cpp pdf_engine.cpp media_engine.cpp text_engine.cpp explorer_hook.cpp svg_engine.cpp font_engine.cpp folder_engine.cpp archive_engine.cpp office_engine.cpp comic_engine.cpp markdown_engine.cpp system_engine.cpp rtf_engine.cpp html_reader.cpp accessibility.cpp update_engine.cpp resources.res ^
+    main.cpp app_window.cpp d2d_engine.cpp icon_engine.cpp wic_decoder.cpp heif_decoder.cpp pdf_engine.cpp media_engine.cpp text_engine.cpp explorer_hook.cpp svg_engine.cpp font_engine.cpp folder_engine.cpp archive_engine.cpp office_engine.cpp comic_engine.cpp markdown_engine.cpp system_engine.cpp rtf_engine.cpp html_reader.cpp accessibility.cpp webp_decoder.cpp jxl_decoder.cpp html_view.cpp ^
+    webp/src/dec/alpha_dec.c webp/src/dec/buffer_dec.c webp/src/dec/frame_dec.c webp/src/dec/io_dec.c webp/src/dec/quant_dec.c webp/src/dec/tree_dec.c webp/src/dec/vp8_dec.c webp/src/dec/vp8l_dec.c webp/src/dec/webp_dec.c webp/src/dsp/alpha_processing.c webp/src/dsp/cpu.c webp/src/dsp/dec.c webp/src/dsp/dec_clip_tables.c webp/src/dsp/filters.c webp/src/dsp/lossless.c webp/src/dsp/rescaler.c webp/src/dsp/upsampling.c webp/src/dsp/yuv.c webp/src/dsp/alpha_processing_sse2.c webp/src/dsp/dec_sse2.c webp/src/dsp/filters_sse2.c webp/src/dsp/lossless_sse2.c webp/src/dsp/rescaler_sse2.c webp/src/dsp/upsampling_sse2.c webp/src/dsp/yuv_sse2.c webp/src/utils/bit_reader_utils.c webp/src/utils/color_cache_utils.c webp/src/utils/filters_utils.c webp/src/utils/huffman_utils.c webp/src/utils/palette.c webp/src/utils/quant_levels_dec_utils.c webp/src/utils/random_utils.c webp/src/utils/rescaler_utils.c webp/src/utils/thread_utils.c webp/src/utils/utils.c ^
+    update_engine.cpp resources.res ^
     -o WinPreview.exe ^
     -ld2d1 -ldwrite -lwindowscodecs -ld3d11 -ldwmapi -lole32 -loleaut32 -lshell32 -lshcore -lshlwapi -luxtheme -lcomdlg32 -lpropsys -luuid -lversion -lwintrust -ladvapi32 -lcrypt32 -lwininet -lurlmon -lwinmm -lbcrypt -lole32 -lmsi -loleacc -loleaut32 -luiautomationcore
 

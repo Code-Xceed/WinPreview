@@ -75,6 +75,22 @@ def bmp_bytes(width=4, height=4, rgb=(200, 90, 40)):
 
 GIF_ONE_PIXEL = base64.b64decode("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7")
 
+# 64x48 lossless WebP, generated once from a gradient. Decoded by the vendored
+# libwebp, so this also verifies the build has no dependency on a Windows codec.
+# 64x48 JPEG XL, encoded once with the official cjxl 0.13.0. Decoded by the
+# vendored libjxl runtime.
+JXL_FIXTURE = base64.b64decode(
+    "/wrLBgAUCAMAFALbUOqSRJFxbJJO4DBJQbED8tNUAHZ0dAwGGRmDBWc+p92+GaQ/xMeqTsGSlv8F"
+    "44zTz9MjSFruyu/BNq4KdmlGcWDEajleYLTbNu3O4+qeARW8wya1AICTXqBo0f9LEwEA9sxSDcB7"
+    "cjJJkAihLGcGQGnNzAAoMzMAMDMzAGZmBsDMzAwA")
+JXL_BROKEN = (b"\x00\x00\x00\x0cJXL \x0d\x0a\x87\x0a" + bytes(64))
+
+WEBP_FIXTURE = base64.b64decode(
+    "UklGRpQAAABXRUJQVlA4IIgAAADwBACdASpAADAAPm02l0kkIqIhIqgAgA2JYwC7NFrCmArJXZE/"
+    "7WuX+H//8eP//DAA/u84J7XzP/wQW2G5k9//gMG/BqkNmgS1fS77VwWFrHrKX1WuAq97OCjmc"
+    "k0/ONjLdMEyW2KguzG28qTnS81G1+tMgENxFSrLsQ19zLZxFON4znVJ/gAA")
+
+
 
 def write(path, data):
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -247,6 +263,9 @@ def build_fixtures(work):
     files.append((os.path.join(work, "pixel.png"), png_bytes(), {IMAGE}))
     files.append((os.path.join(work, "pixel.bmp"), bmp_bytes(), {IMAGE}))
     files.append((os.path.join(work, "pixel.gif"), GIF_ONE_PIXEL, {IMAGE}))
+    files.append((os.path.join(work, "pixel.webp"), WEBP_FIXTURE, {IMAGE}))
+    files.append((os.path.join(work, "pixel.jxl"), JXL_FIXTURE, {IMAGE}))
+    files.append((os.path.join(work, "broken.jxl"), JXL_BROKEN, {UNSUPPORTED}))
     files.append((os.path.join(work, "vector.svg"),
                   '<svg xmlns="http://www.w3.org/2000/svg" width="160" height="90">'
                   '<rect width="160" height="90" fill="#123a5a"/>'
@@ -376,7 +395,7 @@ def main():
         for path, allowed, expected in ((c[0], c[1], c[2]) for c in cases):
             name = os.path.relpath(path, work)
             try:
-                app = WinPreview(EXE, path, timeout=30)
+                app = WinPreview(EXE, path, timeout=45)
             except RuntimeError as error:
                 check(False, f"{name}: opens", str(error))
                 continue

@@ -1,5 +1,6 @@
 ﻿#include "app_window.h"
 #include "html_reader.h"
+#include "jxl_decoder.h"
 #include <algorithm>
 #include <cmath>
 #include <fstream>
@@ -163,6 +164,8 @@ AppWindow::~AppWindow() {
     m_svg.Close();
     m_font.Close();
     m_rtf.Close();
+    m_html.Close();
+    m_htmlBounds = {};
     m_keyboardFocusId = 0;
     m_folder.Close();
     m_md.Close();
@@ -569,6 +572,8 @@ bool AppWindow::OpenFile(const std::wstring& filePath) {
     m_svg.Close();
     m_font.Close();
     m_rtf.Close();
+    m_html.Close();
+    m_htmlBounds = {};
     m_keyboardFocusId = 0;
     m_folder.Close();
     m_md.Close();
@@ -1049,12 +1054,23 @@ bool AppWindow::OpenFile(const std::wstring& filePath) {
             success = true;
         }
     }
-    // 3.6 HTML — a safe reader view, never a browser (no script, no styles).
+    // 3.6 HTML — browser-grade rendering when the WebView2 runtime is present
+    // (page script disabled), otherwise the dependency-free reader view.
     else if (ext == L".html" || ext == L".htm" || ext == L".xhtml") {
+        if (m_html.Create(m_hwnd, filePath, m_dpiScale)) {
+            m_docType = DocumentType::Markdown;
+            m_showSidebar = false;
+            if (m_hudHwnd) ShowWindow(m_hudHwnd, SW_HIDE);
+            m_formatBadgeText = L"HTML • BROWSER VIEW • SCRIPTS OFF";
+            AdaptWindowToMedia(1020, 820);
+            LayoutHtmlView();
+            success = true;
+        }
         std::string readerText;
         std::wstring pageTitle;
         int links = 0;
-        if (WinPreview::ConvertHtmlFile(filePath, readerText, pageTitle, links) &&
+        if (!success &&
+            WinPreview::ConvertHtmlFile(filePath, readerText, pageTitle, links) &&
             m_md.LoadMarkdownText(readerText)) {
             std::wstring badge = L"HTML • READER VIEW";
             if (!pageTitle.empty()) {
@@ -1422,13 +1438,12 @@ bool AppWindow::OpenFile(const std::wstring& filePath) {
         m_unsupportedKind = UnsupportedKind::None;
         m_unsupportedDetail.clear();
         if (m_imageDecodeFailed) {
-            if (m_imageDecodeMissingCodec) {
+            // WebP and JPEG XL ship their own decoders, so a failure there is a
+            // damaged file even when Windows has no codec registered.
+            const bool bundledDecoder = (ext == L".webp" || ext == L".jxl");
+            if (m_imageDecodeMissingCodec && !bundledDecoder) {
                 m_unsupportedKind = UnsupportedKind::NeedsCodec;
-                if (ext == L".jxl") {
-                    m_unsupportedDetail = L"JPEG XL needs the Microsoft JPEG XL Image Extension (or another JPEG XL codec) to decode.";
-                } else if (ext == L".webp") {
-                    m_unsupportedDetail = L"WebP images need the WebP Image Extensions from the Microsoft Store (or another WebP codec) to decode.";
-                } else if (ext == L".heic" || ext == L".heif" || ext == L".avif") {
+                if (ext == L".heic" || ext == L".heif" || ext == L".avif") {
                     m_unsupportedDetail = L"HEIF and AVIF images need the HEIF Image Extensions from the Microsoft Store.";
                 } else if (isImageExt(ext)) {
                     m_unsupportedDetail = L"Windows has no image codec registered for this format.";
@@ -5603,6 +5618,27 @@ void AppWindow::SyncAccessibilityValue() {
     m_a11y.SetValue(value);
 }
 
+void AppWindow::LayoutHtmlView() {
+    if (!m_html.IsActive()) return;
+    RECT client = {};
+    GetClientRect(m_hwnd, &client);
+    float width = PxToDip(client.right - client.left);
+    float height = PxToDip(client.bottom - client.top);
+    if (width < 200.0f || height < 200.0f) return;
+    float marginX = width < 640.0f ? 12.0f : 24.0f;
+    D2D1_RECT_F bounds = D2D1::RectF(
+        marginX, 92.0f, (std::max)(marginX + 80.0f, width - marginX),
+        (std::max)(172.0f, height - 20.0f));
+    if (fabsf(bounds.left - m_htmlBounds.left) < 1.0f &&
+        fabsf(bounds.top - m_htmlBounds.top) < 1.0f &&
+        fabsf(bounds.right - m_htmlBounds.right) < 1.0f &&
+        fabsf(bounds.bottom - m_htmlBounds.bottom) < 1.0f) {
+        return;
+    }
+    m_htmlBounds = bounds;
+    m_html.SetBounds(bounds, m_dpiScale);
+}
+
 std::vector<int> AppWindow::VisibleDockButtons() const {
     static const int kCandidates[] = {
         BTN_SIDEBAR, BTN_SEARCH, BTN_PREV_PAGE, BTN_NEXT_PAGE,
@@ -5871,6 +5907,12 @@ void AppWindow::ShowContextMenu(int screenX, int screenY) {
 
 void AppWindow::RenderCanvas(const D2D1_RECT_F& rect) {
     ID2D1HwndRenderTarget* rt = m_d2d.GetRenderTarget();
+
+    // 0. HTML in a WebView2 child: nothing for Direct2D to paint in that area.
+    if (m_docType == DocumentType::Markdown && m_html.IsActive()) {
+        LayoutHtmlView();
+        return;
+    }
 
     // 0. Formatted Rich Text
     if (m_docType == DocumentType::Rtf) {
@@ -8217,6 +8259,8 @@ void AppWindow::CloseCurrentPreview() {
     m_svg.Close();
     m_font.Close();
     m_rtf.Close();
+    m_html.Close();
+    m_htmlBounds = {};
     m_keyboardFocusId = 0;
     m_folder.Close();
     m_md.Close();
@@ -9752,6 +9796,7 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         }
 
         case WM_SIZE: {
+            if (m_docType == DocumentType::Markdown && m_html.IsActive()) LayoutHtmlView();
             if (wParam == SIZE_MINIMIZED) {
                 if (m_hudHwnd) ShowWindow(m_hudHwnd, SW_HIDE);
                 HideUpdatePopup();
@@ -9991,6 +10036,15 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         }
         case WM_APP + 278: /* Diagnostic: active font face index */ {
             return (LRESULT)(m_docType == DocumentType::Font ? m_font.GetFaceIndex() : 0);
+        }
+        case WM_APP + 292: /* Diagnostic: HTML rendered by WebView2 (1) or reader (0) */ {
+            return (LRESULT)(m_docType == DocumentType::Markdown && m_html.IsActive() ? 1 : 0);
+        }
+        case WM_APP + 293: /* Diagnostic: WebView2 runtime version string length */ {
+            return (LRESULT)(m_html.IsActive() ? m_html.RuntimeVersion().size() : 0);
+        }
+        case WM_APP + 290: /* Diagnostic: bundled libjxl runtime version */ {
+            return (LRESULT)(unsigned long)WinPreview::JxlDecoder::RuntimeVersion();
         }
         case WM_APP + 289: /* Diagnostic: last WIC decoder probe HRESULT */ {
             return (LRESULT)(unsigned long)WicDecoder::LastDecoderHr();
@@ -10940,6 +10994,14 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                                m_comic.CurrentPage() + 1, m_comic.PageCount());
                     CopyTextToClipboard(m_hwnd, reference);
                     ShowToast(L"Page reference copied");
+                } else if (m_docType == DocumentType::Markdown && m_html.IsActive()) {
+                    std::wstring pageText;
+                    if (m_html.GetPageText(pageText) && !pageText.empty()) {
+                        CopyTextToClipboard(m_hwnd, pageText);
+                        ShowToast(L"Page text copied");
+                    } else {
+                        ShowToast(L"Could not read the page text");
+                    }
                 } else if (m_docType == DocumentType::Rtf) {
                     CopyTextToClipboard(m_hwnd, m_rtf.GetPlainText());
                     ShowToast(L"Document text copied");
@@ -12671,6 +12733,14 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
 
             if (isCtrl) {
                 if (wParam == 'C' || wParam == 'c') {
+                    if (m_docType == DocumentType::Markdown && m_html.IsActive()) {
+                        std::wstring pageText;
+                        if (m_html.GetPageText(pageText) && !pageText.empty()) {
+                            CopyTextToClipboard(m_hwnd, pageText);
+                            ShowToast(L"Page text copied");
+                        }
+                        return 0;
+                    }
                     if (m_docType == DocumentType::Rtf) {
                         CopyTextToClipboard(m_hwnd, m_rtf.GetPlainText());
                         ShowToast(L"Document text copied");

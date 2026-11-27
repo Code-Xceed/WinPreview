@@ -1,4 +1,6 @@
 #include "wic_decoder.h"
+#include "webp_decoder.h"
+#include "jxl_decoder.h"
 #include "heif_decoder.h"
 #include <propvarutil.h>
 #include <shobjidl.h>
@@ -116,6 +118,27 @@ bool WicDecoder::LoadImageFromFile(
         if (ext == L".cr2" || ext == L".nef" || ext == L".arw" || ext == L".dng" ||
             ext == L".raw" || ext == L".orf" || ext == L".rw2" || ext == L".pef") {
             if (LoadRawPreview(factory, renderTarget, filePath, outBitmap, outWidth, outHeight, outContentBounds)) {
+                return true;
+            }
+        }
+
+        // Tier 3.4: JPEG XL through the vendored official libjxl runtime.
+        if (ext == L".jxl" || (ext.empty() && JxlDecoder::IsJxlFile(filePath))) {
+            if (JxlDecoder::Decode(filePath, renderTarget, outBitmap, outWidth, outHeight)) {
+                if (outContentBounds && outWidth && outHeight) {
+                    *outContentBounds = D2D1::RectF(0.0f, 0.0f, (float)*outWidth, (float)*outHeight);
+                }
+                return true;
+            }
+        }
+
+        // Tier 3.5: WebP through the vendored libwebp, so the format does not
+        // depend on the Windows WebP codec package being installed.
+        if (ext == L".webp" || (ext.empty() && WebpDecoder::IsWebpFile(filePath))) {
+            if (WebpDecoder::Decode(filePath, renderTarget, outBitmap, outWidth, outHeight)) {
+                if (outContentBounds && outWidth && outHeight) {
+                    *outContentBounds = D2D1::RectF(0.0f, 0.0f, (float)*outWidth, (float)*outHeight);
+                }
                 return true;
             }
         }

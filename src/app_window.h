@@ -8,6 +8,7 @@
 #include "font_engine.h"
 #include "rtf_engine.h"
 #include "accessibility.h"
+#include "html_view.h"
 #include "folder_engine.h"
 #include "markdown_engine.h"
 #include "office_engine.h"
@@ -192,6 +193,8 @@ public:
     void RunMessageLoop();
 
     HWND GetHwnd() const { return m_hwnd; }
+    // Test hook: writes a browser-rendered HTML page to a PNG.
+    bool CaptureHtmlPreview(const std::wstring& path) { return m_html.CapturePreview(path); }
 
 private:
     HINSTANCE m_hInstance = nullptr;
@@ -204,6 +207,8 @@ private:
     SvgEngine m_svg;
     FontEngine m_font;
     Accessibility m_a11y;
+    HtmlView m_html;
+    D2D1_RECT_F m_htmlBounds = {};
     bool m_imageDecodeFailed = false;
     bool m_imageDecodeMissingCodec = false;
     RtfEngine m_rtf;
@@ -274,6 +279,7 @@ private:
     std::vector<int> VisibleDockButtons() const;
     void CycleDockFocus(bool backwards);
     void ActivateFocusedDockButton();
+    void LayoutHtmlView();
     void SaveCurrentTextFile();
     void SyncSpaceSuppression();
 

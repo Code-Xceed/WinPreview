@@ -67,7 +67,37 @@ function Find-SignTool {
 function Invoke-SignFile([string]$Path) {
     $signtool = Find-SignTool
     if (-not $signtool) {
-        Fail "Signing requested but signtool.exe was not found. Install the Windows SDK signing tools."
+        # No Windows SDK signing tools: fall back to the Windows Authenticode API
+        # through PowerShell. It timestamps (Authenticode, not RFC 3161) and
+        # verifies, which is enough for local/self-test signing; CI should use
+        # signtool so signatures carry an RFC 3161 timestamp.
+        if (-not $env:WINPREVIEW_SIGN_PFX) {
+            Fail "Signing requested but signtool.exe is missing and no PFX is configured for the fallback signer."
+        }
+        if (-not (Test-Path $env:WINPREVIEW_SIGN_PFX)) {
+            Fail "WINPREVIEW_SIGN_PFX not found: $env:WINPREVIEW_SIGN_PFX"
+        }
+        $secure = ConvertTo-SecureString -String $env:WINPREVIEW_SIGN_PFX_PASSWORD -AsPlainText -Force
+        $imported = Import-PfxCertificate -FilePath $env:WINPREVIEW_SIGN_PFX -CertStoreLocation "Cert:\CurrentUser\My" -Password $secure
+        try {
+            # Set-AuthenticodeSignature has no timeout on its timestamp call; on a
+            # machine that cannot reach a TSA it blocks for minutes. Timestamping
+            # is therefore opt-in here (CI uses signtool, which always timestamps).
+            if ($env:WINPREVIEW_SIGN_TIMESTAMP) {
+                $signature = Set-AuthenticodeSignature -LiteralPath $Path -Certificate $imported `
+                    -TimestampServer $env:WINPREVIEW_SIGN_TIMESTAMP -HashAlgorithm SHA256
+            } else {
+                Write-Host "  No timestamp server configured for the fallback signer (set WINPREVIEW_SIGN_TIMESTAMP to enable)" -ForegroundColor DarkGray
+                $signature = Set-AuthenticodeSignature -LiteralPath $Path -Certificate $imported -HashAlgorithm SHA256
+            }
+            if ($signature.Status -ne "Valid") {
+                Fail "Signature did not verify on $Path (status: $($signature.Status))"
+            }
+            Write-Host "  Signed with the Authenticode API (no signtool): $Path" -ForegroundColor Green
+            return
+        } finally {
+            Remove-Item "Cert:\CurrentUser\My\$($imported.Thumbprint)" -ErrorAction SilentlyContinue
+        }
     }
 
     $base = @("sign", "/fd", "sha256", "/td", "sha256")
@@ -221,7 +251,33 @@ $requiredDlls = @(
     "libgcc_s_*.dll",
     "libwinpthread-*.dll"
 )
-$stagedDlls = @()
+# The official libjxl runtime lives in src\jxl\bin; it is DLL-loaded by the
+# app, so it is not visible in the PE import table but is still required.
+$jxlDlls = @(
+    "jxl\bin\jxl.dll",
+    "jxl\bin\jxl_cms.dll",
+    "jxl\bin\brotlicommon.dll",
+    "jxl\bin\brotlidec.dll",
+    "jxl\bin\brotlienc.dll",
+    "jxl\bin\msvcp140.dll",
+    "jxl\bin\vcruntime140.dll",
+    "jxl\bin\vcruntime140_1.dll"
+)
+$webviewLoader = Join-Path $ScriptDir "src\webview2\WebView2Loader.dll"
+if (-not (Test-Path $webviewLoader)) { Fail "WebView2Loader.dll missing from src\webview2; browser HTML would silently fall back to the reader." }
+Copy-Item -LiteralPath $webviewLoader -Destination (Join-Path $targetPublishDir "WebView2Loader.dll") -Force
+
+$stagedDlls = @("WebView2Loader.dll")
+foreach ($relative in $jxlDlls) {
+    $source = Join-Path $ScriptDir "src\$relative"
+    if (-not (Test-Path $source)) {
+        Fail "JPEG XL runtime file missing: src\$relative. JPEG XL preview would not work."
+    }
+    $name = Split-Path $source -Leaf
+    Copy-Item -LiteralPath $source -Destination (Join-Path $targetPublishDir $name) -Force
+    $stagedDlls += $name
+}
+
 foreach ($pattern in $requiredDlls) {
     $found = @(Get-ChildItem -Path (Join-Path $ScriptDir "src") -Filter $pattern -File -ErrorAction SilentlyContinue)
     if ($found.Count -eq 0) {

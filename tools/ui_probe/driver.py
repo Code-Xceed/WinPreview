@@ -105,9 +105,10 @@ def _enum_windows_for(pid):
 
 
 class WinPreview:
-    def __init__(self, exe, document=None, args=(), timeout=15.0):
+    def __init__(self, exe, document=None, args=(), timeout=15.0, env=None):
         self.exe = exe
         self.document = document
+        self.env = env
         self.proc = None
         self.hwnd = 0
         self.pid = 0
@@ -119,7 +120,11 @@ class WinPreview:
         if self.document:
             argv.append(self.document)
         argv.extend(args)
-        self.proc = subprocess.Popen(argv)
+        environment = None
+        if self.env:
+            environment = dict(os.environ)
+            environment.update(self.env)
+        self.proc = subprocess.Popen(argv, env=environment)
         self.pid = self.proc.pid
         deadline = time.time() + timeout
         while time.time() < deadline:
@@ -235,21 +240,45 @@ class WinPreview:
         return self.query(DIAG_ARCHIVE_SEL)
 
     # -- capture -----------------------------------------------------------
-    def shot(self, path):
-        """PrintWindow capture saved as PNG (no external imaging libraries)."""
+    def _save_png(self, path, width, height, raw):
         import zlib
 
+        stride = width * 4
+        rows = bytearray()
+        for y in range(height):
+            row = bytearray(raw[y * stride:(y + 1) * stride])
+            # BGRA -> RGBA, forced opaque (screen captures have no alpha).
+            row[0::4], row[2::4] = row[2::4], row[0::4]
+            row[3::4] = b"\xff" * width
+            rows.append(0)  # filter type: none
+            rows.extend(row)
+
+        def chunk(tag, data):
+            return (struct.pack(">I", len(data)) + tag + data +
+                    struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF))
+
+        png = b"\x89PNG\r\n\x1a\n"
+        png += chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0))
+        png += chunk(b"IDAT", zlib.compress(bytes(rows), 6))
+        png += chunk(b"IEND", b"")
+        with open(path, "wb") as fh:
+            fh.write(png)
+
+    def _capture(self, path, from_screen):
         rc = RECT()
         user32.GetWindowRect(self.hwnd, ctypes.byref(rc))
         w, h = rc.right - rc.left, rc.bottom - rc.top
         if w <= 0 or h <= 0:
             raise RuntimeError("window has no size")
 
-        hdc = user32.GetWindowDC(self.hwnd)
-        mem = gdi32.CreateCompatibleDC(hdc)
-        bmp = gdi32.CreateCompatibleBitmap(hdc, w, h)
+        source = user32.GetDC(None) if from_screen else user32.GetWindowDC(self.hwnd)
+        mem = gdi32.CreateCompatibleDC(source)
+        bmp = gdi32.CreateCompatibleBitmap(source, w, h)
         gdi32.SelectObject(mem, bmp)
-        user32.PrintWindow(self.hwnd, mem, 2)
+        if from_screen:
+            gdi32.BitBlt(mem, 0, 0, w, h, source, rc.left, rc.top, 0x00CC0020 | 0x40000000)
+        else:
+            user32.PrintWindow(self.hwnd, mem, 2)
 
         bmi = BITMAPINFO()
         bmi.bmiHeader.biSize = ctypes.sizeof(BITMAPINFOHEADER)
@@ -262,27 +291,21 @@ class WinPreview:
         buf = ctypes.create_string_buffer(stride * h)
         gdi32.GetDIBits(mem, bmp, 0, h, buf, ctypes.byref(bmi), 0)
 
-        raw = buf.raw
-        rows = bytearray()
-        for y in range(h):
-            row = bytearray(raw[y * stride:(y + 1) * stride])
-            # BGRA -> RGBA
-            row[0::4], row[2::4] = row[2::4], row[0::4]
-            rows.append(0)  # filter type: none
-            rows.extend(row)
-
-        def chunk(tag, data):
-            return (struct.pack(">I", len(data)) + tag + data +
-                    struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF))
-
-        png = b"\x89PNG\r\n\x1a\n"
-        png += chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0))
-        png += chunk(b"IDAT", zlib.compress(bytes(rows), 6))
-        png += chunk(b"IEND", b"")
-        with open(path, "wb") as fh:
-            fh.write(png)
+        self._save_png(path, w, h, buf.raw)
 
         gdi32.DeleteObject(bmp)
         gdi32.DeleteDC(mem)
-        user32.ReleaseDC(self.hwnd, hdc)
+        user32.ReleaseDC(self.hwnd if not from_screen else 0, source)
         return path
+
+    def shot(self, path):
+        """PrintWindow capture saved as PNG (no external imaging libraries)."""
+        return self._capture(path, from_screen=False)
+
+    def shot_screen(self, path):
+        """Desktop capture of the window rect.
+
+        Composition-based children (WebView2, video surfaces) do not render into
+        a PrintWindow DC, so visual checks of those use the screen.
+        """
+        return self._capture(path, from_screen=True)

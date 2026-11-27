@@ -14,6 +14,9 @@ obj/
 !src/libstdc++-*.dll
 !src/libgcc_s_*.dll
 !src/libwinpthread-*.dll
+!src/jxl/bin/
+!src/jxl/bin/*.dll
+!src/webview2/WebView2Loader.dll
 *.res
 *.obj
 *.o
