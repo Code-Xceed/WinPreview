@@ -45,6 +45,11 @@ def check(condition, label, detail=""):
     else:
         failed += 1
         failures.append((label, detail))
+        # GitHub shows these as check annotations, so a red matrix names the
+        # exact fixture and reason even without authenticated log access.
+        if os.environ.get("GITHUB_ACTIONS") == "true":
+            cleaned = str(detail).replace("\n", " ")[:400]
+            print(f"::error title=Format matrix::{label} -- {cleaned}", flush=True)
     return condition
 
 
@@ -447,6 +452,7 @@ def main():
         cases = build_fixtures(work_dir)
         print(f"Opening {len(cases)} generated fixtures with {os.path.basename(EXE)}...")
         for case_path, _data, expected in cases:
+            print(f"[case] {os.path.relpath(case_path, work_dir)}", flush=True)
             run_case(case_path, expected)
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)

@@ -147,6 +147,12 @@ jobs:
 
       - name: Format matrix (generated fixtures)
         shell: pwsh
+        env:
+          PYTHONUTF8: "1"
+          # The runner has no interactive desktop in every image. The browser
+          # HTML path is covered by tests/html_view_test.py locally; CI uses the
+          # reader fallback so the matrix stays deterministic.
+          WINPREVIEW_DISABLE_WEBVIEW2: "1"
         run: |
           # The full sample corpus is local; this matrix generates its own files so
           # the public repository still exercises every shipped format family.

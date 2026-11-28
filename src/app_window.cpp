@@ -167,6 +167,7 @@ AppWindow::~AppWindow() {
     m_rtf.Close();
     m_html.Close();
     m_htmlBounds = {};
+    if (m_videoInputHwnd) { DestroyWindow(m_videoInputHwnd); m_videoInputHwnd = nullptr; }
     m_keyboardFocusId = 0;
     m_folder.Close();
     m_md.Close();
@@ -575,6 +576,7 @@ bool AppWindow::OpenFile(const std::wstring& filePath) {
     m_rtf.Close();
     m_html.Close();
     m_htmlBounds = {};
+    if (m_videoInputHwnd) { DestroyWindow(m_videoInputHwnd); m_videoInputHwnd = nullptr; }
     m_keyboardFocusId = 0;
     m_folder.Close();
     m_md.Close();
@@ -2187,10 +2189,12 @@ void AppWindow::UpdateLayout() {
             int canvasH = height;
             m_media.Resize(canvasX, canvasY, canvasW, canvasH);
             m_media.ShowVideoWindow(true);
+            PositionVideoInputOverlay(canvasX, canvasY, canvasW, canvasH);
         }
         UpdateHudPosition();
     } else {
         m_media.ShowVideoWindow(false);
+        if (m_videoInputHwnd) ShowWindow(m_videoInputHwnd, SW_HIDE);
         if (m_hudHwnd) ShowWindow(m_hudHwnd, SW_HIDE);
     }
 }
@@ -5681,6 +5685,91 @@ void AppWindow::WriteDiagnostics(const std::wstring& path) {
     std::fclose(file);
 }
 
+void AppWindow::HandleCanvasChromeClick() {
+    // Use the target opacity, not m_guiVisible: the visibility flag can still be
+    // true while the chrome is fully faded (auto-hide) or vice versa, which made
+    // clicks feel dead after the toolbar disappeared.
+    const bool chromeShown = (m_dockTargetOpacity > 0.5f);
+    if (!chromeShown) {
+        SetGuiVisibility(true);
+    } else if (GetTickCount64() - m_guiRevealedAt > 450) {
+        SetGuiVisibility(false);
+    }
+}
+
+void AppWindow::EnsureVideoInputOverlay() {
+    if (m_videoInputHwnd) return;
+
+    static bool registered = [] {
+        WNDCLASSEXW wc = {};
+        wc.cbSize = sizeof(wc);
+        wc.lpfnWndProc = VideoInputWndProc;
+        wc.hInstance = GetModuleHandleW(nullptr);
+        wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+        wc.lpszClassName = L"WinPreviewVideoInput";
+        wc.style = CS_DBLCLKS;
+        return RegisterClassExW(&wc) != 0 || GetLastError() == ERROR_CLASS_ALREADY_EXISTS;
+    }();
+    if (!registered) return;
+
+    // A nearly transparent layered child: it takes mouse input on top of the
+    // video surface (whose own window may belong to VLC or be replaced by its
+    // output), while remaining visually invisible.
+    m_videoInputHwnd = CreateWindowExW(
+        WS_EX_LAYERED, L"WinPreviewVideoInput", L"",
+        WS_CHILD | WS_VISIBLE,
+        -10000, -10000, 10, 10, m_hwnd, nullptr, GetModuleHandleW(nullptr), this);
+    if (!m_videoInputHwnd) return;
+    SetWindowLongPtr(m_videoInputHwnd, GWLP_USERDATA, (LONG_PTR)this);
+    SetLayeredWindowAttributes(m_videoInputHwnd, 0, 1, LWA_ALPHA);
+}
+
+void AppWindow::PositionVideoInputOverlay(int x, int y, int width, int height) {
+    EnsureVideoInputOverlay();
+    if (!m_videoInputHwnd) return;
+    if (width <= 0 || height <= 0) {
+        ShowWindow(m_videoInputHwnd, SW_HIDE);
+        return;
+    }
+    SetWindowPos(m_videoInputHwnd, HWND_TOP, x, y, width, height,
+                 SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    SetWindowPos(m_media.GetVideoHwnd(), HWND_BOTTOM, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    SetWindowPos(m_videoInputHwnd, HWND_TOP, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+}
+
+LRESULT CALLBACK AppWindow::VideoInputWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    AppWindow* app = (AppWindow*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+    if (!app || !app->m_hwnd) return DefWindowProcW(hwnd, msg, wParam, lParam);
+
+    switch (msg) {
+        case WM_MOUSEMOVE:
+            SendMessageW(app->m_hwnd, WM_APP + 101, wParam, lParam);
+            return 0;
+        case WM_LBUTTONDOWN:
+            SendMessageW(app->m_hwnd, WM_COMMAND, MAKEWPARAM(1003, 0), 0);
+            return 0;
+        case WM_LBUTTONDBLCLK:
+            SendMessageW(app->m_hwnd, WM_COMMAND, MAKEWPARAM(1002, 0), 0);
+            return 0;
+        case WM_LBUTTONUP:
+            return 0;
+        case WM_RBUTTONUP:
+            SendMessageW(app->m_hwnd, WM_APP + 102, wParam, lParam);
+            return 0;
+        case WM_MOUSEWHEEL:
+            SendMessageW(app->m_hwnd, WM_MOUSEWHEEL, wParam, lParam);
+            return 0;
+        case WM_SETCURSOR:
+            SetCursor(app->IsCursorVisible() ? LoadCursorW(nullptr, IDC_ARROW) : nullptr);
+            return TRUE;
+        default:
+            break;
+    }
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
 void AppWindow::LayoutHtmlView() {
     if (!m_html.IsActive()) return;
     RECT client = {};
@@ -8324,6 +8413,7 @@ void AppWindow::CloseCurrentPreview() {
     m_rtf.Close();
     m_html.Close();
     m_htmlBounds = {};
+    if (m_videoInputHwnd) { DestroyWindow(m_videoInputHwnd); m_videoInputHwnd = nullptr; }
     m_keyboardFocusId = 0;
     m_folder.Close();
     m_md.Close();
@@ -8976,6 +9066,7 @@ LRESULT AppWindow::HandleHudMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
 
         case WM_LBUTTONDBLCLK:
         case WM_LBUTTONDOWN: {
+            ++m_leftDownCount;
             if (m_keyboardFocusId != 0) m_keyboardFocusId = 0;
             SetCapture(m_hudHwnd);
             WakeAllUiAndCursor();
@@ -10100,6 +10191,24 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         case WM_APP + 278: /* Diagnostic: active font face index */ {
             return (LRESULT)(m_docType == DocumentType::Font ? m_font.GetFaceIndex() : 0);
         }
+        case WM_APP + 298: /* Diagnostic: main-window left-button-down count */ {
+            return (LRESULT)m_leftDownCount;
+        }
+        case WM_APP + 299: /* Diagnostic: video-surface click forwards */ {
+            return (LRESULT)m_videoClickCount;
+        }
+        case WM_APP + 294: /* Diagnostic: chrome visible flag */ {
+            return (LRESULT)(m_guiVisible ? 1 : 0);
+        }
+        case WM_APP + 295: /* Diagnostic: animation timer armed */ {
+            return (LRESULT)(m_animTimerRunning ? 1 : 0);
+        }
+        case WM_APP + 296: /* Diagnostic: ms since chrome was last revealed */ {
+            return (LRESULT)(GetTickCount64() - m_guiRevealedAt);
+        }
+        case WM_APP + 297: /* Diagnostic: dock target opacity (milli) */ {
+            return (LRESULT)(int)(m_dockTargetOpacity * 1000.0f);
+        }
         case WM_APP + 292: /* Diagnostic: HTML rendered by WebView2 (1) or reader (0) */ {
             return (LRESULT)(m_docType == DocumentType::Markdown && m_html.IsActive() ? 1 : 0);
         }
@@ -11002,12 +11111,9 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 WakeAllUiAndCursor();
                 ToggleFullscreen();
             } else if (cmdId == 1003) {
+                ++m_videoClickCount;
                 // ID_MEDIA_TOGGLE_GUI: single click on the video canvas toggles chrome.
-                if (!m_guiVisible) {
-                    SetGuiVisibility(true);
-                } else if (GetTickCount64() - m_guiRevealedAt > 450) {
-                    SetGuiVisibility(false);
-                }
+                HandleCanvasChromeClick();
                 return 0;
             } else if (cmdId == IDM_TRAY_OPEN) {
                 if (IsIconic(m_hwnd)) ShowWindow(m_hwnd, SW_RESTORE);
@@ -11248,6 +11354,7 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             m_mouseDownPos = pt;
             m_hasDraggedDistance = false;
             m_guiVisibleOnMouseDown = m_guiVisible;
+            m_dockWasVisibleOnMouseDown = (m_dockTargetOpacity > 0.5f);
 
             WakeAllUiAndCursor();
 
@@ -11797,7 +11904,7 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 }
                 // Single touch / click anywhere on media canvas reveals/hides GUI.
                 // No accidental play/pause on background click - use the HUD or Space.
-                if (!m_guiVisible) {
+                if (!m_dockWasVisibleOnMouseDown) {
                     SetGuiVisibility(true);
                 } else if (GetTickCount64() - m_guiRevealedAt > 450) {
                     SetGuiVisibility(false);
@@ -12188,11 +12295,11 @@ LRESULT AppWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 bool hitDock = (m_dockOpacity > 0.05f && hit(m_topDockRect));
                 bool hitSidebar = (m_showSidebar && pt.x < m_sidebarWidth);
                 if (!hitDock && !hitSidebar) {
-                    if (m_guiVisibleOnMouseDown) {
+                    if (m_dockWasVisibleOnMouseDown) {
                         // A click that arrives right after mouse movement revealed the
                         // controls should keep them, not hide them instantly.
                         if (GetTickCount64() - m_guiRevealedAt > 450) {
-                            ToggleGuiVisibility();
+                            SetGuiVisibility(false);
                         }
                     } else {
                         SetGuiVisibility(true);

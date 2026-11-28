@@ -193,6 +193,7 @@ public:
     void RunMessageLoop();
 
     HWND GetHwnd() const { return m_hwnd; }
+    bool IsCursorVisible() const { return m_cursorVisible; }
     // Test hook: writes a browser-rendered HTML page to a PNG.
     bool CaptureHtmlPreview(const std::wstring& path) { return m_html.CapturePreview(path); }
     // Headless CI hook: writes the same diagnostics the WM_APP messages expose.
@@ -227,6 +228,10 @@ private:
     std::wstring m_fileInfoText;
     std::wstring m_formatBadgeText;
     int m_keyboardFocusId = 0;
+    LRESULT m_leftDownCount = 0;
+    bool m_dockWasVisibleOnMouseDown = false;
+    HWND m_videoInputHwnd = nullptr;
+    LRESULT m_videoClickCount = 0;
     bool m_isAudioOnly = false;
 
     // Image document
@@ -282,6 +287,11 @@ private:
     void CycleDockFocus(bool backwards);
     void ActivateFocusedDockButton();
     void LayoutHtmlView();
+    // Chrome show/hide from a canvas click, based on what is actually on screen.
+    void HandleCanvasChromeClick();
+    void EnsureVideoInputOverlay();
+    void PositionVideoInputOverlay(int x, int y, int width, int height);
+    static LRESULT CALLBACK VideoInputWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
     void SaveCurrentTextFile();
     void SyncSpaceSuppression();
 
