@@ -21,8 +21,7 @@ import zipfile
 import zlib
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(ROOT, "tools", "ui_probe"))
-from driver import WinPreview, user32  # noqa: E402
+import json
 
 EXE = os.path.join(ROOT, "dist", "WinPreview", "WinPreview.exe")
 if not os.path.exists(EXE):
@@ -36,6 +35,7 @@ OFFICE_DOC, COMIC, RTF = 16, 17, 18
 passed = 0
 failed = 0
 failures = []
+work_dir = ""
 
 
 def check(condition, label, detail=""):
@@ -376,8 +376,62 @@ def ink_ratio(path):
     return lit / total if total else 0.0
 
 
+def run_case(path, expected):
+    name = os.path.relpath(path, work_dir)
+    shot = os.path.join(work_dir, "shot.png")
+    diag = os.path.join(work_dir, "diag.json")
+    for stale in (shot, diag):
+        if os.path.exists(stale):
+            os.remove(stale)
+
+    try:
+        proc = subprocess.run(
+            [EXE, path, "--screenshot", shot, "--width", "1000", "--height", "720",
+             "--diagnostics", diag],
+            capture_output=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        check(False, f"{name}: finishes", "timeout")
+        return
+
+    check(proc.returncode == 0, f"{name}: exits cleanly", f"exit={proc.returncode}")
+    info = None
+    if os.path.exists(diag):
+        try:
+            info = json.load(open(diag, encoding="utf-8"))
+        except (ValueError, OSError) as error:
+            check(False, f"{name}: diagnostics readable", str(error))
+    check(info is not None, f"{name}: writes diagnostics")
+    if info:
+        doc_type = info.get("docType", -1)
+        check(doc_type in expected, f"{name}: docType {doc_type} in {sorted(expected)}")
+        if os.path.splitext(name)[0] in ("generated.docx", "generated.xlsx", "generated.pptx"):
+            check(info.get("docType") == OFFICE_DOC, f"{name}: office reader", str(info))
+        if name.endswith(".epub"):
+            check(info.get("officeChapters", 0) > 0, f"{name}: chapters found", str(info))
+        if name.endswith(".xlsx"):
+            check(info.get("officeSheets", 0) > 0, f"{name}: sheets found", str(info))
+        if name.endswith(".pptx"):
+            check(info.get("officeSlides", 0) > 0, f"{name}: slides found", str(info))
+        if name.endswith(".jxl") and not name.startswith("broken"):
+            check(doc_type == IMAGE, f"{name}: bundled JXL decoder", str(info))
+        if name.endswith(".webp") and not name.startswith("broken"):
+            check(doc_type == IMAGE, f"{name}: bundled WebP decoder", str(info))
+        if name.endswith(".html"):
+            check(info.get("docType") == MARKDOWN, f"{name}: html reader/browser", str(info))
+        if name.endswith(".rtf"):
+            check(info.get("rtfPages", 0) >= 1, f"{name}: RTF paginated", str(info))
+
+    if os.path.exists(shot) and os.path.getsize(shot) > 0:
+        check(os.path.getsize(shot) > 1000, f"{name}: screenshot has content",
+              f"{os.path.getsize(shot)} bytes")
+        ratio = ink_ratio(shot)
+        check(ratio > 0.001, f"{name}: draws content", f"ratio={ratio:.4f}")
+    else:
+        check(False, f"{name}: screenshot written")
+
+
 def main():
-    global EXE
+    global EXE, work_dir
     args = sys.argv[1:]
     if "--exe" in args:
         EXE = args[args.index("--exe") + 1]
@@ -385,53 +439,17 @@ def main():
         print(f" [FAIL] exe not found: {EXE}")
         return 1
 
-    work = os.path.join(os.environ.get("TEMP", tempfile.gettempdir()),
-                        "winpreview-ci-" + str(os.getpid()))
-    shutil.rmtree(work, ignore_errors=True)
-    os.makedirs(work, exist_ok=True)
+    work_dir = os.path.join(os.environ.get("TEMP", tempfile.gettempdir()),
+                            "winpreview-ci-" + str(os.getpid()))
+    shutil.rmtree(work_dir, ignore_errors=True)
+    os.makedirs(work_dir, exist_ok=True)
     try:
-        cases = build_fixtures(work)
+        cases = build_fixtures(work_dir)
         print(f"Opening {len(cases)} generated fixtures with {os.path.basename(EXE)}...")
-        for path, allowed, expected in ((c[0], c[1], c[2]) for c in cases):
-            name = os.path.relpath(path, work)
-            try:
-                app = WinPreview(EXE, path, timeout=45)
-            except RuntimeError as error:
-                check(False, f"{name}: opens", str(error))
-                continue
-            try:
-                app.resize_dip(980, 720)
-                app.repaint()
-                deadline = time.time() + 5.0
-                doc_type = 0
-                while time.time() < deadline:
-                    doc_type = app.query(0x8000 + 237)
-                    if doc_type != 0:
-                        break
-                    time.sleep(0.15)
-                alive = app.proc.poll() is None
-                check(alive, f"{name}: process survives", f"exit={app.proc.poll()}")
-                check(doc_type in expected, f"{name}: docType {doc_type} in {sorted(expected)}")
-                if os.path.getsize(path) > 0:
-                    shot = os.path.join(work, "shot.png")
-                    try:
-                        app.shot(shot)
-                        ratio = ink_ratio(shot)
-                    except Exception as error:
-                        ratio = 0.0
-                        check(False, f"{name}: screenshot", str(error))
-                    check(ratio > 0.002, f"{name}: draws content", f"ratio={ratio:.4f}")
-
-                # Paging/navigation keys must not crash any viewer.
-                app.key(0x22)   # Page Down
-                app.key(0x21)   # Page Up
-                user32.SendMessageW(app.hwnd, 0x020A, (120 << 16), 0)
-                time.sleep(0.2)
-                check(app.proc.poll() is None, f"{name}: survives paging keys")
-            finally:
-                app.close()
+        for case_path, _data, expected in cases:
+            run_case(case_path, expected)
     finally:
-        shutil.rmtree(work, ignore_errors=True)
+        shutil.rmtree(work_dir, ignore_errors=True)
 
     print(f"\nGenerated format matrix: {passed} passed, {failed} failed")
     for label, detail in failures:

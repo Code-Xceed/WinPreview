@@ -195,6 +195,8 @@ public:
     HWND GetHwnd() const { return m_hwnd; }
     // Test hook: writes a browser-rendered HTML page to a PNG.
     bool CaptureHtmlPreview(const std::wstring& path) { return m_html.CapturePreview(path); }
+    // Headless CI hook: writes the same diagnostics the WM_APP messages expose.
+    void WriteDiagnostics(const std::wstring& path);
 
 private:
     HINSTANCE m_hInstance = nullptr;

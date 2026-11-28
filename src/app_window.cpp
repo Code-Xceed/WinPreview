@@ -2,6 +2,7 @@
 #include "html_reader.h"
 #include "jxl_decoder.h"
 #include <algorithm>
+#include <cstdio>
 #include <cmath>
 #include <fstream>
 #include <shlwapi.h>
@@ -5616,6 +5617,68 @@ void AppWindow::SyncAccessibilityValue() {
                  std::to_wstring(m_imagePageCount);
     }
     m_a11y.SetValue(value);
+}
+
+void AppWindow::WriteDiagnostics(const std::wstring& path) {
+    FILE* file = nullptr;
+    if (_wfopen_s(&file, path.c_str(), L"wb") != 0 || !file) return;
+
+    // UTF-8 badge for humans; tests use the numeric fields.
+    std::string badgeUtf8;
+    if (!m_formatBadgeText.empty()) {
+        int bytes = WideCharToMultiByte(CP_UTF8, 0, m_formatBadgeText.c_str(),
+                                        (int)m_formatBadgeText.length(), nullptr, 0,
+                                        nullptr, nullptr);
+        if (bytes > 0) {
+            badgeUtf8.resize((size_t)bytes);
+            WideCharToMultiByte(CP_UTF8, 0, m_formatBadgeText.c_str(),
+                                (int)m_formatBadgeText.length(), badgeUtf8.data(), bytes,
+                                nullptr, nullptr);
+        }
+    }
+    std::string badgeJson;
+    for (char ch : badgeUtf8) {
+        if (ch == '"' || ch == '\\') badgeJson += '\\';
+        if ((unsigned char)ch >= 0x20) badgeJson += ch;
+    }
+
+    const int officeKind = (m_docType == DocumentType::OfficeDoc) ? (int)m_office.GetKind() : 0;
+    std::fprintf(file,
+        "{\n"
+        "  \"docType\": %d,\n"
+        "  \"unsupportedKind\": %d,\n"
+        "  \"imagePageCount\": %d,\n"
+        "  \"gifFrameCount\": %d,\n"
+        "  \"pdfPageCount\": %d,\n"
+        "  \"officeKind\": %d,\n"
+        "  \"officeChapters\": %d,\n"
+        "  \"officeSlides\": %d,\n"
+        "  \"officeSheets\": %d,\n"
+        "  \"comicPages\": %d,\n"
+        "  \"rtfPages\": %d,\n"
+        "  \"fontFaces\": %d,\n"
+        "  \"msiFiles\": %d,\n"
+        "  \"msiFeatures\": %d,\n"
+        "  \"htmlBrowser\": %d,\n"
+        "  \"badge\": \"%s\"\n"
+        "}\n",
+        (int)m_docType,
+        (int)m_unsupportedKind,
+        m_imagePageCount,
+        (int)m_animFrames.size(),
+        m_docType == DocumentType::Pdf ? m_totalPages : 0,
+        officeKind,
+        m_docType == DocumentType::OfficeDoc ? m_office.ChapterCount() : 0,
+        m_docType == DocumentType::OfficeDoc ? m_office.SlideCount() : 0,
+        m_docType == DocumentType::OfficeDoc ? m_office.SheetCount() : 0,
+        m_docType == DocumentType::Comic ? m_comic.PageCount() : 0,
+        m_docType == DocumentType::Rtf ? m_rtf.GetPageCount() : 0,
+        m_docType == DocumentType::Font ? (int)m_font.GetFaceCount() : 0,
+        (m_docType == DocumentType::Binary && m_system.IsMsi()) ? m_system.GetMsiFileCount() : -1,
+        (m_docType == DocumentType::Binary && m_system.IsMsi()) ? m_system.GetMsiFeatureCount() : -1,
+        (m_docType == DocumentType::Markdown && m_html.IsActive()) ? 1 : 0,
+        badgeJson.c_str());
+    std::fclose(file);
 }
 
 void AppWindow::LayoutHtmlView() {

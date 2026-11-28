@@ -99,6 +99,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     bool runArchiveSelfTest = false;
     std::wstring htmlDumpPath;
     std::wstring htmlCapturePath;
+    std::wstring diagnosticsPath;
     bool htmlCaptureExit = false;
     bool forceUpdateCheck = false;
     bool downloadUpdateTest = false;
@@ -136,6 +137,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
                 htmlDumpPath = argv[++i];
             } else if ((_wcsicmp(argv[i], L"--html-capture") == 0) && i + 1 < argc) {
                 htmlCapturePath = argv[++i];
+            } else if ((_wcsicmp(argv[i], L"--diagnostics") == 0) && i + 1 < argc) {
+                diagnosticsPath = argv[++i];
             } else if (_wcsicmp(argv[i], L"--html-capture-exit") == 0) {
                 htmlCaptureExit = true;
             } else if (_wcsicmp(argv[i], L"--force-update-check") == 0) {
@@ -358,6 +361,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
                         DispatchMessageW(&settleMsg);
                     }
                     Sleep(10);
+                }
+                if (!diagnosticsPath.empty()) {
+                    app.WriteDiagnostics(diagnosticsPath);
                 }
                 LogTime("Calling SaveScreenshot");
                 app.SaveScreenshot(screenshotPath);

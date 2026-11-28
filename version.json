@@ -1,5 +1,5 @@
 {
-  "version": "1.3.28",
+  "version": "1.3.29",
   "release_date": "2026-11-27",
   "channel": "stable",
   "rollout": 100,
@@ -7,6 +7,6 @@
   "mandatory": false,
   "min_supported": "",
   "notes": "What's new\n\n- HTML now renders in the real browser engine (WebView2) with page scripting switched off, so layouts, tables, images and CSS match the web. If WebView2 is not installed, the built-in reader view still opens the page.\n- WebP and JPEG XL now decode with their own bundled decoders, so they work on a clean Windows install without Store extensions. Ctrl+C on a web page copies its text.\n- A signing self-test tool proves the release signing path end to end with a temporary certificate.\n- Public CI now also builds and checks the bundled WebP/JPEG XL decoders and the HTML paths.",
-  "changelog": "WinPreview 1.3.28 - bundled codecs + browser HTML. Vendored libwebp 1.5.0 (decoder subset, C/SSE2) and the official libjxl 0.13.0 Windows runtime with app-local VC++ runtime; WebP/JXL no longer depend on Store codecs. Added a WebView2 HTML view (scripts/dialogs/web messages/devtools/context menus/host objects disabled) with reader fallback, Esc forwarding, Ctrl+C page text, and a page-only --html-capture test hook. tests/html_view_test.py covers rendering, script safety and fallback (14 checks). tools/sign-selftest.ps1 exercises the signing pipeline with a temporary self-signed cert. CI matrix now includes WebP and JXL fixtures.",
+  "changelog": "WinPreview 1.3.29 - bundled codecs + browser HTML, with a headless CI gate. bundled codecs + browser HTML. Vendored libwebp 1.5.0 (decoder subset, C/SSE2) and the official libjxl 0.13.0 Windows runtime with app-local VC++ runtime; WebP/JXL no longer depend on Store codecs. Added a WebView2 HTML view (scripts/dialogs/web messages/devtools/context menus/host objects disabled) with reader fallback, Esc forwarding, Ctrl+C page text, and a page-only --html-capture test hook. tests/html_view_test.py covers rendering, script safety and fallback (14 checks). tools/sign-selftest.ps1 exercises the signing pipeline with a temporary self-signed cert. CI matrix now includes WebP and JXL fixtures. CI now verifies every generated fixture through --screenshot plus a new --diagnostics JSON (docType, sheets/slides/chapters, codec pages), so the matrix runs without an interactive desktop.",
   "download_url": "https://github.com/Code-Xceed/WinPreview/releases/latest/download/WinPreview-Setup-x64.exe"
 }
